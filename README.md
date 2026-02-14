@@ -11,6 +11,13 @@ Full-stack optometry clinic database system.
 - Consultations CRUD
 - Role-based access (admin / recepcion / doctor)
 
+## Tech stack
+- FastAPI (Python)
+- PostgreSQL
+- psycopg
+- React + TypeScript
+- Vite
+
 ## Run locally
 
 ### Backend
