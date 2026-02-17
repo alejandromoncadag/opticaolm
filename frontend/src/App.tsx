@@ -14,6 +14,7 @@ type Paciente = {
   sexo: string | null;
   telefono: string | null;
   correo: string | null;
+  como_nos_conocio?: string | null;
   ocupacion?: string | null;
   alergias?: string | null;
   fumador_tabaco?: boolean | null;
@@ -32,6 +33,7 @@ type PacienteCreate = {
   sexo?: string | null;
   telefono?: string | null;
   correo?: string | null;
+  como_nos_conocio?: string | null;
 };
 
 type Consulta = {
@@ -48,6 +50,7 @@ type Consulta = {
   paciente_nombre: string;
   sucursal_id: number | null;
   sucursal_nombre: string | null;
+  como_nos_conocio?: string | null;
 };
 
 type ConsultaCreate = {
@@ -60,6 +63,82 @@ type ConsultaCreate = {
   diagnostico?: string | null;
   plan?: string | null;
   notas?: string | null;
+  agendar_en_calendario?: boolean | null;
+  agenda_inicio?: string | null;
+  agenda_fin?: string | null;
+};
+
+type Venta = {
+  venta_id: number;
+  fecha_hora: string | null;
+  compra: string | null;
+  monto_total: number;
+  metodo_pago: "efectivo" | "tarjeta_credito" | "tarjeta_debito";
+  adelanto_aplica?: boolean;
+  adelanto_monto?: number | null;
+  adelanto_metodo?: "efectivo" | "tarjeta_credito" | "tarjeta_debito" | null;
+  como_nos_conocio?: string | null;
+  notas: string | null;
+  paciente_id: number;
+  paciente_nombre: string;
+  sucursal_id: number | null;
+};
+
+type VentaCreate = {
+  paciente_id: number;
+  sucursal_id?: number | null;
+  compra: string;
+  monto_total: number;
+  metodo_pago: "efectivo" | "tarjeta_credito" | "tarjeta_debito";
+  adelanto_aplica?: boolean;
+  adelanto_monto?: number | null;
+  adelanto_metodo?: "efectivo" | "tarjeta_credito" | "tarjeta_debito" | null;
+  como_nos_conocio?: string | null;
+  notas?: string | null;
+};
+
+type StatsSerie = {
+  dia: string;
+  total: number;
+};
+
+type StatsBucket = {
+  etiqueta: string;
+  total: number;
+};
+
+type StatsProducto = {
+  producto: string;
+  total: number;
+};
+
+type StatsResumen = {
+  sucursal_id: number;
+  periodo: {
+    modo: "hoy" | "semana" | "mes" | "anio" | string;
+    fecha_desde: string;
+    fecha_hasta: string;
+    label: string;
+  };
+  consultas: {
+    total: number;
+    por_dia: StatsSerie[];
+    por_tipo: StatsBucket[];
+  };
+  ventas: {
+    total: number;
+    monto_total: number;
+    por_dia: StatsSerie[];
+    por_metodo_pago: StatsBucket[];
+  };
+  productos_top: StatsProducto[];
+  top_productos_mes?: StatsProducto[];
+};
+
+type AgendaSlot = {
+  inicio: string;
+  fin: string;
+  label: string;
 };
 
 type Sucursal = {
@@ -74,6 +153,26 @@ type Sucursal = {
 
 
 const API = "http://127.0.0.1:8000";
+
+type PhoneCountryOption = {
+  iso: string;
+  flag: string;
+  name: string;
+  dial: string;
+};
+
+const PHONE_COUNTRIES: PhoneCountryOption[] = [
+  { iso: "MX", flag: "🇲🇽", name: "Mexico", dial: "+52" },
+  { iso: "AR", flag: "🇦🇷", name: "Argentina", dial: "+54" },
+  { iso: "VE", flag: "🇻🇪", name: "Venezuela", dial: "+58" },
+  { iso: "CO", flag: "🇨🇴", name: "Colombia", dial: "+57" },
+  { iso: "PE", flag: "🇵🇪", name: "Peru", dial: "+51" },
+  { iso: "CL", flag: "🇨🇱", name: "Chile", dial: "+56" },
+  { iso: "EC", flag: "🇪🇨", name: "Ecuador", dial: "+593" },
+  { iso: "US", flag: "🇺🇸", name: "Estados Unidos", dial: "+1" },
+];
+
+const DEFAULT_PHONE_COUNTRY = "MX";
 
 type LoginResponse = {
   access_token: string;
@@ -130,12 +229,26 @@ function TabButton({
   onClick,
 }: {
   active: boolean;
-  variant: "pacientes" | "consultas";
+  variant: "pacientes" | "consultas" | "ventas" | "estadisticas";
   children: ReactNode;
   onClick: () => void;
 }) {
-  const activeBg = variant === "pacientes" ? "#6F8A3C" : "#C9822B";
-  const activeBorder = variant === "pacientes" ? "#5f7734" : "#b37225";
+  const activeBg =
+    variant === "pacientes"
+      ? "#6F8A3C"
+      : variant === "consultas"
+        ? "#C9822B"
+        : variant === "ventas"
+          ? "#4D7A9B"
+          : "#6A5ACD";
+  const activeBorder =
+    variant === "pacientes"
+      ? "#5f7734"
+      : variant === "consultas"
+        ? "#b37225"
+        : variant === "ventas"
+          ? "#3f6784"
+          : "#5346a8";
   return (
     <button
       onClick={onClick}
@@ -230,6 +343,63 @@ function isEmptyHistoriaValue(v: unknown): boolean {
   return false;
 }
 
+function wordCount(value: string | null | undefined): number {
+  if (!value) return 0;
+  return value.trim().split(/\s+/).filter(Boolean).length;
+}
+
+function formatMetodoPagoLabel(value: string | null | undefined): string {
+  if (!value) return "";
+  if (value === "tarjeta_credito") return "tarjeta de credito";
+  if (value === "tarjeta_debito") return "tarjeta de debito";
+  return value;
+}
+
+function formatComoNosConocioLabel(value: string | null | undefined): string {
+  if (!value) return "";
+  const v = value.trim().toLowerCase();
+  if (v === "linkedln" || v === "linkedin") return "LinkedIn";
+  if (v === "fb") return "Facebook";
+  if (v === "instagram") return "Instagram";
+  if (v === "google") return "Google";
+  if (v === "referencia") return "Referencia";
+  return value;
+}
+
+function onlyDigits(value: string): string {
+  return value.replace(/\D/g, "");
+}
+
+function splitPhoneForUi(value: string | null | undefined): { countryIso: string; local: string } {
+  const raw = (value ?? "").trim();
+  if (!raw) return { countryIso: DEFAULT_PHONE_COUNTRY, local: "" };
+
+  const countriesByDial = [...PHONE_COUNTRIES].sort((a, b) => b.dial.length - a.dial.length);
+  const found = countriesByDial.find((c) => raw === c.dial || raw.startsWith(`${c.dial} `) || raw.startsWith(c.dial));
+  if (!found) return { countryIso: DEFAULT_PHONE_COUNTRY, local: onlyDigits(raw).slice(0, 10) };
+
+  let local = onlyDigits(raw.slice(found.dial.length).trim());
+  if (local.startsWith("-")) local = local.slice(1).trim();
+  return { countryIso: found.iso, local: local.slice(0, 10) };
+}
+
+function composeInternationalPhone(countryIso: string, local: string): string {
+  const localDigits = onlyDigits(local);
+  if (!localDigits) return "";
+  if (local.trim().startsWith("+")) return local.trim();
+  const country = PHONE_COUNTRIES.find((c) => c.iso === countryIso) ?? PHONE_COUNTRIES[0];
+  return `${country.dial} ${localDigits}`;
+}
+
+function formatStatsEtiqueta(value: string | null | undefined): string {
+  if (!value) return "";
+  const v = value.trim().toLowerCase();
+  if (v === "tarjeta_credito" || v === "tarjeta_debito" || v === "efectivo") {
+    return formatMetodoPagoLabel(v);
+  }
+  return v.replace(/_/g, " ");
+}
+
 const HISTORIA_REQUIRED_FIELDS: Array<{ key: string; label: string }> = [
   { key: "od_esfera", label: "OD Esfera" },
   { key: "od_cilindro", label: "OD Cilindro" },
@@ -277,12 +447,112 @@ const HISTORIA_REQUIRED_FIELDS: Array<{ key: string; label: string }> = [
   { key: "observaciones", label: "Observaciones" },
 ];
 
+const ANTECEDENTE_OPTIONS = [
+  "glaucoma",
+  "diabetes",
+  "miopia",
+  "hipermetropia",
+  "cataratas",
+  "otro",
+];
+
+function composeDoctorAtencion(
+  primerNombre: string | null | undefined,
+  apellidoPaterno: string | null | undefined
+): string {
+  return [primerNombre ?? "", apellidoPaterno ?? ""]
+    .map((x) => x.trim())
+    .filter(Boolean)
+    .join(" ");
+}
+
+function splitDoctorAtencion(value: string | null | undefined): {
+  doctor_primer_nombre: string;
+  doctor_apellido_paterno: string;
+} {
+  const clean = String(value ?? "").trim().replace(/\s+/g, " ");
+  if (!clean) {
+    return { doctor_primer_nombre: "", doctor_apellido_paterno: "" };
+  }
+  const [primer, ...rest] = clean.split(" ");
+  return {
+    doctor_primer_nombre: primer ?? "",
+    doctor_apellido_paterno: rest.join(" "),
+  };
+}
+
+function composeAntecedentesOtro(
+  general: string | null | undefined,
+  familiar: string | null | undefined
+): string {
+  const g = String(general ?? "").trim();
+  const f = String(familiar ?? "").trim();
+  const parts: string[] = [];
+  if (g) parts.push(`General: ${g}`);
+  if (f) parts.push(`Familiar: ${f}`);
+  return parts.join("\n");
+}
+
+function splitAntecedentesOtro(value: string | null | undefined): {
+  antecedentes_otro_general: string;
+  antecedentes_otro_familiar: string;
+} {
+  const raw = String(value ?? "").trim();
+  if (!raw) {
+    return { antecedentes_otro_general: "", antecedentes_otro_familiar: "" };
+  }
+
+  let general = "";
+  let familiar = "";
+  for (const line of raw.split(/\n+/)) {
+    const clean = line.trim();
+    if (!clean) continue;
+    const lowered = clean.toLowerCase();
+    if (lowered.startsWith("general:")) {
+      general = clean.slice(clean.indexOf(":") + 1).trim();
+      continue;
+    }
+    if (lowered.startsWith("familiar:")) {
+      familiar = clean.slice(clean.indexOf(":") + 1).trim();
+    }
+  }
+
+  if (!general && !familiar) {
+    general = raw;
+  }
+
+  return {
+    antecedentes_otro_general: general,
+    antecedentes_otro_familiar: familiar,
+  };
+}
+
+function normalizeHistoriaForUi(data: any, fallbackDoctor: string) {
+  const doctorBase = String(data?.doctor_atencion ?? fallbackDoctor ?? "").trim();
+  const doctorParts = splitDoctorAtencion(doctorBase);
+  const antecedentesOtroParts = splitAntecedentesOtro(data?.antecedentes_otro ?? "");
+  return {
+    ...data,
+    avsinrixoi: data?.avsinrixoi ?? data?.avsinrxoi ?? "",
+    doctor_atencion: doctorBase,
+    doctor_primer_nombre: doctorParts.doctor_primer_nombre,
+    doctor_apellido_paterno: doctorParts.doctor_apellido_paterno,
+    antecedentes_otro: composeAntecedentesOtro(
+      antecedentesOtroParts.antecedentes_otro_general,
+      antecedentesOtroParts.antecedentes_otro_familiar
+    ),
+    antecedentes_otro_general: antecedentesOtroParts.antecedentes_otro_general,
+    antecedentes_otro_familiar: antecedentesOtroParts.antecedentes_otro_familiar,
+  };
+}
+
 export default function App() {
-  const [tab, setTab] = useState<"pacientes" | "consultas">("pacientes");
+  const [tab, setTab] = useState<"pacientes" | "consultas" | "ventas" | "estadisticas">("pacientes");
 
   // ---- Estado de sesión y búsqueda ----
   const [pacientes, setPacientes] = useState<Paciente[]>([]);
   const [consultas, setConsultas] = useState<Consulta[]>([]);
+  const [ventas, setVentas] = useState<Venta[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [editingPacienteId, setEditingPacienteId] = useState<number | null>(null);
   const [qPaciente, setQPaciente] = useState("");
@@ -301,6 +571,19 @@ export default function App() {
   const [consultaMes, setConsultaMes] = useState("");
   const [consultaAnio, setConsultaAnio] = useState(String(new Date().getFullYear()));
   const [consultaFiltroLabel, setConsultaFiltroLabel] = useState("Hoy");
+  const [ventaFiltroModo, setVentaFiltroModo] = useState<"hoy" | "rango" | "mes" | "anio">("hoy");
+  const [ventaFechaDesde, setVentaFechaDesde] = useState("");
+  const [ventaFechaHasta, setVentaFechaHasta] = useState("");
+  const [ventaMes, setVentaMes] = useState("");
+  const [ventaAnio, setVentaAnio] = useState(String(new Date().getFullYear()));
+  const [ventaFiltroLabel, setVentaFiltroLabel] = useState("Hoy");
+  const [qVenta, setQVenta] = useState("");
+  const [statsData, setStatsData] = useState<StatsResumen | null>(null);
+  const [loadingStats, setLoadingStats] = useState(false);
+  const [statsFiltroModo, setStatsFiltroModo] = useState<"hoy" | "semana" | "mes" | "anio">("hoy");
+  const [statsMes, setStatsMes] = useState(String(new Date().getMonth() + 1));
+  const [statsAnio, setStatsAnio] = useState(String(new Date().getFullYear()));
+  const [statsFiltroLabel, setStatsFiltroLabel] = useState("Hoy");
   const [me, setMe] = useState<MeResponse | null>(null);
   const [loginUser, setLoginUser] = useState("");
   const [loginPass, setLoginPass] = useState("");
@@ -314,10 +597,17 @@ export default function App() {
   const [histPacienteId, setHistPacienteId] = useState<number | null>(null);
   const [histConsultas, setHistConsultas] = useState<Consulta[]>([]);
   const [loadingHist, setLoadingHist] = useState(false);
+  const [selectedConsultaDetalle, setSelectedConsultaDetalle] = useState<Consulta | null>(null);
+  const [selectedVentaDetalle, setSelectedVentaDetalle] = useState<Venta | null>(null);
 
 
   const [savingPaciente, setSavingPaciente] = useState(false);
   const [savingConsulta, setSavingConsulta] = useState(false);
+  const [savingVenta, setSavingVenta] = useState(false);
+  const [successVentaMsg, setSuccessVentaMsg] = useState<string | null>(null);
+  const [editingVentaId, setEditingVentaId] = useState<number | null>(null);
+  const [successConsultaMsg, setSuccessConsultaMsg] = useState<string | null>(null);
+  const [editingConsultaId, setEditingConsultaId] = useState<number | null>(null);
   const [sucursales, setSucursales] = useState<Sucursal[]>([]);
   const [sucursalActivaId, setSucursalActivaId] = useState<number>(1);
 
@@ -330,7 +620,7 @@ export default function App() {
   const [historiaSaving, setHistoriaSaving] = useState(false);
   const [historiaMissingSummary, setHistoriaMissingSummary] = useState<string | null>(null);
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
-  const [deleteConfirmType, setDeleteConfirmType] = useState<"paciente" | "consulta" | null>(null);
+  const [deleteConfirmType, setDeleteConfirmType] = useState<"paciente" | "consulta" | "venta" | null>(null);
   const [deleteConfirmId, setDeleteConfirmId] = useState<number | null>(null);
   const [deleteConfirmBusy, setDeleteConfirmBusy] = useState(false);
 
@@ -350,17 +640,48 @@ export default function App() {
     sexo: "",
     telefono: "",
     correo: "",
+    como_nos_conocio: "",
   });
+  const [pacienteTelefonoPais, setPacienteTelefonoPais] = useState<string>(DEFAULT_PHONE_COUNTRY);
+  const [pacienteTelefonoLocal, setPacienteTelefonoLocal] = useState<string>("");
 
   const [formConsulta, setFormConsulta] = useState<ConsultaCreate>({
     paciente_id: 0,
     sucursal_id: 1,
-    tipo_consulta: "primera_vez",
+    tipo_consulta: "",
     doctor_primer_nombre: "",
     doctor_apellido_paterno: "",
     motivo: "",
     diagnostico: "",
     plan: "",
+    notas: "",
+  });
+  const [tipoConsultaOtro, setTipoConsultaOtro] = useState("");
+  const [tiposConsultaSeleccionados, setTiposConsultaSeleccionados] = useState<string[]>([]);
+  const [agendarConsulta, setAgendarConsulta] = useState(false);
+  const [agendaFecha, setAgendaFecha] = useState(formatDateYYYYMMDD(new Date()));
+  const [agendaSlots, setAgendaSlots] = useState<AgendaSlot[]>([]);
+  const [agendaLoading, setAgendaLoading] = useState(false);
+  const [agendaTimezone, setAgendaTimezone] = useState<string>("");
+  const [agendaSlotSeleccionado, setAgendaSlotSeleccionado] = useState<AgendaSlot | null>(null);
+  const [qPacienteConsulta, setQPacienteConsulta] = useState("");
+  const [loadingPacienteConsulta, setLoadingPacienteConsulta] = useState(false);
+  const [pacientesConsultaOpciones, setPacientesConsultaOpciones] = useState<Array<{ id: number; label: string }>>([]);
+  const [qPacienteVenta, setQPacienteVenta] = useState("");
+  const [loadingPacienteVenta, setLoadingPacienteVenta] = useState(false);
+  const [pacientesVentaOpciones, setPacientesVentaOpciones] = useState<Array<{ id: number; label: string }>>([]);
+  const [ventasSeleccionadas, setVentasSeleccionadas] = useState<string[]>([]);
+  const [ventaCompraOtro, setVentaCompraOtro] = useState("");
+  const [formVenta, setFormVenta] = useState<VentaCreate>({
+    paciente_id: 0,
+    sucursal_id: 1,
+    compra: "",
+    monto_total: 0,
+    metodo_pago: "efectivo",
+    adelanto_aplica: false,
+    adelanto_monto: null,
+    adelanto_metodo: null,
+    como_nos_conocio: "",
     notas: "",
   });
 
@@ -375,6 +696,45 @@ export default function App() {
       .sort((a, b) => a.id - b.id);
   }, [pacientes]);
 
+  useEffect(() => {
+    if (!qPacienteConsulta.trim()) {
+      setPacientesConsultaOpciones(pacientesOpciones);
+    }
+  }, [pacientesOpciones, qPacienteConsulta]);
+
+  useEffect(() => {
+    if (!qPacienteVenta.trim()) {
+      setPacientesVentaOpciones(pacientesOpciones);
+    }
+  }, [pacientesOpciones, qPacienteVenta]);
+
+  useEffect(() => {
+    if (editingConsultaId !== null) return;
+    setFormConsulta((prev) => {
+      if (pacientesConsultaOpciones.length === 0) {
+        return prev.paciente_id === 0 ? prev : { ...prev, paciente_id: 0 };
+      }
+      if (pacientesConsultaOpciones.some((op) => op.id === prev.paciente_id)) {
+        return prev;
+      }
+      return { ...prev, paciente_id: pacientesConsultaOpciones[0].id };
+    });
+  }, [pacientesConsultaOpciones, editingConsultaId]);
+
+  useEffect(() => {
+    if (editingVentaId !== null) return;
+    setFormVenta((prev) => {
+      if (pacientesVentaOpciones.length === 0) {
+        return prev.paciente_id === 0 ? prev : { ...prev, paciente_id: 0 };
+      }
+      if (pacientesVentaOpciones.some((op) => op.id === prev.paciente_id)) {
+        return prev;
+      }
+      return { ...prev, paciente_id: pacientesVentaOpciones[0].id };
+    });
+  }, [pacientesVentaOpciones, editingVentaId]);
+
+
   const consultasFiltradas = useMemo(() => {
   const q = qConsulta.trim().toLowerCase();
   if (!q) return consultas;
@@ -387,8 +747,6 @@ export default function App() {
       c.paciente_nombre,
       c.tipo_consulta,
       doctor,
-      c.motivo,
-      c.diagnostico,
     ]
       .filter(Boolean)
       .join(" ")
@@ -397,6 +755,25 @@ export default function App() {
     return texto.includes(q);
   });
 }, [consultas, qConsulta]);
+
+  const ventasFiltradas = useMemo(() => {
+    const q = qVenta.trim().toLowerCase();
+    if (!q) return ventas;
+    return ventas.filter((v) => {
+      const texto = [
+        v.venta_id,
+        v.fecha_hora,
+        v.paciente_nombre,
+        v.compra,
+        v.monto_total,
+        v.como_nos_conocio,
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+      return texto.includes(q);
+    });
+  }, [ventas, qVenta]);
 
 
 
@@ -478,6 +855,10 @@ export default function App() {
           if (data.length === 0) return { ...prev, paciente_id: 0 };
           return { ...prev, paciente_id: data[0].paciente_id };
         });
+        setFormVenta((prev) => {
+          if (data.length === 0) return { ...prev, paciente_id: 0 };
+          return { ...prev, paciente_id: data[0].paciente_id };
+        });
       })
       .catch((e) => setError(e?.message ?? String(e)));
   }
@@ -526,6 +907,91 @@ export default function App() {
       })
       .then(setConsultas)
       .catch((e) => setError(e?.message ?? String(e)));
+  }
+
+  function loadVentas(override?: {
+    modo?: "hoy" | "rango" | "mes" | "anio";
+    fechaDesde?: string;
+    fechaHasta?: string;
+    mes?: string;
+    anio?: string;
+  }) {
+    setError(null);
+
+    const modo = override?.modo ?? ventaFiltroModo;
+    const fechaDesde = override?.fechaDesde ?? ventaFechaDesde;
+    const fechaHasta = override?.fechaHasta ?? ventaFechaHasta;
+    const mes = override?.mes ?? ventaMes;
+    const anio = override?.anio ?? ventaAnio;
+
+    const params = new URLSearchParams();
+    params.set("limit", "200");
+    params.set("sucursal_id", String(sucursalActivaId));
+
+    if (modo === "rango") {
+      if (fechaDesde) params.set("fecha_desde", fechaDesde);
+      if (fechaHasta) params.set("fecha_hasta", fechaHasta);
+      setVentaFiltroLabel(`Rango: ${fechaDesde || "..."} a ${fechaHasta || "..."}`);
+    } else if (modo === "mes") {
+      if (anio) params.set("anio", anio);
+      if (mes) params.set("mes", mes);
+      setVentaFiltroLabel(`Mes: ${mes || "?"}/${anio || "?"}`);
+    } else if (modo === "anio") {
+      if (anio) params.set("anio", anio);
+      setVentaFiltroLabel(`Año: ${anio || "?"}`);
+    } else {
+      setVentaFiltroLabel("Hoy");
+    }
+
+    apiFetch(`/ventas?${params.toString()}`)
+      .then((r) => {
+        if (!r.ok) throw new Error("No se pudo cargar la lista de ventas.");
+        return r.json();
+      })
+      .then(setVentas)
+      .catch((e) => setError(e?.message ?? String(e)));
+  }
+
+  function loadStats(override?: {
+    modo?: "hoy" | "semana" | "mes" | "anio";
+    mes?: string;
+    anio?: string;
+  }) {
+    setLoadingStats(true);
+    setError(null);
+
+    const modo = override?.modo ?? statsFiltroModo;
+    const mes = override?.mes ?? statsMes;
+    const anio = override?.anio ?? statsAnio;
+
+    const params = new URLSearchParams();
+    params.set("sucursal_id", String(sucursalActivaId));
+    params.set("modo", modo);
+
+    if (modo === "mes") {
+      if (mes) params.set("mes", mes);
+      if (anio) params.set("anio", anio);
+      setStatsFiltroLabel(`Mes ${mes || "?"}/${anio || "?"}`);
+    } else if (modo === "anio") {
+      if (anio) params.set("anio", anio);
+      setStatsFiltroLabel(`Año ${anio || "?"}`);
+    } else if (modo === "semana") {
+      setStatsFiltroLabel("Semana actual");
+    } else {
+      setStatsFiltroLabel("Hoy");
+    }
+
+    apiFetch(`/estadisticas/resumen?${params.toString()}`)
+      .then((r) => {
+        if (!r.ok) throw new Error("No se pudo cargar estadísticas.");
+        return r.json();
+      })
+      .then((data: StatsResumen) => {
+        setStatsData(data);
+        if (data?.periodo?.label) setStatsFiltroLabel(data.periodo.label);
+      })
+      .catch((e) => setError(e?.message ?? String(e)))
+      .finally(() => setLoadingStats(false));
   }
 
   function aplicarFiltroRapido(tipo: "ayer" | "ultimos7" | "semana_pasada" | "mes_pasado") {
@@ -587,6 +1053,55 @@ export default function App() {
     setConsultaFiltroOpen(false);
   }
 
+  function aplicarFiltroRapidoVenta(tipo: "ayer" | "ultimos7" | "semana_pasada" | "mes_pasado") {
+    const now = new Date();
+
+    if (tipo === "ayer") {
+      const y = new Date(now);
+      y.setDate(y.getDate() - 1);
+      const f = formatDateYYYYMMDD(y);
+      setVentaFiltroModo("rango");
+      setVentaFechaDesde(f);
+      setVentaFechaHasta(f);
+      loadVentas({ modo: "rango", fechaDesde: f, fechaHasta: f });
+      return;
+    }
+    if (tipo === "ultimos7") {
+      const desde = new Date(now);
+      desde.setDate(desde.getDate() - 6);
+      const fDesde = formatDateYYYYMMDD(desde);
+      const fHasta = formatDateYYYYMMDD(now);
+      setVentaFiltroModo("rango");
+      setVentaFechaDesde(fDesde);
+      setVentaFechaHasta(fHasta);
+      loadVentas({ modo: "rango", fechaDesde: fDesde, fechaHasta: fHasta });
+      return;
+    }
+    if (tipo === "semana_pasada") {
+      const mondayIndex = (now.getDay() + 6) % 7;
+      const inicioSemanaActual = new Date(now);
+      inicioSemanaActual.setDate(now.getDate() - mondayIndex);
+      const inicioSemanaPasada = new Date(inicioSemanaActual);
+      inicioSemanaPasada.setDate(inicioSemanaActual.getDate() - 7);
+      const finSemanaPasada = new Date(inicioSemanaActual);
+      finSemanaPasada.setDate(inicioSemanaActual.getDate() - 1);
+      const fDesde = formatDateYYYYMMDD(inicioSemanaPasada);
+      const fHasta = formatDateYYYYMMDD(finSemanaPasada);
+      setVentaFiltroModo("rango");
+      setVentaFechaDesde(fDesde);
+      setVentaFechaHasta(fHasta);
+      loadVentas({ modo: "rango", fechaDesde: fDesde, fechaHasta: fHasta });
+      return;
+    }
+    const mesPasado = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    const anio = String(mesPasado.getFullYear());
+    const mes = String(mesPasado.getMonth() + 1);
+    setVentaFiltroModo("mes");
+    setVentaAnio(anio);
+    setVentaMes(mes);
+    loadVentas({ modo: "mes", anio, mes });
+  }
+
 
   function aplicarFiltroRapidoPaciente(tipo: "ayer" | "ultimos7" | "semana_pasada" | "mes_pasado") {
     const now = new Date();
@@ -644,10 +1159,130 @@ export default function App() {
     setPacienteFiltroOpen(false);
   }
 
+  async function loadAgendaDisponibilidad() {
+    if (!me) return;
+    if (!agendarConsulta) return;
+    setAgendaLoading(true);
+    setError(null);
+    try {
+      const params = new URLSearchParams();
+      params.set("fecha", agendaFecha);
+      params.set("sucursal_id", String(sucursalActivaId));
+      params.set("duracion_min", "30");
+      const r = await apiFetch(`/agenda/disponibilidad?${params.toString()}`);
+      if (!r.ok) throw new Error(await readErrorMessage(r));
+      const data = await r.json();
+      const slots = Array.isArray(data?.slots) ? data.slots : [];
+      setAgendaSlots(slots);
+      setAgendaTimezone(data?.timezone ?? "");
+      setAgendaSlotSeleccionado((prev) => {
+        if (!prev) return null;
+        const found = slots.find((s: AgendaSlot) => s.inicio === prev.inicio && s.fin === prev.fin);
+        return found ?? null;
+      });
+    } catch (e: any) {
+      setAgendaSlots([]);
+      setAgendaSlotSeleccionado(null);
+      setError(e?.message ?? String(e));
+    } finally {
+      setAgendaLoading(false);
+    }
+  }
+
+  async function buscarPacientesParaConsulta(query?: string) {
+    const q = (query ?? qPacienteConsulta).trim();
+    if (!q) {
+      setPacientesConsultaOpciones(pacientesOpciones);
+      return;
+    }
+    if (q.length < 2) {
+      setPacientesConsultaOpciones(pacientesOpciones);
+      return;
+    }
+
+    setLoadingPacienteConsulta(true);
+    setError(null);
+    try {
+      const params = new URLSearchParams();
+      params.set("q", q);
+      params.set("limit", "80");
+      params.set("sucursal_id", String(sucursalActivaId));
+      const r = await apiFetch(`/pacientes/buscar?${params.toString()}`);
+      if (!r.ok) throw new Error(await readErrorMessage(r));
+      const data: Paciente[] = await r.json();
+      const ops = data
+        .map((p) => {
+          const nombre = [p.primer_nombre, p.segundo_nombre, p.apellido_paterno, p.apellido_materno]
+            .filter(Boolean)
+            .join(" ");
+          return { id: p.paciente_id, label: `${p.paciente_id} — ${nombre}` };
+        })
+        .sort((a, b) => a.id - b.id);
+      setPacientesConsultaOpciones(ops);
+    } catch (e: any) {
+      setError(e?.message ?? String(e));
+      setPacientesConsultaOpciones([]);
+    } finally {
+      setLoadingPacienteConsulta(false);
+    }
+  }
+
+  async function buscarPacientesParaVenta(query?: string) {
+    const q = (query ?? qPacienteVenta).trim();
+    if (!q) {
+      setPacientesVentaOpciones(pacientesOpciones);
+      return;
+    }
+    if (q.length < 2) {
+      setPacientesVentaOpciones(pacientesOpciones);
+      return;
+    }
+
+    setLoadingPacienteVenta(true);
+    setError(null);
+    try {
+      const params = new URLSearchParams();
+      params.set("q", q);
+      params.set("limit", "80");
+      params.set("sucursal_id", String(sucursalActivaId));
+      const r = await apiFetch(`/pacientes/buscar?${params.toString()}`);
+      if (!r.ok) throw new Error(await readErrorMessage(r));
+      const data: Paciente[] = await r.json();
+      const ops = data
+        .map((p) => {
+          const nombre = [p.primer_nombre, p.segundo_nombre, p.apellido_paterno, p.apellido_materno]
+            .filter(Boolean)
+            .join(" ");
+          return { id: p.paciente_id, label: `${p.paciente_id} — ${nombre}` };
+        })
+        .sort((a, b) => a.id - b.id);
+      setPacientesVentaOpciones(ops);
+    } catch (e: any) {
+      setError(e?.message ?? String(e));
+      setPacientesVentaOpciones([]);
+    } finally {
+      setLoadingPacienteVenta(false);
+    }
+  }
+
 
   useEffect(() => {
     if (getToken()) loadMe();
   }, []);
+
+  useEffect(() => {
+    const t = setTimeout(() => {
+      buscarPacientesParaConsulta(qPacienteConsulta);
+    }, 300);
+    return () => clearTimeout(t);
+  }, [qPacienteConsulta, sucursalActivaId]);
+
+  useEffect(() => {
+    const t = setTimeout(() => {
+      buscarPacientesParaVenta(qPacienteVenta);
+    }, 300);
+    return () => clearTimeout(t);
+  }, [qPacienteVenta, sucursalActivaId]);
 
 
 
@@ -655,14 +1290,29 @@ export default function App() {
     if (!me) return;
     setFormPaciente((prev) => ({ ...prev, sucursal_id: sucursalActivaId }));
     setFormConsulta((prev) => ({ ...prev, sucursal_id: sucursalActivaId, paciente_id: 0 }));
+    setFormVenta((prev) => ({ ...prev, sucursal_id: sucursalActivaId, paciente_id: 0 }));
+    setEditingVentaId(null);
+    setSuccessVentaMsg(null);
     loadPacientes();
     loadConsultas();
+    loadVentas();
   }, [sucursalActivaId, me]);
 
   useEffect(() => {
     if (!me) return;
     loadSucursales();
   }, [me]);
+
+  useEffect(() => {
+    if (!me || tab !== "consultas") return;
+    if (!agendarConsulta) return;
+    loadAgendaDisponibilidad();
+  }, [me, tab, agendaFecha, sucursalActivaId, agendarConsulta]);
+
+  useEffect(() => {
+    if (!me || tab !== "estadisticas") return;
+    loadStats();
+  }, [me, tab, sucursalActivaId]);
 
 
 
@@ -689,6 +1339,9 @@ export default function App() {
 
   
   function startEditPaciente(p: Paciente) {
+    const phoneUi = splitPhoneForUi(p.telefono);
+    setPacienteTelefonoPais(phoneUi.countryIso);
+    setPacienteTelefonoLocal(phoneUi.local);
     setEditingPacienteId(p.paciente_id);
     setFormPaciente({
       sucursal_id: sucursalActivaId,
@@ -700,12 +1353,15 @@ export default function App() {
       sexo: p.sexo ?? "",
       telefono: p.telefono ?? "",
       correo: p.correo ?? "",
+      como_nos_conocio: p.como_nos_conocio === "linkedln" ? "linkedin" : (p.como_nos_conocio ?? ""),
     });
     setTab("pacientes");
   }
 
   function cancelEditPaciente() {
     setEditingPacienteId(null);
+    setPacienteTelefonoPais(DEFAULT_PHONE_COUNTRY);
+    setPacienteTelefonoLocal("");
     setFormPaciente({
       sucursal_id: sucursalActivaId,
       primer_nombre: "",
@@ -716,6 +1372,7 @@ export default function App() {
       sexo: "",
       telefono: "",
       correo: "",
+      como_nos_conocio: "",
     });
   }
 
@@ -726,7 +1383,26 @@ export default function App() {
     setError(null);
 
     try {
-      const payload = cleanPayload({ ...formPaciente, sucursal_id: sucursalActivaId });
+      if (!formPaciente.primer_nombre?.trim()) throw new Error("Primer nombre es obligatorio.");
+      if (!formPaciente.segundo_nombre?.trim()) throw new Error("Segundo nombre es obligatorio.");
+      if (!formPaciente.apellido_paterno?.trim()) throw new Error("Apellido paterno es obligatorio.");
+      if (!formPaciente.apellido_materno?.trim()) throw new Error("Apellido materno es obligatorio.");
+      if (!formPaciente.fecha_nacimiento?.trim()) throw new Error("Fecha de nacimiento es obligatoria.");
+      if (!formPaciente.sexo?.trim()) throw new Error("Sexo es obligatorio.");
+      const telefonoDigits = onlyDigits(pacienteTelefonoLocal);
+      if (telefonoDigits.length !== 10) {
+        throw new Error("Teléfono debe tener exactamente 10 dígitos.");
+      }
+      const telefonoFinal = composeInternationalPhone(pacienteTelefonoPais, telefonoDigits);
+      if (editingPacienteId === null && !formPaciente.como_nos_conocio?.trim()) {
+        throw new Error("Selecciona cómo nos conoció.");
+      }
+
+      const payload = cleanPayload({
+        ...formPaciente,
+        sucursal_id: sucursalActivaId,
+        telefono: telefonoFinal,
+      });
 
       const path =
         editingPacienteId === null ? "/pacientes" : `/pacientes/${editingPacienteId}`;
@@ -771,16 +1447,21 @@ export default function App() {
       if (!r.ok) throw new Error(await readErrorMessage(r));
 
       const data = await r.json();
-      setHistoriaData({
-        ...data,
-        avsinrixoi: data.avsinrixoi ?? data.avsinrxoi ?? "",
-        doctor_atencion: data.doctor_atencion ?? me?.username ?? "",
-      });
+      setHistoriaData(normalizeHistoriaForUi(data, me?.username ?? ""));
     } catch (e: any) {
       setError(e?.message ?? String(e));
     } finally {
       setLoadingHistoria(false);
     }
+  }
+
+  function closeHistoriaModal() {
+    setHistoriaPacienteId(null);
+    setHistoriaPacienteInfo(null);
+    setHistoriaGuardada(false);
+    setHistoriaConfirmOpen(false);
+    setHistoriaMissingSummary(null);
+    setError(null);
   }
 
 
@@ -800,6 +1481,17 @@ export default function App() {
       if (!r.ok) throw new Error(await readErrorMessage(r));
 
       loadConsultas();
+    } catch (e: any) {
+      setError(e?.message ?? String(e));
+    }
+  }
+
+  async function deleteVenta(venta_id: number) {
+    setError(null);
+    try {
+      const r = await apiFetch(`/ventas/${venta_id}?sucursal_id=${sucursalActivaId}`, { method: "DELETE" });
+      if (!r.ok) throw new Error(await readErrorMessage(r));
+      loadVentas();
     } catch (e: any) {
       setError(e?.message ?? String(e));
     }
@@ -857,12 +1549,20 @@ export default function App() {
     setDeleteConfirmOpen(true);
   }
 
+  function askDeleteVenta(venta_id: number) {
+    setDeleteConfirmType("venta");
+    setDeleteConfirmId(venta_id);
+    setDeleteConfirmOpen(true);
+  }
+
   async function confirmDeleteAction() {
     if (!deleteConfirmType || deleteConfirmId === null) return;
     setDeleteConfirmBusy(true);
     try {
       if (deleteConfirmType === "paciente") {
         await deletePaciente(deleteConfirmId);
+      } else if (deleteConfirmType === "venta") {
+        await deleteVenta(deleteConfirmId);
       } else {
         await deleteConsulta(deleteConfirmId);
       }
@@ -872,6 +1572,46 @@ export default function App() {
     } finally {
       setDeleteConfirmBusy(false);
     }
+  }
+
+  function startEditConsulta(c: Consulta) {
+    setEditingConsultaId(c.consulta_id);
+    const tipos = (c.tipo_consulta ?? "")
+      .split("|")
+      .map((x) => x.trim())
+      .filter(Boolean);
+    setTiposConsultaSeleccionados(tipos);
+    setFormConsulta({
+      paciente_id: c.paciente_id,
+      sucursal_id: sucursalActivaId,
+      tipo_consulta: c.tipo_consulta ?? "",
+      doctor_primer_nombre: c.doctor_primer_nombre ?? "",
+      doctor_apellido_paterno: c.doctor_apellido_paterno ?? "",
+      motivo: "",
+      diagnostico: "",
+      plan: "",
+      notas: c.notas ?? "",
+    });
+    setAgendarConsulta(false);
+    setAgendaSlotSeleccionado(null);
+    setTab("consultas");
+    setSuccessConsultaMsg(null);
+  }
+
+  function cancelEditConsulta() {
+    setEditingConsultaId(null);
+    setTiposConsultaSeleccionados([]);
+    setTipoConsultaOtro("");
+    setFormConsulta((prev) => ({
+      ...prev,
+      tipo_consulta: "",
+      doctor_primer_nombre: "",
+      doctor_apellido_paterno: "",
+      notas: "",
+    }));
+    setAgendarConsulta(false);
+    setQPacienteConsulta("");
+    setPacientesConsultaOpciones(pacientesOpciones);
   }
 
 
@@ -884,17 +1624,55 @@ export default function App() {
     e.preventDefault();
     setSavingConsulta(true);
     setError(null);
+    setSuccessConsultaMsg(null);
 
     try {
       if (!formConsulta.paciente_id || formConsulta.paciente_id === 0) {
         throw new Error("Selecciona un paciente.");
       }
+      if (tiposConsultaSeleccionados.length === 0) {
+        throw new Error("Selecciona al menos un tipo de consulta.");
+      }
+      if (tiposConsultaSeleccionados.includes("otro") && !tipoConsultaOtro.trim()) {
+        throw new Error("Escribe la razón cuando seleccionas 'otro'.");
+      }
+      if (!formConsulta.doctor_primer_nombre?.trim() || !formConsulta.doctor_apellido_paterno?.trim()) {
+        throw new Error("Nombre y apellido del doctor son obligatorios.");
+      }
+      const tipoConsultaTexto = tiposConsultaSeleccionados.join("|");
 
-      const payload = cleanPayload({ ...formConsulta, sucursal_id: sucursalActivaId });
+      let notasFinal = (formConsulta.notas ?? "").trim();
+      if (tiposConsultaSeleccionados.includes("otro") && tipoConsultaOtro.trim()) {
+        const razon = `Razon (otro): ${tipoConsultaOtro.trim()}`;
+        notasFinal = notasFinal ? `${razon} | ${notasFinal}` : razon;
+      }
+      if (wordCount(notasFinal) > 50) {
+        throw new Error("Notas no puede superar 50 palabras (incluyendo la razón de 'otro').");
+      }
+
+      const usarAgenda = editingConsultaId === null && agendarConsulta;
+      if (usarAgenda && !agendaSlotSeleccionado) {
+        throw new Error("Selecciona un horario disponible para agendar la consulta.");
+      }
+
+      const payload = cleanPayload({
+        ...formConsulta,
+        sucursal_id: sucursalActivaId,
+        tipo_consulta: tipoConsultaTexto,
+        motivo: null,
+        diagnostico: null,
+        plan: null,
+        notas: notasFinal,
+        agendar_en_calendario: usarAgenda,
+        agenda_inicio: usarAgenda ? agendaSlotSeleccionado?.inicio ?? null : null,
+        agenda_fin: usarAgenda ? agendaSlotSeleccionado?.fin ?? null : null,
+      });
       console.log("POST /consultas payload:", payload);
       
-      const r = await apiFetch(`/consultas`, {
-        method: "POST",
+      const endpoint = editingConsultaId === null ? "/consultas" : `/consultas/${editingConsultaId}`;
+      const method = editingConsultaId === null ? "POST" : "PUT";
+      const r = await apiFetch(endpoint, {
+        method,
         body: JSON.stringify(payload),
       });
 
@@ -904,19 +1682,154 @@ export default function App() {
       // limpiar form (pero mantener paciente y doctor si quieres)
       setFormConsulta((prev) => ({
         ...prev,
-        tipo_consulta: "primera_vez",
-        motivo: "",
-        diagnostico: "",
-        plan: "",
+        tipo_consulta: "",
         notas: "",
       }));
+      setTipoConsultaOtro("");
+      setTiposConsultaSeleccionados([]);
+      setEditingConsultaId(null);
+      setAgendaSlotSeleccionado(null);
 
       loadConsultas();
+      if (usarAgenda) {
+        loadAgendaDisponibilidad();
+      }
       setTab("consultas");
+      setSuccessConsultaMsg(editingConsultaId === null ? "Consulta guardada con éxito." : "Consulta actualizada con éxito.");
+      setTimeout(() => setSuccessConsultaMsg(null), 3500);
     } catch (e: any) {
       setError(e?.message ?? String(e));
     } finally {
       setSavingConsulta(false);
+    }
+  }
+
+  function startEditVenta(v: Venta) {
+    setEditingVentaId(v.venta_id);
+    const comprasRaw = (v.compra ?? "")
+      .split("|")
+      .map((x) => x.trim())
+      .filter(Boolean);
+    const otroItem = comprasRaw.find((x) => x.toLowerCase().startsWith("otro:"));
+    const compras = comprasRaw
+      .map((x) => (x.toLowerCase().startsWith("otro:") ? "otro" : x))
+      .filter(Boolean);
+    setVentasSeleccionadas(compras);
+    setVentaCompraOtro(otroItem ? otroItem.slice(5).trim() : "");
+    setFormVenta({
+      paciente_id: v.paciente_id,
+      sucursal_id: sucursalActivaId,
+      compra: v.compra ?? "",
+      monto_total: Number(v.monto_total ?? 0),
+      metodo_pago: v.metodo_pago ?? "efectivo",
+      adelanto_aplica: Boolean(v.adelanto_aplica),
+      adelanto_monto: v.adelanto_monto ?? null,
+      adelanto_metodo: v.adelanto_metodo ?? null,
+      como_nos_conocio: v.como_nos_conocio === "linkedln" ? "linkedin" : (v.como_nos_conocio ?? ""),
+      notas: v.notas ?? "",
+    });
+    setTab("ventas");
+    setSuccessVentaMsg(null);
+  }
+
+  function cancelEditVenta() {
+    setEditingVentaId(null);
+    setVentasSeleccionadas([]);
+    setVentaCompraOtro("");
+    setFormVenta({
+      paciente_id: 0,
+      sucursal_id: sucursalActivaId,
+      compra: "",
+      monto_total: 0,
+      metodo_pago: "efectivo",
+      adelanto_aplica: false,
+      adelanto_monto: null,
+      adelanto_metodo: null,
+      como_nos_conocio: "",
+      notas: "",
+    });
+    setQPacienteVenta("");
+    setPacientesVentaOpciones(pacientesOpciones);
+  }
+
+  async function onSubmitVenta(e: FormEvent) {
+    e.preventDefault();
+    setSavingVenta(true);
+    setError(null);
+    setSuccessVentaMsg(null);
+
+    try {
+      if (!formVenta.paciente_id || formVenta.paciente_id === 0) throw new Error("Selecciona un paciente.");
+      if (ventasSeleccionadas.length === 0) throw new Error("Selecciona al menos un tipo de compra.");
+      if (ventasSeleccionadas.includes("otro") && !ventaCompraOtro.trim()) {
+        throw new Error("Escribe el detalle para 'otro'.");
+      }
+      if (!formVenta.monto_total || Number(formVenta.monto_total) <= 0) {
+        throw new Error("Monto total debe ser mayor a 0.");
+      }
+      if (!formVenta.metodo_pago) {
+        throw new Error("Selecciona método de pago.");
+      }
+      if (formVenta.adelanto_aplica) {
+        if (!formVenta.adelanto_monto || Number(formVenta.adelanto_monto) <= 0) {
+          throw new Error("Adelanto debe ser mayor a 0.");
+        }
+        if (!formVenta.adelanto_metodo) {
+          throw new Error("Selecciona método de pago del adelanto.");
+        }
+      }
+      if (wordCount(formVenta.notas ?? "") > 50) {
+        throw new Error("Notas no puede superar 50 palabras.");
+      }
+
+      const compraFinal = ventasSeleccionadas
+        .map((x) => (x === "otro" ? `otro:${ventaCompraOtro.trim()}` : x))
+        .join("|");
+
+      const payload = cleanPayload({
+        ...formVenta,
+        sucursal_id: sucursalActivaId,
+        compra: compraFinal,
+        monto_total: Number(formVenta.monto_total),
+        adelanto_aplica: Boolean(formVenta.adelanto_aplica),
+        adelanto_monto: formVenta.adelanto_aplica ? Number(formVenta.adelanto_monto) : null,
+        adelanto_metodo: formVenta.adelanto_aplica ? formVenta.adelanto_metodo : null,
+      });
+
+      const endpoint = editingVentaId === null ? "/ventas" : `/ventas/${editingVentaId}`;
+      const method = editingVentaId === null ? "POST" : "PUT";
+      let r = await apiFetch(endpoint, { method, body: JSON.stringify(payload) });
+
+      // Si estaba en edición pero la venta ya no existe en esta sucursal,
+      // caemos automáticamente a creación para no bloquear operación.
+      if (method === "PUT" && r.status === 404) {
+        setEditingVentaId(null);
+        r = await apiFetch("/ventas", { method: "POST", body: JSON.stringify(payload) });
+      }
+      if (!r.ok) throw new Error(await readErrorMessage(r));
+
+      setFormVenta((prev) => ({
+        ...prev,
+        compra: "",
+        monto_total: 0,
+        metodo_pago: "efectivo",
+        adelanto_aplica: false,
+        adelanto_monto: null,
+        adelanto_metodo: null,
+        como_nos_conocio: "",
+        notas: "",
+      }));
+      setVentasSeleccionadas([]);
+      setVentaCompraOtro("");
+      setEditingVentaId(null);
+      loadVentas();
+      setTab("ventas");
+      setSuccessVentaMsg(editingVentaId === null ? "Venta guardada con éxito." : "Venta actualizada con éxito.");
+      setTimeout(() => setSuccessVentaMsg(null), 3500);
+    } catch (e: any) {
+      setError(e?.message ?? String(e));
+    } finally {
+      setSavingVenta(false);
     }
   }
 
@@ -998,6 +1911,15 @@ export default function App() {
     try {
       setHistoriaSaving(true);
       setError(null);
+      const doctorAtencion =
+        composeDoctorAtencion(
+          historiaData?.doctor_primer_nombre,
+          historiaData?.doctor_apellido_paterno
+        ) || String(historiaData?.doctor_atencion ?? me?.username ?? "").trim();
+      const antecedentesOtro = composeAntecedentesOtro(
+        historiaData?.antecedentes_otro_general,
+        historiaData?.antecedentes_otro_familiar
+      );
       const r = await apiFetch(
         `/pacientes/${historiaPacienteId}/historia?sucursal_id=${sucursalActivaId}`,
         {
@@ -1028,9 +1950,15 @@ export default function App() {
             paciente_telefono: historiaPacienteInfo?.telefono ?? null,
             paciente_correo: historiaPacienteInfo?.correo ?? null,
             puesto_laboral: historiaPacienteInfo?.ocupacion ?? null,
-            doctor_atencion: historiaData.doctor_atencion ?? me?.username ?? null,
+            doctor_atencion: doctorAtencion || null,
             historia: historiaData.historia,
             antecedentes: historiaData.antecedentes,
+            antecedentes_generales: historiaData.antecedentes_generales,
+            antecedentes_familiares: historiaData.antecedentes_familiares,
+            antecedentes_otro: antecedentesOtro || null,
+            alergias: historiaData.alergias,
+            enfermedades: historiaData.enfermedades,
+            cirugias: historiaData.cirugias,
             fumador_tabaco: historiaData.fumador_tabaco,
             fumador_marihuana: historiaData.fumador_marihuana,
             consumidor_alcohol: historiaData.consumidor_alcohol,
@@ -1065,11 +1993,7 @@ export default function App() {
       );
       if (!r.ok) throw new Error(await readErrorMessage(r));
       const data = await r.json();
-      setHistoriaData({
-        ...data,
-        avsinrixoi: data.avsinrixoi ?? data.avsinrxoi ?? "",
-        doctor_atencion: data.doctor_atencion ?? me?.username ?? "",
-      });
+      setHistoriaData(normalizeHistoriaForUi(data, me?.username ?? ""));
       setHistoriaGuardada(true);
       setHistoriaConfirmOpen(false);
     } catch (e: any) {
@@ -1133,7 +2057,7 @@ export default function App() {
           background: "linear-gradient(180deg, #f7efe4 0%, #efe3d4 100%)",
         }}
       >
-        <div style={{ width: "100%", maxWidth: 400, fontFamily: "system-ui" }}>
+        <div style={{ width: "100%", maxWidth: 460, fontFamily: "system-ui" }}>
           <div style={{ display: "grid", justifyItems: "center", gap: 8, marginBottom: 12 }}>
             <img
               src={logoOlm}
@@ -1150,7 +2074,7 @@ export default function App() {
             <div style={{ opacity: 0.8 }}>Inicia sesión</div>
           </div>
 
-          <form onSubmit={doLogin} style={{ border: "1px solid #e7d7c7", borderRadius: 16, background: "#fffaf4", padding: 16 }}>
+          <form onSubmit={doLogin} style={{ border: "1px solid #e7d7c7", borderRadius: 16, background: "#fffaf4", padding: 20 }}>
             <label style={{ display: "block", marginBottom: 10 }}>
               Usuario
               <input
@@ -1209,8 +2133,12 @@ export default function App() {
   const canEditPaciente = isAdmin || isRecep || isDoctor;
   const canDeletePaciente = isAdmin;
 
-  const canCreateConsulta = isAdmin || isDoctor;
-  const canDeleteConsulta = isAdmin || isDoctor;
+  const canCreateConsulta = isAdmin || isDoctor || isRecep;
+  const canEditConsulta = isAdmin || isDoctor || isRecep;
+  const canDeleteConsulta = isAdmin || isDoctor || isRecep;
+  const canCreateVenta = isAdmin || isDoctor || isRecep;
+  const canEditVenta = isAdmin || isDoctor || isRecep;
+  const canDeleteVenta = isAdmin || isDoctor || isRecep;
 
   const softCard = {
     border: "1px solid #e7d7c7",
@@ -1237,6 +2165,16 @@ export default function App() {
     background: "#fff",
   } as const;
 
+  const antecedentesGeneralesSeleccionados = String(historiaData?.antecedentes_generales ?? "")
+    .split("|")
+    .map((x: string) => x.trim())
+    .filter(Boolean);
+
+  const antecedentesFamiliaresSeleccionados = String(historiaData?.antecedentes_familiares ?? "")
+    .split("|")
+    .map((x: string) => x.trim())
+    .filter(Boolean);
+
 
   return (
     <div
@@ -1254,6 +2192,9 @@ export default function App() {
       }}
     >
       <style>{`
+        input, select, textarea {
+          box-sizing: border-box;
+        }
         button {
           transition: transform 0.14s ease, box-shadow 0.18s ease, filter 0.18s ease, background-color 0.18s ease, border-color 0.18s ease;
         }
@@ -1273,25 +2214,25 @@ export default function App() {
           display: "grid",
           justifyItems: "center",
           textAlign: "center",
-          gap: 8,
-          marginBottom: 8,
-          padding: "6px 20px 4px",
+          gap: 4,
+          marginBottom: 2,
+          padding: "2px 20px 0",
         }}
       >
         <img
           src={logoOlm}
           alt="Óptica OLM"
           style={{
-            height: "clamp(140px, 14vw, 220px)",
+            height: "clamp(84px, 8vw, 130px)",
             width: "auto",
-            maxWidth: "72vw",
+            maxWidth: "62vw",
             objectFit: "contain",
             mixBlendMode: "multiply",
             filter: "contrast(1.08) saturate(1.06)",
           }}
         />
 
-        <div style={{ textAlign: "center", fontWeight: 900, fontSize: "clamp(22px, 2.6vw, 38px)", letterSpacing: 4.2, color: "#5f4a32" }}>
+        <div style={{ textAlign: "center", fontWeight: 900, fontSize: "clamp(16px, 1.9vw, 28px)", letterSpacing: 2.6, color: "#5f4a32", marginTop: -2 }}>
           BASE DE DATOS
         </div>
       </div>
@@ -1378,6 +2319,12 @@ export default function App() {
         <TabButton variant="consultas" active={tab === "consultas"} onClick={() => setTab("consultas")}>
           Consultas
         </TabButton>
+        <TabButton variant="ventas" active={tab === "ventas"} onClick={() => setTab("ventas")}>
+          Ventas
+        </TabButton>
+        <TabButton variant="estadisticas" active={tab === "estadisticas"} onClick={() => setTab("estadisticas")}>
+          Estadísticas
+        </TabButton>
       </div>
 
 
@@ -1388,6 +2335,7 @@ export default function App() {
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(420px, 1fr))", gap: 16, alignItems: "start" }}>
           <form
             onSubmit={onSubmitPaciente}
+            noValidate
             style={{ ...softCard, padding: 16 }}
           >
             <div style={{ fontWeight: 700, marginBottom: 10 }}>
@@ -1405,10 +2353,11 @@ export default function App() {
             </label>
 
             <label style={{ display: "block", marginBottom: 8 }}>
-              Segundo nombre
+              Segundo nombre *
               <input
                 value={formPaciente.segundo_nombre ?? ""}
                 onChange={(e) => setFormPaciente({ ...formPaciente, segundo_nombre: e.target.value })}
+                required
                 style={{ width: "100%", padding: 10, borderRadius: 10, border: "1px solid #ddd" }}
               />
             </label>
@@ -1424,10 +2373,11 @@ export default function App() {
             </label>
 
             <label style={{ display: "block", marginBottom: 8 }}>
-              Apellido materno
+              Apellido materno *
               <input
                 value={formPaciente.apellido_materno ?? ""}
                 onChange={(e) => setFormPaciente({ ...formPaciente, apellido_materno: e.target.value })}
+                required
                 style={{ width: "100%", padding: 10, borderRadius: 10, border: "1px solid #ddd" }}
               />
             </label>
@@ -1445,10 +2395,11 @@ export default function App() {
               </label>
 
               <label style={{ display: "block", marginBottom: 8 }}>
-                Sexo
+                Sexo *
                 <select
                   value={formPaciente.sexo ?? ""}
                   onChange={(e) => setFormPaciente({ ...formPaciente, sexo: e.target.value })}
+                  required
                   style={{
                     width: "100%",
                     padding: 10,
@@ -1460,19 +2411,38 @@ export default function App() {
                   <option value="">Seleccionar</option>
                   <option value="M">M</option>
                   <option value="F">F</option>
-                  <option value="otro">otro</option>
-                  <option value="no_especifica">no_especifica</option>
                 </select>
               </label>
             </div>
 
             <label style={{ display: "block", marginBottom: 8 }}>
-              Teléfono
-              <input
-                value={formPaciente.telefono ?? ""}
-                onChange={(e) => setFormPaciente({ ...formPaciente, telefono: e.target.value })}
-                style={{ width: "100%", padding: 10, borderRadius: 10, border: "1px solid #ddd" }}
-              />
+              Teléfono *
+              <div style={{ display: "grid", gridTemplateColumns: "220px 1fr", gap: 8 }}>
+                <select
+                  value={pacienteTelefonoPais}
+                  onChange={(e) => setPacienteTelefonoPais(e.target.value)}
+                  style={{ width: "100%", padding: 10, borderRadius: 10, border: "1px solid #ddd", background: "#fff" }}
+                >
+                  {PHONE_COUNTRIES.map((country) => (
+                    <option key={country.iso} value={country.iso}>
+                      {`${country.flag} ${country.name} (${country.dial})`}
+                    </option>
+                  ))}
+                </select>
+                <input
+                  value={pacienteTelefonoLocal}
+                  onChange={(e) => setPacienteTelefonoLocal(onlyDigits(e.target.value).slice(0, 10))}
+                  required
+                  inputMode="numeric"
+                  pattern="[0-9]{10}"
+                  maxLength={10}
+                  placeholder="10 digitos"
+                  style={{ width: "100%", padding: 10, borderRadius: 10, border: "1px solid #ddd" }}
+                />
+              </div>
+              <div style={{ marginTop: 4, fontSize: 12, opacity: 0.75 }}>
+                Captura exactamente 10 dígitos.
+              </div>
             </label>
 
             <label style={{ display: "block", marginBottom: 8 }}>
@@ -1484,6 +2454,25 @@ export default function App() {
                 style={{ width: "100%", padding: 10, borderRadius: 10, border: "1px solid #ddd" }}
               />
             </label>
+
+            {editingPacienteId === null && (
+              <label style={{ display: "block", marginBottom: 8 }}>
+                Cómo nos conoció *
+                <select
+                  value={formPaciente.como_nos_conocio ?? ""}
+                  onChange={(e) => setFormPaciente({ ...formPaciente, como_nos_conocio: e.target.value })}
+                  required
+                  style={{ width: "100%", padding: 10, borderRadius: 10, border: "1px solid #ddd", background: "#fff" }}
+                >
+                  <option value="">Seleccionar</option>
+                  <option value="instagram">Instagram</option>
+                  <option value="fb">FB</option>
+                  <option value="google">Google</option>
+                  <option value="linkedin">LinkedIn</option>
+                  <option value="referencia">Referencia</option>
+                </select>
+              </label>
+            )}
 
             <button
               type="submit"
@@ -1755,7 +2744,39 @@ export default function App() {
         tab === "consultas" && (
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(440px, 1fr))", gap: 16, alignItems: "start" }}>
             <form onSubmit={onSubmitConsulta} style={{ border: "1px solid #ddd", borderRadius: 12, padding: 14 }}>
-              <div style={{ fontWeight: 700, marginBottom: 10 }}>Nueva consulta</div>
+              <div style={{ fontWeight: 700, marginBottom: 10 }}>
+                {editingConsultaId === null ? "Nueva consulta" : `Editando consulta #${editingConsultaId}`}
+              </div>
+              {successConsultaMsg && (
+                <div style={{ marginBottom: 10, padding: 10, borderRadius: 10, border: "1px solid #2ecc71", background: "#eafaf1", color: "#1e8449", fontWeight: 700 }}>
+                  {successConsultaMsg}
+                </div>
+              )}
+
+              <label style={{ display: "block", marginBottom: 8 }}>
+                Buscar paciente
+                <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
+                  <input
+                    value={qPacienteConsulta}
+                    onChange={(e) => setQPacienteConsulta(e.target.value)}
+                    placeholder="Nombre, ID, teléfono o correo..."
+                    style={{ flex: 1, padding: 10, borderRadius: 10, border: "1px solid #ddd" }}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setQPacienteConsulta("");
+                      setPacientesConsultaOpciones(pacientesOpciones);
+                    }}
+                    style={{ ...actionBtnStyle, padding: "10px 12px" }}
+                  >
+                    Limpiar
+                  </button>
+                </div>
+                {loadingPacienteConsulta && (
+                  <div style={{ marginTop: 4, fontSize: 12, opacity: 0.75 }}>Buscando...</div>
+                )}
+              </label>
 
               <label style={{ display: "block", marginBottom: 8 }}>
                 Paciente *
@@ -1765,10 +2786,10 @@ export default function App() {
                   required
                   style={{ width: "100%", padding: 10, borderRadius: 10, border: "1px solid #ddd", background: "#fff" }}
                 >
-                  {pacientesOpciones.length === 0 ? (
+                  {pacientesConsultaOpciones.length === 0 ? (
                     <option value={0}>No hay pacientes</option>
                   ) : (
-                    pacientesOpciones.map((op) => (
+                    pacientesConsultaOpciones.map((op) => (
                       <option key={op.id} value={op.id}>
                         {op.label}
                       </option>
@@ -1777,85 +2798,179 @@ export default function App() {
                 </select>
               </label>
 
-              <label style={{ display: "block", marginBottom: 8 }}>
-                Tipo de consulta
-                <select
-                  value={formConsulta.tipo_consulta ?? ""}
-                  onChange={(e) => setFormConsulta({ ...formConsulta, tipo_consulta: e.target.value })}
-                  style={{ width: "100%", padding: 10, borderRadius: 10, border: "1px solid #ddd", background: "#fff" }}
-                >
-                  <option value="primera_vez">primera_vez</option>
-                  <option value="seguimiento">seguimiento</option>
-                  <option value="lentes_contacto">lentes_contacto</option>
-                  <option value="graduacion">graduacion</option>
-                  <option value="otro">otro</option>
-                </select>
-              </label>
+              {editingConsultaId === null && (
+                <div style={{ marginBottom: 12, border: "1px solid #ddd", borderRadius: 10, padding: 10, background: "#fff" }}>
+                  <label style={{ display: "flex", alignItems: "center", gap: 8, fontWeight: 700, marginBottom: 8 }}>
+                    <input
+                      type="checkbox"
+                      checked={agendarConsulta}
+                      onChange={(e) => {
+                        setAgendarConsulta(e.target.checked);
+                        if (!e.target.checked) setAgendaSlotSeleccionado(null);
+                      }}
+                    />
+                    Agendar en Google Calendar
+                  </label>
+
+                  {agendarConsulta && (
+                    <>
+                      <div style={{ display: "flex", gap: 8, alignItems: "end", marginBottom: 8, flexWrap: "wrap" }}>
+                        <label style={{ display: "block" }}>
+                          Fecha *
+                          <input
+                            type="date"
+                            value={agendaFecha}
+                            onChange={(e) => setAgendaFecha(e.target.value)}
+                            style={{ display: "block", padding: 8, borderRadius: 8, border: "1px solid #ddd", background: "#fff", minWidth: 180 }}
+                          />
+                        </label>
+                        <button
+                          type="button"
+                          onClick={loadAgendaDisponibilidad}
+                          style={{ ...actionBtnStyle, padding: "9px 12px" }}
+                        >
+                          Ver horarios
+                        </button>
+                        {agendaTimezone && <span style={{ fontSize: 12, opacity: 0.75 }}>Zona: {agendaTimezone}</span>}
+                      </div>
+
+                      {agendaLoading ? (
+                        <div style={{ fontSize: 13 }}>Cargando horarios...</div>
+                      ) : agendaSlots.length === 0 ? (
+                        <div style={{ fontSize: 13, opacity: 0.85 }}>No hay horarios disponibles para ese día.</div>
+                      ) : (
+                        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: 8 }}>
+                          {agendaSlots.map((slot) => {
+                            const selected = agendaSlotSeleccionado?.inicio === slot.inicio && agendaSlotSeleccionado?.fin === slot.fin;
+                            return (
+                              <button
+                                key={slot.inicio}
+                                type="button"
+                                onClick={() => setAgendaSlotSeleccionado(slot)}
+                                style={{
+                                  padding: "8px 10px",
+                                  borderRadius: 10,
+                                  border: selected ? "1px solid #1d6fd8" : "1px solid #d7c6b2",
+                                  background: selected ? "#eaf3ff" : "#fff8ef",
+                                  color: "#3f2f20",
+                                  fontWeight: 700,
+                                  cursor: "pointer",
+                                }}
+                              >
+                                {slot.label}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </>
+                  )}
+                </div>
+              )}
+
+              <div style={{ display: "block", marginBottom: 10 }}>
+                <div style={{ marginBottom: 6, fontWeight: 700 }}>Tipo de consulta *</div>
+                <div style={{ display: "grid", gap: 6, padding: 10, border: "1px solid #ddd", borderRadius: 10, background: "#fff" }}>
+                  {[
+                    "primera_vez_en_clinica",
+                    "revision_general",
+                    "graduacion_lentes",
+                    "lentes_contacto",
+                    "seguimiento",
+                    "molestia",
+                    "otro",
+                  ].map((opt) => (
+                    <label key={opt} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <input
+                        type="checkbox"
+                        checked={tiposConsultaSeleccionados.includes(opt)}
+                        onChange={(e) => {
+                          setTiposConsultaSeleccionados((prev) => {
+                            const next = e.target.checked
+                              ? [...prev, opt]
+                              : prev.filter((x) => x !== opt);
+                            if (!next.includes("otro")) setTipoConsultaOtro("");
+                            setFormConsulta((curr) => ({ ...curr, tipo_consulta: next.join("|") }));
+                            return next;
+                          });
+                        }}
+                      />
+                      <span>{opt}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+
+              {tiposConsultaSeleccionados.includes("otro") && (
+                <label style={{ display: "block", marginBottom: 8 }}>
+                  Razón (otro) *
+                  <input
+                    value={tipoConsultaOtro}
+                    onChange={(e) => setTipoConsultaOtro(e.target.value)}
+                    required
+                    style={{ width: "100%", padding: 10, borderRadius: 10, border: "1px solid #ddd" }}
+                  />
+                </label>
+              )}
 
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
                 <label style={{ display: "block", marginBottom: 8 }}>
-                  Doctor (nombre)
+                  Doctor (nombre) *
                   <input
                     value={formConsulta.doctor_primer_nombre ?? ""}
                     onChange={(e) => setFormConsulta({ ...formConsulta, doctor_primer_nombre: e.target.value })}
+                    required
                     style={{ width: "100%", padding: 10, borderRadius: 10, border: "1px solid #ddd" }}
                   />
                 </label>
 
                 <label style={{ display: "block", marginBottom: 8 }}>
-                  Doctor (apellido)
+                  Doctor (apellido) *
                   <input
                     value={formConsulta.doctor_apellido_paterno ?? ""}
                     onChange={(e) => setFormConsulta({ ...formConsulta, doctor_apellido_paterno: e.target.value })}
+                    required
                     style={{ width: "100%", padding: 10, borderRadius: 10, border: "1px solid #ddd" }}
                   />
                 </label>
               </div>
 
               <label style={{ display: "block", marginBottom: 8 }}>
-                Motivo
-                <input
-                  value={formConsulta.motivo ?? ""}
-                  onChange={(e) => setFormConsulta({ ...formConsulta, motivo: e.target.value })}
-                  style={{ width: "100%", padding: 10, borderRadius: 10, border: "1px solid #ddd" }}
-                />
-              </label>
-
-              <label style={{ display: "block", marginBottom: 8 }}>
-                Diagnóstico
-                <input
-                  value={formConsulta.diagnostico ?? ""}
-                  onChange={(e) => setFormConsulta({ ...formConsulta, diagnostico: e.target.value })}
-                  style={{ width: "100%", padding: 10, borderRadius: 10, border: "1px solid #ddd" }}
-                />
-              </label>
-
-              <label style={{ display: "block", marginBottom: 8 }}>
-                Plan
-                <textarea
-                  value={formConsulta.plan ?? ""}
-                  onChange={(e) => setFormConsulta({ ...formConsulta, plan: e.target.value })}
-                  rows={3}
-                  style={{ width: "100%", padding: 10, borderRadius: 10, border: "1px solid #ddd" }}
-                />
-              </label>
-
-              <label style={{ display: "block", marginBottom: 8 }}>
                 Notas
                 <textarea
                   value={formConsulta.notas ?? ""}
-                  onChange={(e) => setFormConsulta({ ...formConsulta, notas: e.target.value })}
+                  onChange={(e) => {
+                    const next = e.target.value;
+                    const razon = tiposConsultaSeleccionados.includes("otro") && tipoConsultaOtro.trim()
+                      ? `Razon (otro): ${tipoConsultaOtro.trim()}`
+                      : "";
+                    const merged = razon ? `${razon} | ${next}` : next;
+                    if (wordCount(merged) <= 50) {
+                      setFormConsulta({ ...formConsulta, notas: next });
+                    }
+                  }}
                   rows={3}
                   style={{ width: "100%", padding: 10, borderRadius: 10, border: "1px solid #ddd" }}
                 />
+                <div style={{ marginTop: 4, fontSize: 12, opacity: 0.75 }}>
+                  {(() => {
+                    const razon = tiposConsultaSeleccionados.includes("otro") && tipoConsultaOtro.trim()
+                      ? `Razon (otro): ${tipoConsultaOtro.trim()}`
+                      : "";
+                    const merged = razon
+                      ? `${razon} | ${formConsulta.notas ?? ""}`
+                      : (formConsulta.notas ?? "");
+                    return `${wordCount(merged)}/50 palabras`;
+                  })()}
+                </div>
               </label>
 
               <button
                 type="submit"
                 disabled={
                   savingConsulta ||
-                  pacientesOpciones.length === 0 ||
-                  !canCreateConsulta
+                  !formConsulta.paciente_id ||
+                  (editingConsultaId === null ? !canCreateConsulta : !canEditConsulta)
                 }
               style={{
                 width: "100%",
@@ -1868,8 +2983,27 @@ export default function App() {
                 cursor: savingConsulta ? "not-allowed" : "pointer",
               }}
               >
-                {savingConsulta ? "Guardando..." : "Guardar consulta"}
+                {savingConsulta ? "Guardando..." : (editingConsultaId === null ? "Guardar consulta" : "Actualizar consulta")}
               </button>
+
+              {editingConsultaId !== null && (
+                <button
+                  type="button"
+                  onClick={cancelEditConsulta}
+                  style={{
+                    width: "100%",
+                    padding: 12,
+                    borderRadius: 12,
+                    border: "1px solid #ddd",
+                    background: "#fff",
+                    fontWeight: 700,
+                    cursor: "pointer",
+                    marginTop: 8,
+                  }}
+                >
+                  Cancelar edición
+                </button>
+              )}
 
               <div style={{ marginTop: 10, display: "flex", gap: 10 }}>
                 <button
@@ -1969,7 +3103,7 @@ export default function App() {
                 <input
                   value={qConsulta}
                   onChange={(e) => setQConsulta(e.target.value)}
-                  placeholder="Buscar por ID, paciente, doctor, tipo, motivo, diagnóstico..."
+                  placeholder="Buscar por ID, paciente, doctor o tipo..."
                   style={{
                     width: "100%",
                     padding: 10,
@@ -1988,8 +3122,6 @@ export default function App() {
                     <th align="left" style={{ padding: 10 }}>Paciente</th>
                     <th align="left" style={{ padding: 10 }}>Tipo</th>
                     <th align="left" style={{ padding: 10 }}>Doctor</th>
-                    <th align="left" style={{ padding: 10 }}>Motivo</th>
-                    <th align="left" style={{ padding: 10 }}>Diagnóstico</th>
                     <th align="left" style={{ padding: 10 }}>Acciones</th>
                   </tr>
                 </thead>
@@ -1999,13 +3131,66 @@ export default function App() {
                       <td style={{ padding: 10 }}>{c.consulta_id}</td>
                       <td style={{ padding: 10 }}>{formatDateTimePretty(c.fecha_hora)}</td>
                       <td style={{ padding: 10 }}>{c.paciente_nombre}</td>
-                      <td style={{ padding: 10 }}>{c.tipo_consulta ?? ""}</td>
+                      <td style={{ padding: 10 }}>
+                        <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                          {(c.tipo_consulta ?? "")
+                            .split("|")
+                            .map((x) => x.trim())
+                            .filter(Boolean)
+                            .map((tipo) => (
+                              <span
+                                key={`${c.consulta_id}-${tipo}`}
+                                style={{
+                                  padding: "4px 8px",
+                                  borderRadius: 999,
+                                  border: "1px solid #d9c7b3",
+                                  background: "#fff",
+                                  fontSize: 12,
+                                  fontWeight: 700,
+                                  color: "#5a4633",
+                                }}
+                              >
+                                {tipo}
+                              </span>
+                            ))}
+                        </div>
+                      </td>
                       <td style={{ padding: 10 }}>
                         {[c.doctor_primer_nombre, c.doctor_apellido_paterno].filter(Boolean).join(" ")}
                       </td>
-                      <td style={{ padding: 10 }}>{c.motivo ?? ""}</td>
-                      <td style={{ padding: 10 }}>{c.diagnostico ?? ""}</td>
                       <td style={{ padding: 10 }}>
+                      <button
+                        type="button"
+                        onClick={() => setSelectedConsultaDetalle(c)}
+                        style={{
+                          padding: "6px 10px",
+                          borderRadius: 10,
+                          border: "1px solid #ddd",
+                          background: "#fff",
+                          fontWeight: 700,
+                          cursor: "pointer",
+                          marginRight: 8,
+                        }}
+                      >
+                        Ver
+                      </button>
+                      {canEditConsulta && (
+                        <button
+                          type="button"
+                          onClick={() => startEditConsulta(c)}
+                          style={{
+                            padding: "6px 10px",
+                            borderRadius: 10,
+                            border: "1px solid #ddd",
+                            background: "#fff",
+                            fontWeight: 700,
+                            cursor: "pointer",
+                            marginRight: 8,
+                          }}
+                        >
+                          Editar
+                        </button>
+                      )}
                       
                       {canDeleteConsulta ? (
                         <button
@@ -2030,7 +3215,7 @@ export default function App() {
                   ))}
                   {consultasFiltradas.length === 0 && (
                     <tr>
-                      <td style={{ padding: 10 }} colSpan={8}>Sin consultas</td>
+                      <td style={{ padding: 10 }} colSpan={6}>Sin consultas</td>
                     </tr>
                   )}
                 </tbody>
@@ -2040,6 +3225,696 @@ export default function App() {
         )
       }
 
+
+      {/* ========================= VENTAS ========================= */}
+      {tab === "ventas" && (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(440px, 1fr))", gap: 16, alignItems: "start" }}>
+          <form onSubmit={onSubmitVenta} style={{ border: "1px solid #ddd", borderRadius: 12, padding: 14 }}>
+            <div style={{ fontWeight: 700, marginBottom: 10 }}>
+              {editingVentaId === null ? "Nueva venta" : `Editando venta #${editingVentaId}`}
+            </div>
+            {successVentaMsg && (
+              <div style={{ marginBottom: 10, padding: 10, borderRadius: 10, border: "1px solid #2ecc71", background: "#eafaf1", color: "#1e8449", fontWeight: 700 }}>
+                {successVentaMsg}
+              </div>
+            )}
+
+            <label style={{ display: "block", marginBottom: 8 }}>
+              Buscar paciente
+              <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
+                <input
+                  value={qPacienteVenta}
+                  onChange={(e) => setQPacienteVenta(e.target.value)}
+                  placeholder="Nombre, ID, teléfono o correo..."
+                  style={{ flex: 1, padding: 10, borderRadius: 10, border: "1px solid #ddd" }}
+                />
+                <button
+                  type="button"
+                  onClick={() => {
+                    setQPacienteVenta("");
+                    setPacientesVentaOpciones(pacientesOpciones);
+                  }}
+                  style={{ ...actionBtnStyle, padding: "10px 12px" }}
+                >
+                  Limpiar
+                </button>
+              </div>
+              {loadingPacienteVenta && (
+                <div style={{ marginTop: 4, fontSize: 12, opacity: 0.75 }}>Buscando...</div>
+              )}
+            </label>
+
+            <label style={{ display: "block", marginBottom: 8 }}>
+              Paciente *
+              <select
+                value={formVenta.paciente_id}
+                onChange={(e) => setFormVenta({ ...formVenta, paciente_id: Number(e.target.value) })}
+                required
+                style={{ width: "100%", padding: 10, borderRadius: 10, border: "1px solid #ddd", background: "#fff" }}
+              >
+                {pacientesVentaOpciones.length === 0 ? (
+                  <option value={0}>No hay pacientes</option>
+                ) : (
+                  pacientesVentaOpciones.map((op) => (
+                    <option key={op.id} value={op.id}>
+                      {op.label}
+                    </option>
+                  ))
+                )}
+              </select>
+            </label>
+
+            <div style={{ display: "block", marginBottom: 10 }}>
+              <div style={{ marginBottom: 6, fontWeight: 700 }}>Compra *</div>
+              <div style={{ display: "grid", gap: 6, padding: 10, border: "1px solid #ddd", borderRadius: 10, background: "#fff" }}>
+                {[
+                  "armazon",
+                  "micas",
+                  "lentes_contacto",
+                  "micas_antiblueray",
+                  "micas_fotocromaticas",
+                  "otro",
+                ].map((opt) => (
+                  <label key={opt} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <input
+                      type="checkbox"
+                      checked={ventasSeleccionadas.includes(opt)}
+                      onChange={(e) => {
+                        setVentasSeleccionadas((prev) => {
+                          const next = e.target.checked ? [...prev, opt] : prev.filter((x) => x !== opt);
+                          if (!next.includes("otro")) setVentaCompraOtro("");
+                          setFormVenta((curr) => ({ ...curr, compra: next.join("|") }));
+                          return next;
+                        });
+                      }}
+                    />
+                    <span>{opt}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+
+            {ventasSeleccionadas.includes("otro") && (
+              <label style={{ display: "block", marginBottom: 8 }}>
+                Detalle (otro) *
+                <input
+                  value={ventaCompraOtro}
+                  onChange={(e) => setVentaCompraOtro(e.target.value)}
+                  required
+                  style={{ width: "100%", padding: 10, borderRadius: 10, border: "1px solid #ddd" }}
+                />
+              </label>
+            )}
+
+            <label style={{ display: "block", marginBottom: 8 }}>
+              Monto total (MXN) *
+              <input
+                type="number"
+                min={0}
+                step="0.01"
+                value={
+                  formVenta.monto_total === 0 || Number.isNaN(Number(formVenta.monto_total))
+                    ? ""
+                    : String(formVenta.monto_total)
+                }
+                onChange={(e) =>
+                  setFormVenta({
+                    ...formVenta,
+                    monto_total: e.target.value === "" ? 0 : Number(e.target.value),
+                  })
+                }
+                required
+                style={{ width: "100%", padding: 10, borderRadius: 10, border: "1px solid #ddd" }}
+              />
+            </label>
+
+            <label style={{ display: "block", marginBottom: 8 }}>
+              Método de pago *
+              <select
+                value={formVenta.metodo_pago}
+                onChange={(e) =>
+                  setFormVenta({
+                    ...formVenta,
+                    metodo_pago: e.target.value as "efectivo" | "tarjeta_credito" | "tarjeta_debito",
+                  })
+                }
+                style={{ width: "100%", padding: 10, borderRadius: 10, border: "1px solid #ddd", background: "#fff" }}
+              >
+                <option value="efectivo">efectivo</option>
+                <option value="tarjeta_credito">tarjeta_credito</option>
+                <option value="tarjeta_debito">tarjeta_debito</option>
+              </select>
+            </label>
+
+            <label style={{ display: "block", marginBottom: 8 }}>
+              ¿Dejó adelanto? *
+              <select
+                value={formVenta.adelanto_aplica ? "si" : "no"}
+                onChange={(e) => {
+                  const aplica = e.target.value === "si";
+                  setFormVenta({
+                    ...formVenta,
+                    adelanto_aplica: aplica,
+                    adelanto_monto: aplica ? formVenta.adelanto_monto ?? null : null,
+                    adelanto_metodo: aplica ? formVenta.adelanto_metodo ?? "efectivo" : null,
+                  });
+                }}
+                style={{ width: "100%", padding: 10, borderRadius: 10, border: "1px solid #ddd", background: "#fff" }}
+              >
+                <option value="no">no</option>
+                <option value="si">si</option>
+              </select>
+            </label>
+
+            {formVenta.adelanto_aplica && (
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                <label style={{ display: "block", marginBottom: 8 }}>
+                  Monto adelanto (MXN) *
+                  <input
+                    type="number"
+                    min={0}
+                    step="0.01"
+                    value={formVenta.adelanto_monto ?? ""}
+                    onChange={(e) =>
+                      setFormVenta({
+                        ...formVenta,
+                        adelanto_monto: e.target.value === "" ? null : Number(e.target.value),
+                      })
+                    }
+                    required
+                    style={{ width: "100%", padding: 10, borderRadius: 10, border: "1px solid #ddd" }}
+                  />
+                </label>
+                <label style={{ display: "block", marginBottom: 8 }}>
+                  Método adelanto *
+                  <select
+                    value={formVenta.adelanto_metodo ?? "efectivo"}
+                    onChange={(e) =>
+                      setFormVenta({
+                        ...formVenta,
+                        adelanto_metodo: e.target.value as "efectivo" | "tarjeta_credito" | "tarjeta_debito",
+                      })
+                    }
+                    style={{ width: "100%", padding: 10, borderRadius: 10, border: "1px solid #ddd", background: "#fff" }}
+                  >
+                    <option value="efectivo">efectivo</option>
+                    <option value="tarjeta_credito">tarjeta_credito</option>
+                    <option value="tarjeta_debito">tarjeta_debito</option>
+                  </select>
+                </label>
+              </div>
+            )}
+
+            <label style={{ display: "block", marginBottom: 8 }}>
+              Notas
+              <textarea
+                value={formVenta.notas ?? ""}
+                onChange={(e) => {
+                  const next = e.target.value;
+                  if (wordCount(next) <= 50) {
+                    setFormVenta({ ...formVenta, notas: next });
+                  }
+                }}
+                rows={3}
+                style={{ width: "100%", padding: 10, borderRadius: 10, border: "1px solid #ddd" }}
+              />
+              <div style={{ marginTop: 4, fontSize: 12, opacity: 0.75 }}>
+                {`${wordCount(formVenta.notas ?? "")}/50 palabras`}
+              </div>
+            </label>
+
+            <button
+              type="submit"
+              disabled={savingVenta || !formVenta.paciente_id || (editingVentaId === null ? !canCreateVenta : !canEditVenta)}
+              style={{
+                width: "100%",
+                padding: 12,
+                borderRadius: 12,
+                border: "1px solid #3f6784",
+                background: savingVenta ? "#e7eff6" : "#4D7A9B",
+                color: savingVenta ? "#2b3f4f" : "#fff",
+                fontWeight: 700,
+                cursor: savingVenta ? "not-allowed" : "pointer",
+              }}
+            >
+              {savingVenta ? "Guardando..." : editingVentaId === null ? "Guardar venta" : "Actualizar venta"}
+            </button>
+
+            {editingVentaId !== null && (
+              <button
+                type="button"
+                onClick={cancelEditVenta}
+                style={{
+                  width: "100%",
+                  padding: 12,
+                  borderRadius: 12,
+                  border: "1px solid #ddd",
+                  background: "#fff",
+                  fontWeight: 700,
+                  cursor: "pointer",
+                  marginTop: 8,
+                }}
+              >
+                Cancelar edición
+              </button>
+            )}
+          </form>
+
+          <div style={{ ...softCard, overflowX: "auto" }}>
+            <div
+              style={{
+                padding: 14,
+                fontWeight: 700,
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                gap: 10,
+              }}
+            >
+              <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                <span>Ventas</span>
+                <span style={{ padding: "5px 10px", borderRadius: 999, border: "1px solid #d7c4b0", background: "#fff", fontSize: 12, fontWeight: 700, color: "#5a4633" }}>
+                  Filtro: {ventaFiltroLabel}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setVentaFiltroModo("hoy");
+                    setVentaFechaDesde("");
+                    setVentaFechaHasta("");
+                    setVentaMes("");
+                    setVentaAnio(String(new Date().getFullYear()));
+                    loadVentas({ modo: "hoy" });
+                  }}
+                  style={{ ...actionBtnStyle, padding: "6px 10px" }}
+                >
+                  Quitar filtro
+                </button>
+                <button type="button" onClick={() => aplicarFiltroRapidoVenta("ayer")} style={{ ...actionBtnStyle, padding: "6px 10px" }}>Ayer</button>
+                <button type="button" onClick={() => aplicarFiltroRapidoVenta("ultimos7")} style={{ ...actionBtnStyle, padding: "6px 10px" }}>Últimos 7 días</button>
+                <button type="button" onClick={() => aplicarFiltroRapidoVenta("semana_pasada")} style={{ ...actionBtnStyle, padding: "6px 10px" }}>Semana pasada</button>
+                <button type="button" onClick={() => aplicarFiltroRapidoVenta("mes_pasado")} style={{ ...actionBtnStyle, padding: "6px 10px" }}>Mes pasado</button>
+              </div>
+            </div>
+
+            <div style={{ padding: 14, paddingTop: 0 }}>
+              <input
+                value={qVenta}
+                onChange={(e) => setQVenta(e.target.value)}
+                placeholder="Buscar por ID, fecha, paciente, compra o monto..."
+                style={{ width: "100%", padding: 10, borderRadius: 10, border: "1px solid #ddd" }}
+              />
+            </div>
+
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead>
+                <tr style={{ background: "#fafafa" }}>
+                  <th align="left" style={{ padding: 10 }}>ID</th>
+                  <th align="left" style={{ padding: 10 }}>Fecha</th>
+                  <th align="left" style={{ padding: 10 }}>Paciente</th>
+                  <th align="left" style={{ padding: 10 }}>Compra</th>
+                  <th align="left" style={{ padding: 10 }}>Monto</th>
+                  <th align="left" style={{ padding: 10 }}>Método</th>
+                  <th align="left" style={{ padding: 10 }}>Adelanto</th>
+                  <th align="left" style={{ padding: 10 }}>Acciones</th>
+                </tr>
+              </thead>
+              <tbody>
+                {ventasFiltradas.map((v) => (
+                  <tr key={v.venta_id} style={{ borderTop: "1px solid #eee" }}>
+                    <td style={{ padding: 10 }}>{v.venta_id}</td>
+                    <td style={{ padding: 10 }}>{formatDateTimePretty(v.fecha_hora)}</td>
+                    <td style={{ padding: 10 }}>{v.paciente_nombre}</td>
+                    <td style={{ padding: 10 }}>
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                        {(v.compra ?? "")
+                          .split("|")
+                          .map((x) => x.trim())
+                          .filter(Boolean)
+                          .map((item) => (
+                            <span key={`${v.venta_id}-${item}`} style={{ padding: "4px 8px", borderRadius: 999, border: "1px solid #d9c7b3", background: "#fff", fontSize: 12, fontWeight: 700, color: "#5a4633" }}>
+                              {item}
+                            </span>
+                          ))}
+                      </div>
+                    </td>
+                    <td style={{ padding: 10 }}>${Number(v.monto_total || 0).toFixed(2)}</td>
+                    <td style={{ padding: 10 }}>{v.metodo_pago ?? ""}</td>
+                    <td style={{ padding: 10 }}>
+                      {v.adelanto_aplica
+                        ? `$${Number(v.adelanto_monto || 0).toFixed(2)} (${v.adelanto_metodo || ""})`
+                        : "no"}
+                    </td>
+                    <td style={{ padding: 10 }}>
+                      <button
+                        type="button"
+                        onClick={() => setSelectedVentaDetalle(v)}
+                        style={{ padding: "6px 10px", borderRadius: 10, border: "1px solid #ddd", background: "#fff", fontWeight: 700, cursor: "pointer", marginRight: 8 }}
+                      >
+                        Ver
+                      </button>
+                      {canEditVenta && (
+                        <button
+                          type="button"
+                          onClick={() => startEditVenta(v)}
+                          style={{ padding: "6px 10px", borderRadius: 10, border: "1px solid #ddd", background: "#fff", fontWeight: 700, cursor: "pointer", marginRight: 8 }}
+                        >
+                          Editar
+                        </button>
+                      )}
+                      {canDeleteVenta ? (
+                        <button
+                          type="button"
+                          onClick={() => askDeleteVenta(v.venta_id)}
+                          style={{ padding: "6px 10px", borderRadius: 10, border: "1px solid #ddd", background: "#fff", fontWeight: 700, cursor: "pointer" }}
+                        >
+                          Eliminar
+                        </button>
+                      ) : (
+                        <span style={{ opacity: 0.5 }}>Sin permisos</span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+                {ventasFiltradas.length === 0 && (
+                  <tr>
+                    <td style={{ padding: 10 }} colSpan={8}>Sin ventas</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {tab === "estadisticas" && (
+        <div style={{ display: "grid", gap: 16 }}>
+          <div style={{ ...softCard, padding: 14, display: "grid", gap: 10 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+              <div style={{ fontWeight: 800 }}>
+                Estadísticas de sucursal #{sucursalActivaId}
+              </div>
+              <button
+                type="button"
+                onClick={() => loadStats()}
+                style={{
+                  padding: "10px 14px",
+                  borderRadius: 12,
+                  border: "1px solid #5346a8",
+                  background: "#6A5ACD",
+                  color: "#fff",
+                  fontWeight: 800,
+                  cursor: "pointer",
+                }}
+              >
+                Actualizar estadísticas
+              </button>
+            </div>
+
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <button type="button" onClick={() => { setStatsFiltroModo("hoy"); loadStats({ modo: "hoy" }); }} style={{ padding: "8px 12px", borderRadius: 10, border: "1px solid #ddd", background: statsFiltroModo === "hoy" ? "#111" : "#fff", color: statsFiltroModo === "hoy" ? "#fff" : "#111", fontWeight: 700, cursor: "pointer" }}>Hoy</button>
+              <button type="button" onClick={() => { setStatsFiltroModo("semana"); loadStats({ modo: "semana" }); }} style={{ padding: "8px 12px", borderRadius: 10, border: "1px solid #ddd", background: statsFiltroModo === "semana" ? "#111" : "#fff", color: statsFiltroModo === "semana" ? "#fff" : "#111", fontWeight: 700, cursor: "pointer" }}>Semana</button>
+              <button type="button" onClick={() => setStatsFiltroModo("mes")} style={{ padding: "8px 12px", borderRadius: 10, border: "1px solid #ddd", background: statsFiltroModo === "mes" ? "#111" : "#fff", color: statsFiltroModo === "mes" ? "#fff" : "#111", fontWeight: 700, cursor: "pointer" }}>Mes</button>
+              <button type="button" onClick={() => setStatsFiltroModo("anio")} style={{ padding: "8px 12px", borderRadius: 10, border: "1px solid #ddd", background: statsFiltroModo === "anio" ? "#111" : "#fff", color: statsFiltroModo === "anio" ? "#fff" : "#111", fontWeight: 700, cursor: "pointer" }}>Año</button>
+            </div>
+
+            {(statsFiltroModo === "mes" || statsFiltroModo === "anio") && (
+              <div style={{ display: "grid", gridTemplateColumns: statsFiltroModo === "mes" ? "1fr 1fr auto" : "1fr auto", gap: 10, alignItems: "end" }}>
+                <input type="number" min={2020} max={2100} value={statsAnio} onChange={(e) => setStatsAnio(e.target.value)} placeholder="Año" style={{ padding: 10, borderRadius: 10, border: "1px solid #ddd" }} />
+                {statsFiltroModo === "mes" && (
+                  <select value={statsMes} onChange={(e) => setStatsMes(e.target.value)} style={{ padding: 10, borderRadius: 10, border: "1px solid #ddd", background: "#fff" }}>
+                    <option value="1">Enero</option><option value="2">Febrero</option><option value="3">Marzo</option><option value="4">Abril</option>
+                    <option value="5">Mayo</option><option value="6">Junio</option><option value="7">Julio</option><option value="8">Agosto</option>
+                    <option value="9">Septiembre</option><option value="10">Octubre</option><option value="11">Noviembre</option><option value="12">Diciembre</option>
+                  </select>
+                )}
+                <button
+                  type="button"
+                  onClick={() => loadStats({ modo: statsFiltroModo, mes: statsMes, anio: statsAnio })}
+                  style={{ padding: "10px 12px", borderRadius: 10, border: "1px solid #ddd", background: "#fff", fontWeight: 700, cursor: "pointer" }}
+                >
+                  Aplicar
+                </button>
+              </div>
+            )}
+
+            <div style={{ fontSize: 12, opacity: 0.8 }}>
+              Filtro actual: {statsData?.periodo?.label ?? statsFiltroLabel}
+            </div>
+          </div>
+
+          {loadingStats ? (
+            <div style={{ ...softCard, padding: 14 }}>Cargando estadísticas...</div>
+          ) : !statsData ? (
+            <div style={{ ...softCard, padding: 14 }}>Sin datos de estadísticas.</div>
+          ) : (
+            <>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12 }}>
+                <div style={{ ...softCard, padding: 14 }}>
+                  <div style={{ fontSize: 12, opacity: 0.75 }}>Consultas (periodo)</div>
+                  <div style={{ fontSize: 28, fontWeight: 800 }}>{statsData.consultas.total}</div>
+                </div>
+                <div style={{ ...softCard, padding: 14 }}>
+                  <div style={{ fontSize: 12, opacity: 0.75 }}>Ventas (periodo)</div>
+                  <div style={{ fontSize: 28, fontWeight: 800 }}>{statsData.ventas.total}</div>
+                </div>
+                {(isAdmin || isRecep) && (
+                  <div style={{ ...softCard, padding: 14 }}>
+                    <div style={{ fontSize: 12, opacity: 0.75 }}>Monto ventas (periodo)</div>
+                    <div style={{ fontSize: 28, fontWeight: 800 }}>${Number(statsData.ventas.monto_total || 0).toFixed(2)}</div>
+                  </div>
+                )}
+              </div>
+
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: 12 }}>
+                <div style={{ ...softCard, padding: 14 }}>
+                  <div style={{ fontWeight: 800, marginBottom: 10 }}>Pie chart: ventas por método de pago</div>
+                  {statsData.ventas.por_metodo_pago.length === 0 ? (
+                    <div>Sin ventas en el periodo.</div>
+                  ) : (
+                    <div style={{ display: "grid", gridTemplateColumns: "180px 1fr", gap: 14, alignItems: "center" }}>
+                      {(() => {
+                        const colors = ["#4D7A9B", "#6A5ACD", "#6F8A3C", "#C9822B", "#9E5F40", "#8A5B2C"];
+                        const total = statsData.ventas.por_metodo_pago.reduce((acc, x) => acc + x.total, 0) || 1;
+                        let acc = 0;
+                        const parts = statsData.ventas.por_metodo_pago.map((item, idx) => {
+                          const startPct = (acc / total) * 100;
+                          acc += item.total;
+                          const endPct = (acc / total) * 100;
+                          return `${colors[idx % colors.length]} ${startPct}% ${endPct}%`;
+                        });
+                        return <div style={{ width: 170, height: 170, borderRadius: "50%", border: "1px solid #ddd", background: `conic-gradient(${parts.join(", ")})` }} />;
+                      })()}
+                      <div style={{ display: "grid", gap: 8 }}>
+                        {(() => {
+                          const total = statsData.ventas.por_metodo_pago.reduce((acc, x) => acc + x.total, 0) || 1;
+                          return statsData.ventas.por_metodo_pago.map((item) => (
+                            <div key={`metodo-${item.etiqueta}`} style={{ display: "flex", justifyContent: "space-between", borderBottom: "1px solid #f0e7dc", paddingBottom: 4 }}>
+                              <span>{formatStatsEtiqueta(item.etiqueta)}</span>
+                              <strong>{item.total} ({Math.round((item.total / total) * 100)}%)</strong>
+                            </div>
+                          ));
+                        })()}
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                <div style={{ ...softCard, padding: 14 }}>
+                  <div style={{ fontWeight: 800, marginBottom: 10 }}>Pie chart: consultas por tipo</div>
+                  {statsData.consultas.por_tipo.length === 0 ? (
+                    <div>Sin consultas en el periodo.</div>
+                  ) : (
+                    <div style={{ display: "grid", gridTemplateColumns: "180px 1fr", gap: 14, alignItems: "center" }}>
+                      {(() => {
+                        const colors = ["#C9822B", "#6A5ACD", "#4D7A9B", "#6F8A3C", "#9E5F40", "#8A5B2C", "#4E5D6A"];
+                        const total = statsData.consultas.por_tipo.reduce((acc, x) => acc + x.total, 0) || 1;
+                        let acc = 0;
+                        const parts = statsData.consultas.por_tipo.map((item, idx) => {
+                          const startPct = (acc / total) * 100;
+                          acc += item.total;
+                          const endPct = (acc / total) * 100;
+                          return `${colors[idx % colors.length]} ${startPct}% ${endPct}%`;
+                        });
+                        return <div style={{ width: 170, height: 170, borderRadius: "50%", border: "1px solid #ddd", background: `conic-gradient(${parts.join(", ")})` }} />;
+                      })()}
+                      <div style={{ display: "grid", gap: 8 }}>
+                        {(() => {
+                          const total = statsData.consultas.por_tipo.reduce((acc, x) => acc + x.total, 0) || 1;
+                          return statsData.consultas.por_tipo.map((item) => (
+                            <div key={`tipo-${item.etiqueta}`} style={{ display: "flex", justifyContent: "space-between", borderBottom: "1px solid #f0e7dc", paddingBottom: 4 }}>
+                              <span>{formatStatsEtiqueta(item.etiqueta)}</span>
+                              <strong>{item.total} ({Math.round((item.total / total) * 100)}%)</strong>
+                            </div>
+                          ));
+                        })()}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div style={{ ...softCard, padding: 14 }}>
+                <div style={{ fontWeight: 800, marginBottom: 10 }}>Bar chart: productos más comprados (periodo)</div>
+                {statsData.productos_top.length === 0 ? (
+                  <div>Sin ventas de productos en el periodo.</div>
+                ) : (
+                  <div style={{ display: "grid", gap: 9 }}>
+                    {(() => {
+                      const maxValue = Math.max(1, ...statsData.productos_top.map((x) => x.total));
+                      return statsData.productos_top.map((item) => (
+                        <div key={`prod-${item.producto}`} style={{ display: "grid", gridTemplateColumns: "220px 1fr 50px", alignItems: "center", gap: 10 }}>
+                          <div style={{ fontSize: 13 }}>{formatStatsEtiqueta(item.producto)}</div>
+                          <div style={{ height: 12, borderRadius: 999, background: "#eee6dc", overflow: "hidden" }}>
+                            <div style={{ width: `${(item.total / maxValue) * 100}%`, height: "100%", background: "#C9822B" }} />
+                          </div>
+                          <div style={{ textAlign: "right", fontWeight: 700 }}>{item.total}</div>
+                        </div>
+                      ));
+                    })()}
+                  </div>
+                )}
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
+
+      {selectedConsultaDetalle && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(0,0,0,0.45)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 999,
+          }}
+        >
+          <div
+            style={{
+              background: "#fff",
+              width: 760,
+              maxWidth: "96vw",
+              borderRadius: 14,
+              border: "1px solid #ddd",
+              boxShadow: "0 12px 30px rgba(0,0,0,0.22)",
+              padding: 18,
+            }}
+          >
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+              <div style={{ fontWeight: 800, fontSize: 22, color: "#3b2a1c" }}>
+                Detalle de consulta #{selectedConsultaDetalle.consulta_id}
+              </div>
+              <button type="button" onClick={() => setSelectedConsultaDetalle(null)} style={{ ...actionBtnStyle, padding: "8px 12px" }}>
+                Cerrar
+              </button>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+              <div><b>Fecha:</b> {formatDateTimePretty(selectedConsultaDetalle.fecha_hora)}</div>
+              <div><b>Paciente:</b> {selectedConsultaDetalle.paciente_nombre}</div>
+              <div><b>Doctor:</b> {[selectedConsultaDetalle.doctor_primer_nombre, selectedConsultaDetalle.doctor_apellido_paterno].filter(Boolean).join(" ")}</div>
+              <div><b>Sucursal:</b> {selectedConsultaDetalle.sucursal_nombre ?? ""}</div>
+              <div style={{ gridColumn: "1 / -1" }}>
+                <b>Tipo de consulta:</b>
+                <div style={{ marginTop: 8, display: "flex", flexWrap: "wrap", gap: 6 }}>
+                  {(selectedConsultaDetalle.tipo_consulta ?? "")
+                    .split("|")
+                    .map((x) => x.trim())
+                    .filter(Boolean)
+                    .map((tipo) => (
+                      <span
+                        key={`modal-consulta-${selectedConsultaDetalle.consulta_id}-${tipo}`}
+                        style={{ padding: "4px 8px", borderRadius: 999, border: "1px solid #d9c7b3", background: "#fff", fontSize: 12, fontWeight: 700, color: "#5a4633" }}
+                      >
+                        {tipo}
+                      </span>
+                    ))}
+                </div>
+              </div>
+              <div style={{ gridColumn: "1 / -1" }}>
+                <b>Notas:</b>
+                <div style={{ marginTop: 6, minHeight: 56, border: "1px solid #ddd", borderRadius: 10, background: "#fffdf9", padding: 10 }}>
+                  {selectedConsultaDetalle.notas?.trim() ? selectedConsultaDetalle.notas : "Sin notas"}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {selectedVentaDetalle && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(0,0,0,0.45)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 999,
+          }}
+        >
+          <div
+            style={{
+              background: "#fff",
+              width: 760,
+              maxWidth: "96vw",
+              borderRadius: 14,
+              border: "1px solid #ddd",
+              boxShadow: "0 12px 30px rgba(0,0,0,0.22)",
+              padding: 18,
+            }}
+          >
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+              <div style={{ fontWeight: 800, fontSize: 22, color: "#3b2a1c" }}>
+                Detalle de venta #{selectedVentaDetalle.venta_id}
+              </div>
+              <button type="button" onClick={() => setSelectedVentaDetalle(null)} style={{ ...actionBtnStyle, padding: "8px 12px" }}>
+                Cerrar
+              </button>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+              <div><b>Fecha:</b> {formatDateTimePretty(selectedVentaDetalle.fecha_hora)}</div>
+              <div><b>Paciente:</b> {selectedVentaDetalle.paciente_nombre}</div>
+              <div><b>Monto total:</b> ${Number(selectedVentaDetalle.monto_total || 0).toFixed(2)}</div>
+              <div><b>Método de pago:</b> {formatMetodoPagoLabel(selectedVentaDetalle.metodo_pago)}</div>
+              <div><b>Cómo nos conoció:</b> {formatComoNosConocioLabel(selectedVentaDetalle.como_nos_conocio)}</div>
+              <div style={{ gridColumn: "1 / -1" }}>
+                <b>Compra:</b>
+                <div style={{ marginTop: 8, display: "flex", flexWrap: "wrap", gap: 6 }}>
+                  {(selectedVentaDetalle.compra ?? "")
+                    .split("|")
+                    .map((x) => x.trim())
+                    .filter(Boolean)
+                    .map((item) => (
+                      <span
+                        key={`modal-venta-${selectedVentaDetalle.venta_id}-${item}`}
+                        style={{ padding: "4px 8px", borderRadius: 999, border: "1px solid #d9c7b3", background: "#fff", fontSize: 12, fontWeight: 700, color: "#5a4633" }}
+                      >
+                        {item}
+                      </span>
+                    ))}
+                </div>
+              </div>
+              <div style={{ gridColumn: "1 / -1" }}>
+                <b>Adelanto:</b>{" "}
+                {selectedVentaDetalle.adelanto_aplica
+                  ? `$${Number(selectedVentaDetalle.adelanto_monto || 0).toFixed(2)} (${formatMetodoPagoLabel(selectedVentaDetalle.adelanto_metodo || "")})`
+                  : "No"}
+              </div>
+              <div style={{ gridColumn: "1 / -1" }}>
+                <b>Notas:</b>
+                <div style={{ marginTop: 6, minHeight: 56, border: "1px solid #ddd", borderRadius: 10, background: "#fffdf9", padding: 10 }}>
+                  {selectedVentaDetalle.notas?.trim() ? selectedVentaDetalle.notas : "Sin notas"}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {pacienteFiltroOpen && (
         <div
@@ -2261,7 +4136,9 @@ export default function App() {
             <div style={{ color: "#5f4a32", marginBottom: 14 }}>
               {deleteConfirmType === "paciente"
                 ? `¿Seguro que quieres eliminar el paciente #${deleteConfirmId}?`
-                : `¿Seguro que quieres eliminar la consulta #${deleteConfirmId}?`}
+                : deleteConfirmType === "consulta"
+                ? `¿Seguro que quieres eliminar la consulta #${deleteConfirmId}?`
+                : `¿Seguro que quieres eliminar la venta #${deleteConfirmId}?`}
             </div>
             <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
               <button
@@ -2305,19 +4182,53 @@ export default function App() {
           <div
             style={{
               background: "linear-gradient(180deg, #fffdf9 0%, #fff6eb 100%)",
-              padding: 24,
+              padding: 20,
               borderRadius: 18,
               border: "1px solid #e2cfba",
-              width: 1040,
-              maxWidth: "95vw",
-              maxHeight: "90vh",
+              width: 1240,
+              maxWidth: "98vw",
+              maxHeight: "94vh",
               overflowY: "auto",
               boxShadow: "0 24px 60px rgba(68, 49, 33, 0.26)",
             }}
           >
-            <h2 style={{ marginBottom: 12 }}>
-              Historia clínica paciente #{historiaPacienteId}
-            </h2>
+            <div
+              style={{
+                position: "sticky",
+                top: 0,
+                zIndex: 2,
+                background: "linear-gradient(180deg, #fffdf9 0%, #fff6eb 100%)",
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "flex-start",
+                gap: 12,
+                marginBottom: 12,
+                paddingBottom: 8,
+                borderBottom: "1px solid #ead9c8",
+              }}
+            >
+              <h2 style={{ margin: 0 }}>
+                Historia clínica paciente #{historiaPacienteId}
+              </h2>
+              <button
+                type="button"
+                onClick={closeHistoriaModal}
+                aria-label="Cerrar historia clínica"
+                style={{
+                  width: 34,
+                  height: 34,
+                  borderRadius: 999,
+                  border: "1px solid #d8c5b0",
+                  background: "#fff",
+                  color: "#5f4a32",
+                  fontWeight: 800,
+                  cursor: "pointer",
+                  lineHeight: 1,
+                }}
+              >
+                X
+              </button>
+            </div>
             <style>{`
               .historia-required label > span::after { content: " *"; color: #8d5d2f; font-weight: 800; }
             `}</style>
@@ -2352,16 +4263,31 @@ export default function App() {
                   border: "1px solid #ead9c8",
                   borderRadius: 12,
                   padding: 12,
-                  display: "grid",
-                  gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
-                  gap: 10,
                 }}
               >
-                <div><strong>Nombre:</strong> {[historiaPacienteInfo.primer_nombre, historiaPacienteInfo.segundo_nombre, historiaPacienteInfo.apellido_paterno, historiaPacienteInfo.apellido_materno].filter(Boolean).join(" ")}</div>
-                <div><strong>Fecha de nacimiento:</strong> {historiaPacienteInfo.fecha_nacimiento || ""}</div>
-                <div><strong>Edad:</strong> {calcAge(historiaPacienteInfo.fecha_nacimiento)}</div>
-                <div><strong>Teléfono:</strong> {historiaPacienteInfo.telefono || ""}</div>
-                <div><strong>Correo:</strong> {historiaPacienteInfo.correo || ""}</div>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, marginBottom: 10, flexWrap: "wrap" }}>
+                  <div style={{ fontWeight: 800, color: "#5f4a32" }}>Información del paciente</div>
+                  {canEditPaciente && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (!historiaPacienteInfo) return;
+                        startEditPaciente(historiaPacienteInfo);
+                        closeHistoriaModal();
+                      }}
+                      style={{ ...actionBtnStyle, padding: "6px 10px" }}
+                    >
+                      Editar paciente
+                    </button>
+                  )}
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 10 }}>
+                  <div><strong>Nombre:</strong> {[historiaPacienteInfo.primer_nombre, historiaPacienteInfo.segundo_nombre, historiaPacienteInfo.apellido_paterno, historiaPacienteInfo.apellido_materno].filter(Boolean).join(" ")}</div>
+                  <div><strong>Fecha de nacimiento:</strong> {historiaPacienteInfo.fecha_nacimiento || ""}</div>
+                  <div><strong>Edad:</strong> {calcAge(historiaPacienteInfo.fecha_nacimiento)}</div>
+                  <div><strong>Teléfono:</strong> {historiaPacienteInfo.telefono || ""}</div>
+                  <div><strong>Correo:</strong> {historiaPacienteInfo.correo || ""}</div>
+                </div>
               </div>
             )}
         
@@ -2468,14 +4394,40 @@ export default function App() {
 
                 {/* Historia y antecedentes */}
                 <h3 style={{ margin: 0, color: "#5f4a32" }}>Historia y antecedentes</h3>
-                <label style={{ display: "grid", gap: 6 }}>
-                  <span>Doctor que atendió</span>
-                  <input
-                    style={historiaInputStyle}
-                    value={historiaData.doctor_atencion ?? ""}
-                    onChange={(e)=>setHistoriaData({...historiaData, doctor_atencion: e.target.value})}
-                  />
-                </label>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 10, background: "#fff", border: "1px solid #ead9c8", padding: 12, borderRadius: 12 }}>
+                  <label style={{ display: "grid", gap: 6 }}>
+                    <span>Doctor primer nombre</span>
+                    <input
+                      style={historiaInputStyle}
+                      value={historiaData.doctor_primer_nombre ?? ""}
+                      onChange={(e) => {
+                        const primerNombre = e.target.value;
+                        const apellidoPaterno = historiaData.doctor_apellido_paterno ?? "";
+                        setHistoriaData({
+                          ...historiaData,
+                          doctor_primer_nombre: primerNombre,
+                          doctor_atencion: composeDoctorAtencion(primerNombre, apellidoPaterno),
+                        });
+                      }}
+                    />
+                  </label>
+                  <label style={{ display: "grid", gap: 6 }}>
+                    <span>Doctor primer apellido</span>
+                    <input
+                      style={historiaInputStyle}
+                      value={historiaData.doctor_apellido_paterno ?? ""}
+                      onChange={(e) => {
+                        const apellidoPaterno = e.target.value;
+                        const primerNombre = historiaData.doctor_primer_nombre ?? "";
+                        setHistoriaData({
+                          ...historiaData,
+                          doctor_apellido_paterno: apellidoPaterno,
+                          doctor_atencion: composeDoctorAtencion(primerNombre, apellidoPaterno),
+                        });
+                      }}
+                    />
+                  </label>
+                </div>
                 <label style={{ display: "grid", gap: 6 }}>
                   <span>Historia</span>
                   <textarea
@@ -2492,6 +4444,129 @@ export default function App() {
                     onChange={(e)=>setHistoriaData({...historiaData, antecedentes: e.target.value})}
                   />
                 </label>
+
+                <div style={{ background: "#fff", border: "1px solid #ead9c8", padding: 12, borderRadius: 12, display: "grid", gap: 10 }}>
+                  <div>
+                    <div style={{ fontWeight: 700, marginBottom: 6 }}>Antecedentes generales</div>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 6 }}>
+                      {ANTECEDENTE_OPTIONS.map((opt) => {
+                        return (
+                          <label key={`ag-${opt}`} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                            <input
+                              type="checkbox"
+                              checked={antecedentesGeneralesSeleccionados.includes(opt)}
+                              onChange={(e) => {
+                                const next = e.target.checked
+                                  ? [...antecedentesGeneralesSeleccionados, opt]
+                                  : antecedentesGeneralesSeleccionados.filter((x) => x !== opt);
+                                const removeOtroGeneral = opt === "otro" && !e.target.checked;
+                                const generalOtro = removeOtroGeneral ? "" : (historiaData.antecedentes_otro_general ?? "");
+                                const familiarOtro = historiaData.antecedentes_otro_familiar ?? "";
+                                setHistoriaData({
+                                  ...historiaData,
+                                  antecedentes_generales: next.join("|"),
+                                  antecedentes_otro_general: generalOtro,
+                                  antecedentes_otro: composeAntecedentesOtro(generalOtro, familiarOtro),
+                                });
+                              }}
+                            />
+                            <span>{opt}</span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                    {antecedentesGeneralesSeleccionados.includes("otro") && (
+                      <label style={{ display: "grid", gap: 4, marginTop: 8 }}>
+                        <span>Otro (generales)</span>
+                        <input
+                          style={historiaInputStyle}
+                          value={historiaData.antecedentes_otro_general ?? ""}
+                          onChange={(e) => {
+                            const general = e.target.value;
+                            const familiar = historiaData.antecedentes_otro_familiar ?? "";
+                            setHistoriaData({
+                              ...historiaData,
+                              antecedentes_otro_general: general,
+                              antecedentes_otro: composeAntecedentesOtro(general, familiar),
+                            });
+                          }}
+                        />
+                      </label>
+                    )}
+                  </div>
+                  <div>
+                    <div style={{ fontWeight: 700, marginBottom: 6 }}>Antecedentes familiares</div>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 6 }}>
+                      {ANTECEDENTE_OPTIONS.map((opt) => {
+                        return (
+                          <label key={`af-${opt}`} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                            <input
+                              type="checkbox"
+                              checked={antecedentesFamiliaresSeleccionados.includes(opt)}
+                              onChange={(e) => {
+                                const next = e.target.checked
+                                  ? [...antecedentesFamiliaresSeleccionados, opt]
+                                  : antecedentesFamiliaresSeleccionados.filter((x) => x !== opt);
+                                const removeOtroFamiliar = opt === "otro" && !e.target.checked;
+                                const familiarOtro = removeOtroFamiliar ? "" : (historiaData.antecedentes_otro_familiar ?? "");
+                                const generalOtro = historiaData.antecedentes_otro_general ?? "";
+                                setHistoriaData({
+                                  ...historiaData,
+                                  antecedentes_familiares: next.join("|"),
+                                  antecedentes_otro_familiar: familiarOtro,
+                                  antecedentes_otro: composeAntecedentesOtro(generalOtro, familiarOtro),
+                                });
+                              }}
+                            />
+                            <span>{opt}</span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                    {antecedentesFamiliaresSeleccionados.includes("otro") && (
+                      <label style={{ display: "grid", gap: 4, marginTop: 8 }}>
+                        <span>Otro (familiares)</span>
+                        <input
+                          style={historiaInputStyle}
+                          value={historiaData.antecedentes_otro_familiar ?? ""}
+                          onChange={(e) => {
+                            const familiar = e.target.value;
+                            const general = historiaData.antecedentes_otro_general ?? "";
+                            setHistoriaData({
+                              ...historiaData,
+                              antecedentes_otro_familiar: familiar,
+                              antecedentes_otro: composeAntecedentesOtro(general, familiar),
+                            });
+                          }}
+                        />
+                      </label>
+                    )}
+                  </div>
+                  <label style={{ display: "grid", gap: 4 }}>
+                    <span>Alergias</span>
+                    <textarea
+                      style={{ ...historiaInputStyle, minHeight: 70, resize: "vertical" }}
+                      value={historiaData.alergias ?? ""}
+                      onChange={(e) => setHistoriaData({ ...historiaData, alergias: e.target.value })}
+                    />
+                  </label>
+                  <label style={{ display: "grid", gap: 4 }}>
+                    <span>Enfermedades</span>
+                    <textarea
+                      style={{ ...historiaInputStyle, minHeight: 70, resize: "vertical" }}
+                      value={historiaData.enfermedades ?? ""}
+                      onChange={(e) => setHistoriaData({ ...historiaData, enfermedades: e.target.value })}
+                    />
+                  </label>
+                  <label style={{ display: "grid", gap: 4 }}>
+                    <span>Cirugías</span>
+                    <textarea
+                      style={{ ...historiaInputStyle, minHeight: 70, resize: "vertical" }}
+                      value={historiaData.cirugias ?? ""}
+                      onChange={(e) => setHistoriaData({ ...historiaData, cirugias: e.target.value })}
+                    />
+                  </label>
+                </div>
 
                 {/* Hábitos y riesgos */}
                 <h3 style={{ margin: 0, color: "#5f4a32" }}>Hábitos y riesgos</h3>
@@ -2611,7 +4686,7 @@ export default function App() {
                       if (!r.ok) throw new Error(await readErrorMessage(r));
 
                       const data = await r.json();
-                      setHistoriaData(data);
+                      setHistoriaData(normalizeHistoriaForUi(data, me?.username ?? ""));
                     } catch (e: any) {
                       setError(e?.message ?? String(e));
                     }
@@ -2634,13 +4709,7 @@ export default function App() {
 
                 <button
                   type="button"
-                  onClick={() => {
-                    setHistoriaPacienteId(null);
-                    setHistoriaPacienteInfo(null);
-                    setHistoriaGuardada(false);
-                    setHistoriaConfirmOpen(false);
-                    setHistoriaMissingSummary(null);
-                  }}
+                  onClick={closeHistoriaModal}
                   style={{ marginTop: 14, padding: "10px 14px", borderRadius: 12, border: "1px solid #d8c5b0", background: "#fff", fontWeight: 700, cursor: "pointer" }}
                 >
                   Cerrar

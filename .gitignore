@@ -16,3 +16,10 @@ build/
 
 # OS
 .DS_Store
+
+backend/oauth_client.json
+backend/client_secret.json
+backend/google-service-account.json
+backend/get_refresh_token.py
+main_CODEX_BACKUP.py.txt
+main_FRONTEND_CODEX_BACKUP.txt

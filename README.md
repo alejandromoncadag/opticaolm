@@ -9,8 +9,9 @@ Full-stack optometry clinic database system.
 - Multi-branch workflow (sucursales)
 - Patients CRUD
 - Consultations CRUD
-- Clinical history module
-- Role-based access (`admin` / `recepcion` / `doctor`)
+- Sales module (ventas)
+- Branch-level stats dashboard
+- Role-based access (admin / recepcion / doctor)
 
 ## Tech stack
 - FastAPI (Python)
@@ -21,36 +22,32 @@ Full-stack optometry clinic database system.
 
 ## Run locally
 
-### 1) Backend
+### Backend
 ```bash
 cd backend
-python -m venv .venv
-source .venv/bin/activate   # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
+source ../.venv/bin/activate
 uvicorn main:app --reload
 ```
 
-Backend runs at: `http://127.0.0.1:8000`
+Backend runs at `http://127.0.0.1:8000`.
 
-### 2) Frontend
+### Frontend
 ```bash
 cd frontend
 npm install
 npm run dev
 ```
 
-Frontend runs at: `http://localhost:5173`
+Frontend runs at `http://127.0.0.1:5173`.
 
 ## Environment variables
-Create `backend/.env` with:
-
-```env
-JWT_SECRET=your_secret_here
-```
-
-Update PostgreSQL connection in `backend/main.py` (`DB_CONNINFO`) or move it to `.env`.
+Use `backend/.env` for runtime variables. Important keys include:
+- `JWT_SECRET`
+- `DB_CONNINFO`
+- `GOOGLE_SERVICE_ACCOUNT_FILE` or `GOOGLE_SERVICE_ACCOUNT_JSON` (optional, calendar)
+- `GOOGLE_CALENDAR_IDS` (optional, calendar by sucursal)
 
 ## Notes
 - Use PostgreSQL with UTF-8 encoding.
-- Backend includes startup migrations for some clinical history fields.
-- Make sure backend is running before frontend login.
+- Start backend before frontend login.
+- `google-service-account.json` and OAuth client JSON files should never be committed.
