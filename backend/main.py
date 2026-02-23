@@ -1,6 +1,7 @@
 from fastapi import FastAPI, HTTPException, Depends
 from fastapi.security import OAuth2PasswordBearer
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 
 from jose import jwt, JWTError
 from passlib.hash import argon2
@@ -10,6 +11,8 @@ from typing import Optional, Any
 from datetime import datetime, timedelta, timezone, date, time
 from zoneinfo import ZoneInfo
 import json
+import csv
+import io
 from calendar import monthrange
 import secrets
 import re
@@ -26,6 +29,27 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
+def _resolve_cors_origins() -> list[str]:
+    configured = os.getenv("FRONTEND_ORIGIN", "").strip()
+    if configured:
+        origins = [x.strip() for x in configured.split(",") if x.strip()]
+        if origins:
+            return origins
+    return [
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:4173",
+        "http://127.0.0.1:4173",
+    ]
+
+
+DB_CONNINFO = os.getenv(
+    "DB_CONNINFO",
+    "host=localhost port=5432 dbname=eyecare user=alejandromoncadag",
+)
+CORS_ORIGINS = _resolve_cors_origins()
+CORS_ALLOW_CREDENTIALS = "*" not in CORS_ORIGINS
+
 
 app = FastAPI(
     title="Óptica OLM API",
@@ -35,18 +59,11 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-        "http://localhost:4173",
-        "http://127.0.0.1:4173",
-    ],
-    allow_credentials=True,
+    allow_origins=CORS_ORIGINS,
+    allow_credentials=CORS_ALLOW_CREDENTIALS,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-DB_CONNINFO = "host=localhost port=5432 dbname=eyecare user=alejandromoncadag"
 
 # ===== Auth config =====
 JWT_SECRET = os.getenv("JWT_SECRET", "CAMBIA_ESTE_SECRET_EN_PROD")
@@ -63,23 +80,110 @@ def ensure_historia_schema():
             cur.execute(
                 """
                 ALTER TABLE core.historias_clinicas
-                ADD COLUMN IF NOT EXISTS paciente_fecha_nacimiento date,
-                ADD COLUMN IF NOT EXISTS paciente_edad integer,
-                ADD COLUMN IF NOT EXISTS paciente_primer_nombre text,
-                ADD COLUMN IF NOT EXISTS paciente_segundo_nombre text,
-                ADD COLUMN IF NOT EXISTS paciente_apellido_paterno text,
-                ADD COLUMN IF NOT EXISTS paciente_apellido_materno text,
-                ADD COLUMN IF NOT EXISTS paciente_telefono text,
-                ADD COLUMN IF NOT EXISTS paciente_correo text,
                 ADD COLUMN IF NOT EXISTS puesto_laboral text,
                 ADD COLUMN IF NOT EXISTS antecedentes_generales text,
-                ADD COLUMN IF NOT EXISTS antecedentes_familiares text,
                 ADD COLUMN IF NOT EXISTS antecedentes_otro text,
                 ADD COLUMN IF NOT EXISTS alergias text,
                 ADD COLUMN IF NOT EXISTS enfermedades text,
                 ADD COLUMN IF NOT EXISTS cirugias text,
                 ADD COLUMN IF NOT EXISTS avsinrixoi text,
+                ADD COLUMN IF NOT EXISTS subjeod text,
+                ADD COLUMN IF NOT EXISTS horas_pantalla_dia text,
+                ADD COLUMN IF NOT EXISTS conduccion_nocturna_horas text,
+                ADD COLUMN IF NOT EXISTS exposicion_uv text,
+                ADD COLUMN IF NOT EXISTS tabaquismo_estado text,
+                ADD COLUMN IF NOT EXISTS tabaquismo_intensidad text,
+                ADD COLUMN IF NOT EXISTS tabaquismo_anios text,
+                ADD COLUMN IF NOT EXISTS tabaquismo_anios_desde_dejo text,
+                ADD COLUMN IF NOT EXISTS alcohol_frecuencia text,
+                ADD COLUMN IF NOT EXISTS marihuana_frecuencia text,
+                ADD COLUMN IF NOT EXISTS marihuana_forma text,
+                ADD COLUMN IF NOT EXISTS drogas_consumo text,
+                ADD COLUMN IF NOT EXISTS drogas_tipos text,
+                ADD COLUMN IF NOT EXISTS drogas_frecuencia text,
+                ADD COLUMN IF NOT EXISTS deporte_frecuencia text,
+                ADD COLUMN IF NOT EXISTS deporte_duracion text,
+                ADD COLUMN IF NOT EXISTS deporte_tipos text,
+                ADD COLUMN IF NOT EXISTS hipertension boolean,
+                ADD COLUMN IF NOT EXISTS medicamentos text,
+                ADD COLUMN IF NOT EXISTS diabetes_estado text,
+                ADD COLUMN IF NOT EXISTS diabetes_control text,
+                ADD COLUMN IF NOT EXISTS diabetes_anios text,
+                ADD COLUMN IF NOT EXISTS diabetes_tratamiento text,
+                ADD COLUMN IF NOT EXISTS usa_lentes boolean,
+                ADD COLUMN IF NOT EXISTS tipo_lentes_actual text,
+                ADD COLUMN IF NOT EXISTS tiempo_uso_lentes text,
+                ADD COLUMN IF NOT EXISTS lentes_contacto_horas_dia text,
+                ADD COLUMN IF NOT EXISTS sintomas text,
+                ADD COLUMN IF NOT EXISTS created_at_tz timestamptz,
                 ADD COLUMN IF NOT EXISTS doctor_atencion text;
+                """
+            )
+            cur.execute(
+                """
+                ALTER TABLE core.historias_clinicas
+                  DROP COLUMN IF EXISTS historia,
+                  DROP COLUMN IF EXISTS antecedentes_familiares,
+                  DROP COLUMN IF EXISTS observaciones;
+                """
+            )
+            cur.execute(
+                """
+                ALTER TABLE core.historias_clinicas
+                  ALTER COLUMN od_esfera TYPE text USING od_esfera::text,
+                  ALTER COLUMN od_cilindro TYPE text USING od_cilindro::text,
+                  ALTER COLUMN od_eje TYPE text USING od_eje::text,
+                  ALTER COLUMN od_add TYPE text USING od_add::text,
+                  ALTER COLUMN oi_esfera TYPE text USING oi_esfera::text,
+                  ALTER COLUMN oi_cilindro TYPE text USING oi_cilindro::text,
+                  ALTER COLUMN oi_eje TYPE text USING oi_eje::text,
+                  ALTER COLUMN oi_add TYPE text USING oi_add::text,
+                  ALTER COLUMN dp TYPE text USING dp::text,
+                  ALTER COLUMN queratometria_od TYPE text USING queratometria_od::text,
+                  ALTER COLUMN queratometria_oi TYPE text USING queratometria_oi::text,
+                  ALTER COLUMN presion_od TYPE text USING presion_od::text,
+                  ALTER COLUMN presion_oi TYPE text USING presion_oi::text,
+                  ALTER COLUMN ppc TYPE text USING ppc::text,
+                  ALTER COLUMN lejos TYPE text USING lejos::text,
+                  ALTER COLUMN cerca TYPE text USING cerca::text,
+                  ALTER COLUMN tension TYPE text USING tension::text,
+                  ALTER COLUMN mmhg TYPE text USING mmhg::text,
+                  ALTER COLUMN di TYPE text USING di::text,
+                  ALTER COLUMN adicionod TYPE text USING adicionod::text,
+                  ALTER COLUMN adicionoi TYPE text USING adicionoi::text,
+                  ALTER COLUMN horas_pantalla_dia TYPE text USING horas_pantalla_dia::text,
+                  ALTER COLUMN conduccion_nocturna_horas TYPE text USING conduccion_nocturna_horas::text,
+                  ALTER COLUMN lentes_contacto_horas_dia TYPE text USING lentes_contacto_horas_dia::text;
+                """
+            )
+            cur.execute(
+                """
+                UPDATE core.historias_clinicas
+                SET created_at_tz = CASE
+                    WHEN sucursal_id = 2 THEN (created_at AT TIME ZONE 'America/Cancun')
+                    ELSE (created_at AT TIME ZONE 'America/Mexico_City')
+                END
+                WHERE created_at IS NOT NULL
+                  AND created_at_tz IS NULL;
+                """
+            )
+            cur.execute(
+                """
+                UPDATE core.historias_clinicas
+                SET created_at_tz = NOW()
+                WHERE created_at_tz IS NULL;
+                """
+            )
+            cur.execute(
+                """
+                ALTER TABLE core.historias_clinicas
+                  ALTER COLUMN created_at_tz SET DEFAULT NOW();
+                """
+            )
+            cur.execute(
+                """
+                ALTER TABLE core.historias_clinicas
+                  ALTER COLUMN created_at_tz SET NOT NULL;
                 """
             )
         conn.commit()
@@ -101,7 +205,6 @@ def ensure_ventas_schema():
                     adelanto_aplica boolean NOT NULL DEFAULT false,
                     adelanto_monto numeric(12,2) NULL CHECK (adelanto_monto >= 0),
                     adelanto_metodo text NULL,
-                    como_nos_conocio text NULL,
                     notas text NULL,
                     created_by text NOT NULL,
                     updated_at timestamptz NULL,
@@ -115,8 +218,7 @@ def ensure_ventas_schema():
                 ADD COLUMN IF NOT EXISTS metodo_pago text NOT NULL DEFAULT 'efectivo',
                 ADD COLUMN IF NOT EXISTS adelanto_aplica boolean NOT NULL DEFAULT false,
                 ADD COLUMN IF NOT EXISTS adelanto_monto numeric(12,2) NULL,
-                ADD COLUMN IF NOT EXISTS adelanto_metodo text NULL,
-                ADD COLUMN IF NOT EXISTS como_nos_conocio text NULL;
+                ADD COLUMN IF NOT EXISTS adelanto_metodo text NULL;
                 """
             )
             cur.execute(
@@ -124,6 +226,28 @@ def ensure_ventas_schema():
             )
             cur.execute(
                 "CREATE INDEX IF NOT EXISTS idx_ventas_paciente ON core.ventas (paciente_id);"
+            )
+            # Normalización histórica de opciones de compra.
+            cur.execute(
+                r"""
+                UPDATE core.ventas
+                SET compra = regexp_replace(compra, '(^|\|)armazon(\||$)', '\1armazon_solo\2', 'g')
+                WHERE compra ~ '(^|\|)armazon(\||$)';
+                """
+            )
+            cur.execute(
+                r"""
+                UPDATE core.ventas
+                SET compra = regexp_replace(compra, '(^|\|)micas(\||$)', '\1micas_solas_sin_tratamiento\2', 'g')
+                WHERE compra ~ '(^|\|)micas(\||$)';
+                """
+            )
+            cur.execute(
+                r"""
+                UPDATE core.ventas
+                SET compra = regexp_replace(compra, '(^|\|)lentes_contacto(\||$)', '\1lentes_de_contacto\2', 'g')
+                WHERE compra ~ '(^|\|)lentes_contacto(\||$)';
+                """
             )
         conn.commit()
 
@@ -134,8 +258,11 @@ def ensure_consultas_schema():
             cur.execute(
                 """
                 ALTER TABLE core.consultas
-                ADD COLUMN IF NOT EXISTS como_nos_conocio text NULL,
-                ADD COLUMN IF NOT EXISTS agenda_event_id text NULL;
+                ADD COLUMN IF NOT EXISTS agenda_event_id text NULL,
+                ADD COLUMN IF NOT EXISTS agenda_inicio timestamptz NULL,
+                ADD COLUMN IF NOT EXISTS agenda_fin timestamptz NULL,
+                ADD COLUMN IF NOT EXISTS etapa_consulta text NULL,
+                ADD COLUMN IF NOT EXISTS motivo_consulta text NULL;
                 """
             )
         conn.commit()
@@ -147,7 +274,135 @@ def ensure_pacientes_schema():
             cur.execute(
                 """
                 ALTER TABLE core.pacientes
-                ADD COLUMN IF NOT EXISTS como_nos_conocio text NULL;
+                ADD COLUMN IF NOT EXISTS como_nos_conocio text NULL,
+                ADD COLUMN IF NOT EXISTS calle text NULL,
+                ADD COLUMN IF NOT EXISTS numero text NULL,
+                ADD COLUMN IF NOT EXISTS colonia text NULL,
+                ADD COLUMN IF NOT EXISTS municipio text NULL,
+                ADD COLUMN IF NOT EXISTS pais text NULL;
+                """
+            )
+        conn.commit()
+
+
+def ensure_reporting_views():
+    with psycopg.connect(DB_CONNINFO) as conn:
+        with conn.cursor() as cur:
+            # Normalización defensiva: si estas columnas derivadas existen en tablas base, se eliminan.
+            cur.execute(
+                """
+                ALTER TABLE core.ventas
+                  DROP COLUMN IF EXISTS paciente_nombre,
+                  DROP COLUMN IF EXISTS sucursal_nombre;
+
+                ALTER TABLE core.consultas
+                  DROP COLUMN IF EXISTS paciente_nombre,
+                  DROP COLUMN IF EXISTS sucursal_nombre;
+
+                ALTER TABLE core.pacientes
+                  DROP COLUMN IF EXISTS nombre_completo;
+                """
+            )
+
+            cur.execute(
+                """
+                CREATE OR REPLACE VIEW core.pacientes_detalle AS
+                SELECT
+                  p.*,
+                  CONCAT_WS(' ', p.primer_nombre, p.segundo_nombre, p.apellido_paterno, p.apellido_materno) AS nombre_completo
+                FROM core.pacientes p;
+                """
+            )
+
+            cur.execute(
+                """
+                CREATE OR REPLACE VIEW core.consultas_detalle AS
+                SELECT
+                  c.*,
+                  p.primer_nombre,
+                  p.segundo_nombre,
+                  p.apellido_paterno,
+                  p.apellido_materno,
+                  CONCAT_WS(' ', p.primer_nombre, p.segundo_nombre, p.apellido_paterno, p.apellido_materno) AS paciente_nombre,
+                  s.nombre AS sucursal_nombre
+                FROM core.consultas c
+                LEFT JOIN core.pacientes p ON p.paciente_id = c.paciente_id
+                LEFT JOIN core.sucursales s ON s.sucursal_id = c.sucursal_id;
+                """
+            )
+
+            cur.execute(
+                """
+                CREATE OR REPLACE VIEW core.ventas_detalle AS
+                SELECT
+                  v.*,
+                  p.primer_nombre,
+                  p.segundo_nombre,
+                  p.apellido_paterno,
+                  p.apellido_materno,
+                  CONCAT_WS(' ', p.primer_nombre, p.segundo_nombre, p.apellido_paterno, p.apellido_materno) AS paciente_nombre,
+                  s.nombre AS sucursal_nombre
+                FROM core.ventas v
+                LEFT JOIN core.pacientes p ON p.paciente_id = v.paciente_id
+                LEFT JOIN core.sucursales s ON s.sucursal_id = v.sucursal_id;
+                """
+            )
+
+            # Compatibilidad temporal con vistas legacy en uso.
+            cur.execute(
+                """
+                CREATE OR REPLACE VIEW core.v_consultas_forma AS
+                SELECT
+                  consulta_id,
+                  fecha_hora,
+                  tipo_consulta,
+                  doctor_primer_nombre,
+                  doctor_apellido_paterno,
+                  motivo,
+                  diagnostico,
+                  plan,
+                  notas,
+                  activo,
+                  paciente_id,
+                  primer_nombre,
+                  segundo_nombre,
+                  apellido_paterno,
+                  apellido_materno,
+                  sucursal_id,
+                  sucursal_nombre
+                FROM core.consultas_detalle;
+                """
+            )
+
+            cur.execute(
+                """
+                CREATE OR REPLACE VIEW core.v_pacientes_forma AS
+                SELECT
+                  paciente_id,
+                  primer_nombre,
+                  segundo_nombre,
+                  apellido_paterno,
+                  apellido_materno,
+                  fecha_nacimiento,
+                  sexo,
+                  telefono,
+                  correo,
+                  calle,
+                  numero,
+                  colonia,
+                  cp,
+                  municipio,
+                  estado,
+                  pais,
+                  ocupacion,
+                  estado_civil,
+                  alergias,
+                  CASE WHEN fumador_cigarro IS TRUE THEN 'si' WHEN fumador_cigarro IS FALSE THEN 'no' ELSE NULL END AS fumador_cigarro,
+                  CASE WHEN consumidor_alcohol IS TRUE THEN 'si' WHEN consumidor_alcohol IS FALSE THEN 'no' ELSE NULL END AS consumidor_alcohol,
+                  CASE WHEN consumidor_marihuana IS TRUE THEN 'si' WHEN consumidor_marihuana IS FALSE THEN 'no' ELSE NULL END AS consumidor_marihuana,
+                  creado_en,
+                  actualizado_en
+                FROM core.pacientes_detalle;
                 """
             )
         conn.commit()
@@ -164,18 +419,25 @@ class PacienteCreate(BaseModel):
     telefono: str | None = None
     correo: str | None = None
     como_nos_conocio: str | None = None
+    calle: str | None = None
+    numero: str | None = None
+    colonia: str | None = None
+    cp: str | None = None
+    codigo_postal: str | None = None
+    municipio: str | None = None
+    estado: str | None = None
+    estado_direccion: str | None = None
+    pais: str | None = None
 
 class ConsultaCreate(BaseModel):
     paciente_id: int
     sucursal_id: int | None = 1
     tipo_consulta: str | None = None
+    etapa_consulta: str | None = None
+    motivo_consulta: str | None = None
     doctor_primer_nombre: str | None = None
     doctor_apellido_paterno: str | None = None
-    motivo: str | None = None
-    diagnostico: str | None = None
-    plan: str | None = None
     notas: str | None = None
-    como_nos_conocio: str | None = None
     agendar_en_calendario: bool | None = False
     agenda_inicio: str | None = None
     agenda_fin: str | None = None
@@ -206,23 +468,23 @@ class LoginIn(BaseModel):
     password: str
 
 class HistoriaClinicaBase(BaseModel):
-    od_esfera: Optional[float] = None
-    od_cilindro: Optional[float] = None
-    od_eje: Optional[int] = None
-    od_add: Optional[float] = None
+    od_esfera: Optional[str] = None
+    od_cilindro: Optional[str] = None
+    od_eje: Optional[str] = None
+    od_add: Optional[str] = None
 
-    oi_esfera: Optional[float] = None
-    oi_cilindro: Optional[float] = None
-    oi_eje: Optional[int] = None
-    oi_add: Optional[float] = None
+    oi_esfera: Optional[str] = None
+    oi_cilindro: Optional[str] = None
+    oi_eje: Optional[str] = None
+    oi_add: Optional[str] = None
 
-    dp: Optional[float] = None
+    dp: Optional[str] = None
 
-    queratometria_od: Optional[float] = None
-    queratometria_oi: Optional[float] = None
+    queratometria_od: Optional[str] = None
+    queratometria_oi: Optional[str] = None
 
-    presion_od: Optional[float] = None
-    presion_oi: Optional[float] = None
+    presion_od: Optional[str] = None
+    presion_oi: Optional[str] = None
 
     # Snapshot del paciente al momento de registrar historia
     paciente_fecha_nacimiento: Optional[date] = None
@@ -233,14 +495,19 @@ class HistoriaClinicaBase(BaseModel):
     paciente_apellido_materno: Optional[str] = None
     paciente_telefono: Optional[str] = None
     paciente_correo: Optional[str] = None
+    paciente_calle: Optional[str] = None
+    paciente_numero: Optional[str] = None
+    paciente_colonia: Optional[str] = None
+    paciente_codigo_postal: Optional[str] = None
+    paciente_municipio: Optional[str] = None
+    paciente_estado: Optional[str] = None
+    paciente_pais: Optional[str] = None
     puesto_laboral: Optional[str] = None
     doctor_atencion: Optional[str] = None
 
     # Nuevos campos clínicos
-    historia: Optional[str] = None
     antecedentes: Optional[str] = None
     antecedentes_generales: Optional[str] = None
-    antecedentes_familiares: Optional[str] = None
     antecedentes_otro: Optional[str] = None
     alergias: Optional[str] = None
     enfermedades: Optional[str] = None
@@ -251,17 +518,45 @@ class HistoriaClinicaBase(BaseModel):
     diabetes: Optional[bool] = None
     tipo_diabetes: Optional[str] = None
     deportista: Optional[bool] = None
+    horas_pantalla_dia: Optional[str] = None
+    conduccion_nocturna_horas: Optional[str] = None
+    exposicion_uv: Optional[str] = None
+    tabaquismo_estado: Optional[str] = None
+    tabaquismo_intensidad: Optional[str] = None
+    tabaquismo_anios: Optional[str] = None
+    tabaquismo_anios_desde_dejo: Optional[str] = None
+    alcohol_frecuencia: Optional[str] = None
+    alcohol_copas: Optional[str] = None
+    marihuana_frecuencia: Optional[str] = None
+    marihuana_forma: Optional[str] = None
+    drogas_consumo: Optional[str] = None
+    drogas_tipos: Optional[str] = None
+    drogas_frecuencia: Optional[str] = None
+    deporte_frecuencia: Optional[str] = None
+    deporte_duracion: Optional[str] = None
+    deporte_tipos: Optional[str] = None
+    hipertension: Optional[bool] = None
+    medicamentos: Optional[str] = None
+    diabetes_estado: Optional[str] = None
+    diabetes_control: Optional[str] = None
+    diabetes_anios: Optional[str] = None
+    diabetes_tratamiento: Optional[str] = None
+    usa_lentes: Optional[bool] = None
+    tipo_lentes_actual: Optional[str] = None
+    tiempo_uso_lentes: Optional[str] = None
+    lentes_contacto_horas_dia: Optional[str] = None
+    lentes_contacto_dias_semana: Optional[str] = None
+    sintomas: Optional[str] = None
 
-    ppc: Optional[float] = None
-    lejos: Optional[float] = None
-    cerca: Optional[float] = None
-    tension: Optional[float] = None
-    mmhg: Optional[float] = None
-    di: Optional[float] = None
+    ppc: Optional[str] = None
+    lejos: Optional[str] = None
+    cerca: Optional[str] = None
+    tension: Optional[str] = None
+    mmhg: Optional[str] = None
+    di: Optional[str] = None
 
     avsinrxod: Optional[str] = None
     avsinrixoi: Optional[str] = None
-    avsinrxoi: Optional[str] = None
     capvisualod: Optional[str] = None
     capvisualoi: Optional[str] = None
     avrxantod: Optional[str] = None
@@ -270,14 +565,14 @@ class HistoriaClinicaBase(BaseModel):
     queraoi: Optional[str] = None
     retinosod: Optional[str] = None
     retinosoi: Optional[str] = None
+    subjeod: Optional[str] = None
     subjeoi: Optional[str] = None
-    adicionod: Optional[float] = None
-    adicionoi: Optional[float] = None
+    adicionod: Optional[str] = None
+    adicionoi: Optional[str] = None
     papila: Optional[str] = None
     biomicroscopia: Optional[str] = None
 
     diagnostico_general: Optional[str] = None
-    observaciones: Optional[str] = None
 
 
 class HistoriaClinicaCreate(HistoriaClinicaBase):
@@ -290,6 +585,7 @@ class HistoriaClinicaOut(HistoriaClinicaBase):
     sucursal_id: int
     created_by: str
     created_at: datetime
+    created_at_tz: Optional[datetime] = None
     updated_at: Optional[datetime]
     activo: bool
 
@@ -298,6 +594,32 @@ class HistoriaClinicaUpdate(HistoriaClinicaBase):
 
 COMO_NOS_CONOCIO_VALUES = {"instagram", "fb", "google", "linkedin", "linkedln", "referencia"}
 COMO_NOS_CONOCIO_CANONICAL = {"linkedln": "linkedin"}
+CONSULTA_ETAPA_ALLOWED = {"primera_vez_en_clinica", "seguimiento"}
+CONSULTA_MOTIVO_ALLOWED = {"revision_general", "graduacion_lentes", "lentes_contacto", "molestia", "otro"}
+VENTA_COMPRA_ALLOWED = {
+    "examen_de_la_vista",
+    "armazon_solo",
+    "micas_solas_sin_tratamiento",
+    "micas_antirreflejante",
+    "micas_fotocromaticas",
+    "micas_antiblueray",
+    "lentes_de_contacto",
+    "armazon_con_micas_sin_tratamiento",
+    "armazon_con_micas_antirreflejante",
+    "armazon_con_micas_fotocromaticas",
+    "armazon_con_micas_antiblueray",
+    "estuche_para_armazon",
+    "accesorios_y_refacciones",
+    "lentes_de_sol_sin_graduacion",
+    "lentes_de_sol_con_graduacion",
+    "soluciones_y_cuidado",
+    "otro",
+}
+VENTA_COMPRA_ALIASES = {
+    "armazon": "armazon_solo",
+    "micas": "micas_solas_sin_tratamiento",
+    "lentes_contacto": "lentes_de_contacto",
+}
 
 
 def normalize_como_nos_conocio(value: str | None) -> str | None:
@@ -312,6 +634,205 @@ def normalize_como_nos_conocio(value: str | None) -> str | None:
             detail="como_nos_conocio inválido. Usa: instagram, fb, google, linkedin o referencia.",
         )
     return COMO_NOS_CONOCIO_CANONICAL.get(v, v)
+
+
+def normalize_controlled_token(value: str | None) -> str | None:
+    if value is None:
+        return None
+    v = str(value).strip().lower()
+    if not v:
+        return None
+    v = re.sub(r"\s+", "_", v)
+    v = re.sub(r"_+", "_", v)
+    return v
+
+
+def normalize_pipe_controlled_tokens(value: str | None) -> str | None:
+    if value is None:
+        return None
+    parts = []
+    for raw in str(value).split("|"):
+        token = normalize_controlled_token(raw)
+        if token:
+            parts.append(token)
+    if not parts:
+        return None
+    return "|".join(parts)
+
+
+def split_pipe_tokens(value: str | None) -> list[str]:
+    if value is None:
+        return []
+    tokens: list[str] = []
+    for raw in str(value).split("|"):
+        token = normalize_controlled_token(raw)
+        if token:
+            tokens.append(token)
+    return tokens
+
+
+def normalize_single_allowed_token(
+    value: str | None,
+    allowed: set[str],
+    field_label: str,
+    required: bool = False,
+) -> str | None:
+    token = normalize_controlled_token(value)
+    if not token:
+        if required:
+            raise HTTPException(status_code=400, detail=f"{field_label} es requerido.")
+        return None
+    if token not in allowed:
+        raise HTTPException(status_code=400, detail=f"{field_label} inválido: {token}.")
+    return token
+
+
+def normalize_multi_allowed_tokens(
+    value: str | None,
+    allowed: set[str],
+    field_label: str,
+    required: bool = False,
+) -> str | None:
+    tokens = split_pipe_tokens(value)
+    if not tokens:
+        if required:
+            raise HTTPException(status_code=400, detail=f"{field_label} es requerido.")
+        return None
+    out: list[str] = []
+    for token in tokens:
+        if token not in allowed:
+            raise HTTPException(status_code=400, detail=f"{field_label} inválido: {token}.")
+        out.append(token)
+    dedup = list(dict.fromkeys(out))
+    if required and not dedup:
+        raise HTTPException(status_code=400, detail=f"{field_label} es requerido.")
+    return "|".join(dedup) if dedup else None
+
+
+def extract_consulta_from_tipo(tipo_consulta: str | None) -> tuple[str | None, str | None]:
+    tokens = split_pipe_tokens(tipo_consulta)
+    if not tokens:
+        return None, None
+    etapa = next((t for t in tokens if t in CONSULTA_ETAPA_ALLOWED), None)
+    motivos = [t for t in tokens if t in CONSULTA_MOTIVO_ALLOWED]
+    motivos = list(dict.fromkeys(motivos))
+    return etapa, "|".join(motivos) if motivos else None
+
+
+def resolve_consulta_etapa_motivo_tipo(
+    etapa_consulta: str | None,
+    motivo_consulta: str | None,
+    tipo_consulta_legacy: str | None,
+) -> tuple[str, str, str]:
+    etapa = normalize_single_allowed_token(
+        etapa_consulta, CONSULTA_ETAPA_ALLOWED, "etapa_consulta", required=False
+    )
+    motivo = normalize_multi_allowed_tokens(
+        motivo_consulta, CONSULTA_MOTIVO_ALLOWED, "motivo_consulta", required=False
+    )
+
+    if not etapa or not motivo:
+        legacy_etapa, legacy_motivo = extract_consulta_from_tipo(tipo_consulta_legacy)
+        if not etapa:
+            etapa = legacy_etapa
+        if not motivo:
+            motivo = legacy_motivo
+
+    if not etapa:
+        raise HTTPException(
+            status_code=400,
+            detail="etapa_consulta es requerida (primera_vez_en_clinica o seguimiento).",
+        )
+    if etapa not in CONSULTA_ETAPA_ALLOWED:
+        raise HTTPException(status_code=400, detail=f"etapa_consulta inválida: {etapa}.")
+
+    if not motivo:
+        raise HTTPException(
+            status_code=400,
+            detail="motivo_consulta es requerido (revision_general, graduacion_lentes, lentes_contacto, molestia u otro).",
+        )
+    motivo_tokens = [t for t in split_pipe_tokens(motivo) if t in CONSULTA_MOTIVO_ALLOWED]
+    motivo_tokens = list(dict.fromkeys(motivo_tokens))
+    if not motivo_tokens:
+        raise HTTPException(
+            status_code=400,
+            detail="motivo_consulta es requerido (revision_general, graduacion_lentes, lentes_contacto, molestia u otro).",
+        )
+    motivo = "|".join(motivo_tokens)
+
+    tipo_tokens = list(dict.fromkeys([etapa, *motivo_tokens]))
+    tipo_compuesto = "|".join(tipo_tokens)
+    return etapa, motivo, tipo_compuesto
+
+
+def resolve_consulta_read_fields(
+    etapa_consulta: str | None,
+    motivo_consulta: str | None,
+    tipo_consulta: str | None,
+) -> tuple[str | None, str | None]:
+    etapa: str | None = None
+    motivo: str | None = None
+    try:
+        etapa = normalize_single_allowed_token(
+            etapa_consulta, CONSULTA_ETAPA_ALLOWED, "etapa_consulta", required=False
+        )
+    except HTTPException:
+        etapa = None
+    try:
+        motivo = normalize_multi_allowed_tokens(
+            motivo_consulta, CONSULTA_MOTIVO_ALLOWED, "motivo_consulta", required=False
+        )
+    except HTTPException:
+        motivo = None
+
+    if not etapa or not motivo:
+        legacy_etapa, legacy_motivo = extract_consulta_from_tipo(tipo_consulta)
+        if not etapa:
+            etapa = legacy_etapa
+        if not motivo:
+            motivo = legacy_motivo
+    return etapa, motivo
+
+
+def compose_consulta_tipo(etapa_consulta: str | None, motivo_consulta: str | None) -> str | None:
+    etapa = normalize_controlled_token(etapa_consulta)
+    motivos = [
+        t for t in split_pipe_tokens(motivo_consulta) if t in CONSULTA_MOTIVO_ALLOWED
+    ]
+    motivos = list(dict.fromkeys(motivos))
+    tokens = [t for t in [etapa, *motivos] if t]
+    if not tokens:
+        return None
+    return "|".join(tokens)
+
+
+def normalize_compra_tokens(value: str | None) -> str | None:
+    if value is None:
+        return None
+    out: list[str] = []
+    for raw in str(value).split("|"):
+        item = str(raw).strip()
+        if not item:
+            continue
+        # "otro: ..." conserva la parte libre después del prefijo.
+        if item.lower().startswith("otro:"):
+            detalle = item.split(":", 1)[1].strip()
+            if detalle:
+                out.append(f"otro:{detalle}")
+            else:
+                out.append("otro")
+            continue
+        norm = normalize_controlled_token(item)
+        if norm:
+            canon = VENTA_COMPRA_ALIASES.get(norm, norm)
+            if canon not in VENTA_COMPRA_ALLOWED:
+                raise HTTPException(status_code=400, detail=f"Opción de compra inválida: {item}")
+            out.append(canon)
+    if not out:
+        return None
+    # Eliminar duplicados preservando orden.
+    dedup = list(dict.fromkeys(out))
+    return "|".join(dedup)
 
 
 def _looks_like_email(value: str | None) -> bool:
@@ -347,20 +868,6 @@ def normalize_patient_phone(value: str | None) -> str | None:
     return digits
 
 
-REQUIRED_HISTORIA_FIELDS = {
-    "od_esfera","od_cilindro","od_eje","od_add",
-    "oi_esfera","oi_cilindro","oi_eje","oi_add",
-    "dp","queratometria_od","queratometria_oi","presion_od","presion_oi",
-    "historia","antecedentes",
-    "fumador_tabaco","fumador_marihuana","consumidor_alcohol","diabetes","deportista",
-    "ppc","lejos","cerca","tension","mmhg","di",
-    "avsinrxod","avsinrixoi","capvisualod","capvisualoi","avrxantod","avrxantoi",
-    "queraod","queraoi","retinosod","retinosoi","subjeoi","adicionod","adicionoi",
-    "papila","biomicroscopia","diagnostico_general","observaciones",
-    "doctor_atencion",
-}
-
-
 def is_missing_value(v):
     if v is None:
         return True
@@ -369,15 +876,24 @@ def is_missing_value(v):
     return False
 
 
-def validate_historia_required(data: dict):
-    missing = [k for k in REQUIRED_HISTORIA_FIELDS if is_missing_value(data.get(k))]
-    if data.get("diabetes") is True and is_missing_value(data.get("tipo_diabetes")):
-        missing.append("tipo_diabetes")
-    if missing:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Faltan campos obligatorios en historia clínica: {', '.join(sorted(set(missing)))}",
-        )
+def sanitize_payload_strings(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {k: sanitize_payload_strings(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [sanitize_payload_strings(v) for v in value]
+    if isinstance(value, str):
+        cleaned = value.strip()
+        return cleaned if cleaned != "" else None
+    return value
+
+
+def sanitize_model_strings(model: BaseModel) -> None:
+    cleaned = sanitize_payload_strings(model.dict())
+    if not isinstance(cleaned, dict):
+        return
+    for key, value in cleaned.items():
+        if hasattr(model, key):
+            setattr(model, key, value)
 
 
 
@@ -400,12 +916,533 @@ def startup_migrations():
     ensure_ventas_schema()
     ensure_consultas_schema()
     ensure_pacientes_schema()
+    ensure_reporting_views()
     _load_google_calendar_env_cache()
 
 
 @app.get("/health", summary="Salud del sistema")
 def health():
     return {"ok": True}
+
+
+def _parse_export_sucursal_id(raw_value: str | None) -> int | None:
+    value = str(raw_value or "all").strip().lower()
+    if value in {"all", "ambas", "todas"}:
+        return None
+    try:
+        sucursal_id = int(value)
+    except Exception:
+        raise HTTPException(status_code=400, detail="sucursal_id inválido. Usa un entero o 'all'.")
+    if sucursal_id <= 0:
+        raise HTTPException(status_code=400, detail="sucursal_id inválido. Debe ser mayor a 0.")
+    return sucursal_id
+
+
+def _parse_export_delimiter(delimiter: str | None) -> str:
+    raw = str(delimiter or "comma").strip().lower()
+    if raw == "comma":
+        return ","
+    if raw == "semicolon":
+        return ";"
+    raise HTTPException(status_code=400, detail="delimiter inválido. Usa 'comma' o 'semicolon'.")
+
+
+def _parse_iso_date_or_400(value: str, field_name: str) -> date:
+    try:
+        return datetime.fromisoformat(str(value)).date()
+    except Exception:
+        raise HTTPException(status_code=400, detail=f"{field_name} inválida. Usa formato YYYY-MM-DD.")
+
+
+def _resolve_export_date_range(desde: str | None, hasta: str | None, sucursal_id: int | None) -> tuple[date, date]:
+    if desde:
+        desde_date = _parse_iso_date_or_400(desde, "desde")
+    else:
+        desde_date = None
+    if hasta:
+        hasta_date = _parse_iso_date_or_400(hasta, "hasta")
+    else:
+        hasta_date = None
+
+    if desde_date is None and hasta_date is None:
+        tz_name = _timezone_for_sucursal(sucursal_id) if sucursal_id is not None else "UTC"
+        today = datetime.now(ZoneInfo(tz_name)).date()
+        desde_date = date(today.year, today.month, 1)
+        hasta_date = date(today.year, today.month, monthrange(today.year, today.month)[1])
+    elif desde_date is None and hasta_date is not None:
+        desde_date = hasta_date
+    elif desde_date is not None and hasta_date is None:
+        hasta_date = desde_date
+
+    if hasta_date < desde_date:
+        raise HTTPException(status_code=400, detail="Rango inválido: 'hasta' debe ser mayor o igual a 'desde'.")
+
+    return desde_date, hasta_date
+
+
+def _csv_value(value: Any) -> Any:
+    if value is None:
+        return ""
+    if isinstance(value, (datetime, date, time)):
+        return value.isoformat()
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return value
+
+
+def _stream_csv_query(sql: str, params: tuple[Any, ...], headers: list[str], delimiter_char: str):
+    def _generator():
+        with psycopg.connect(DB_CONNINFO) as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, params)
+                buff = io.StringIO()
+                writer = csv.writer(buff, delimiter=delimiter_char, lineterminator="\n")
+                buff.write("\ufeff")
+                writer.writerow(headers)
+                yield buff.getvalue()
+                buff.seek(0)
+                buff.truncate(0)
+
+                while True:
+                    rows = cur.fetchmany(1000)
+                    if not rows:
+                        break
+                    for row in rows:
+                        writer.writerow([_csv_value(v) for v in row])
+                    yield buff.getvalue()
+                    buff.seek(0)
+                    buff.truncate(0)
+
+    return _generator()
+
+
+def _export_filename(prefix: str, desde_date: date, hasta_date: date, sucursal_id: int | None) -> str:
+    sid = "all" if sucursal_id is None else f"sucursal_{sucursal_id}"
+    return f"{prefix}_{sid}_{desde_date.isoformat()}_{hasta_date.isoformat()}.csv"
+
+
+def _current_user_dep(token: str = Depends(oauth2_scheme)):
+    return get_current_user(token)
+
+
+@app.get("/usuarios/doctores", summary="Listar doctores (solo admin)")
+def listar_doctores_para_export(sucursal_id: int | None = None, user=Depends(_current_user_dep)):
+    require_roles(user, ("admin",))
+    where = ["activo = true", "rol = 'doctor'"]
+    params: list[Any] = []
+    if sucursal_id is not None:
+        where.append("sucursal_id = %s")
+        params.append(sucursal_id)
+
+    with psycopg.connect(DB_CONNINFO) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"""
+                SELECT usuario_id, username, sucursal_id
+                FROM core.usuarios
+                WHERE {' AND '.join(where)}
+                ORDER BY username ASC;
+                """,
+                tuple(params),
+            )
+            rows = cur.fetchall()
+
+    return [
+        {"doctor_id": int(r[0]), "username": str(r[1]), "sucursal_id": int(r[2]) if r[2] is not None else None}
+        for r in rows
+    ]
+
+
+@app.get("/export/consultas.csv", summary="Exportar consultas CSV (solo admin)")
+def export_consultas_csv(
+    sucursal_id: str = "all",
+    desde: str | None = None,
+    hasta: str | None = None,
+    paciente_id: int | None = None,
+    doctor_id: int | None = None,
+    delimiter: str = "comma",
+    user=Depends(_current_user_dep),
+):
+    require_roles(user, ("admin",))
+    sid = _parse_export_sucursal_id(sucursal_id)
+    delimiter_char = _parse_export_delimiter(delimiter)
+    desde_date, hasta_date = _resolve_export_date_range(desde, hasta, sid)
+
+    doctor_username: str | None = None
+    if doctor_id is not None:
+        with psycopg.connect(DB_CONNINFO) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT username
+                    FROM core.usuarios
+                    WHERE usuario_id = %s
+                      AND activo = true
+                      AND rol = 'doctor';
+                    """,
+                    (doctor_id,),
+                )
+                row = cur.fetchone()
+                if row is None:
+                    raise HTTPException(status_code=400, detail="doctor_id inválido o inactivo.")
+                doctor_username = str(row[0])
+
+    where = ["c.activo = true", "DATE(c.fecha_hora) BETWEEN %s AND %s"]
+    params: list[Any] = [desde_date, hasta_date]
+    if sid is not None:
+        where.append("c.sucursal_id = %s")
+        params.append(sid)
+    if paciente_id is not None:
+        where.append("c.paciente_id = %s")
+        params.append(paciente_id)
+    if doctor_username is not None:
+        where.append("LOWER(TRIM(COALESCE(c.doctor_primer_nombre, ''))) = LOWER(TRIM(%s))")
+        params.append(doctor_username)
+
+    headers = [
+        "consulta_id",
+        "paciente_id",
+        "sucursal_id",
+        "fecha_hora",
+        "etapa_consulta",
+        "motivo_consulta",
+        "doctor_primer_nombre",
+        "doctor_apellido_paterno",
+        "notas",
+        "agenda_event_id",
+        "agenda_inicio",
+        "agenda_fin",
+    ]
+    sql = f"""
+    SELECT
+      c.consulta_id,
+      c.paciente_id,
+      c.sucursal_id,
+      c.fecha_hora,
+      c.etapa_consulta,
+      c.motivo_consulta,
+      c.doctor_primer_nombre,
+      c.doctor_apellido_paterno,
+      c.notas,
+      c.agenda_event_id,
+      c.agenda_inicio,
+      c.agenda_fin
+    FROM core.consultas c
+    WHERE {' AND '.join(where)}
+    ORDER BY c.fecha_hora DESC, c.consulta_id DESC;
+    """
+    filename = _export_filename("consultas", desde_date, hasta_date, sid)
+    return StreamingResponse(
+        _stream_csv_query(sql, tuple(params), headers, delimiter_char),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.get("/export/ventas.csv", summary="Exportar ventas CSV (solo admin)")
+def export_ventas_csv(
+    sucursal_id: str = "all",
+    desde: str | None = None,
+    hasta: str | None = None,
+    paciente_id: int | None = None,
+    doctor_id: int | None = None,
+    delimiter: str = "comma",
+    user=Depends(_current_user_dep),
+):
+    require_roles(user, ("admin",))
+    sid = _parse_export_sucursal_id(sucursal_id)
+    delimiter_char = _parse_export_delimiter(delimiter)
+    desde_date, hasta_date = _resolve_export_date_range(desde, hasta, sid)
+
+    doctor_username: str | None = None
+    if doctor_id is not None:
+        with psycopg.connect(DB_CONNINFO) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT username
+                    FROM core.usuarios
+                    WHERE usuario_id = %s
+                      AND activo = true
+                      AND rol = 'doctor';
+                    """,
+                    (doctor_id,),
+                )
+                row = cur.fetchone()
+                if row is None:
+                    raise HTTPException(status_code=400, detail="doctor_id inválido o inactivo.")
+                doctor_username = str(row[0])
+
+    where = ["v.activo = true", "DATE(v.fecha_hora) BETWEEN %s AND %s"]
+    params: list[Any] = [desde_date, hasta_date]
+    if sid is not None:
+        where.append("v.sucursal_id = %s")
+        params.append(sid)
+    if paciente_id is not None:
+        where.append("v.paciente_id = %s")
+        params.append(paciente_id)
+    if doctor_username is not None:
+        where.append("LOWER(TRIM(COALESCE(v.created_by, ''))) = LOWER(TRIM(%s))")
+        params.append(doctor_username)
+
+    headers = [
+        "venta_id",
+        "sucursal_id",
+        "paciente_id",
+        "fecha_hora",
+        "compra",
+        "monto_total",
+        "metodo_pago",
+        "adelanto_aplica",
+        "adelanto_monto",
+        "adelanto_metodo",
+        "notas",
+        "created_by",
+        "updated_at",
+        "activo",
+    ]
+    sql = f"""
+    SELECT
+      v.venta_id,
+      v.sucursal_id,
+      v.paciente_id,
+      v.fecha_hora,
+      v.compra,
+      v.monto_total,
+      v.metodo_pago,
+      v.adelanto_aplica,
+      v.adelanto_monto,
+      v.adelanto_metodo,
+      v.notas,
+      v.created_by,
+      v.updated_at,
+      v.activo
+    FROM core.ventas v
+    WHERE {' AND '.join(where)}
+    ORDER BY v.fecha_hora DESC, v.venta_id DESC;
+    """
+    filename = _export_filename("ventas", desde_date, hasta_date, sid)
+    return StreamingResponse(
+        _stream_csv_query(sql, tuple(params), headers, delimiter_char),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.get("/export/pacientes.csv", summary="Exportar pacientes CSV (solo admin)")
+def export_pacientes_csv(
+    sucursal_id: str = "all",
+    desde: str | None = None,
+    hasta: str | None = None,
+    paciente_id: int | None = None,
+    doctor_id: int | None = None,
+    delimiter: str = "comma",
+    user=Depends(_current_user_dep),
+):
+    require_roles(user, ("admin",))
+    if doctor_id is not None:
+        raise HTTPException(status_code=400, detail="doctor_id no aplica para export de pacientes.")
+    sid = _parse_export_sucursal_id(sucursal_id)
+    delimiter_char = _parse_export_delimiter(delimiter)
+    desde_date, hasta_date = _resolve_export_date_range(desde, hasta, sid)
+
+    where = ["p.activo = true", "DATE(p.creado_en) BETWEEN %s AND %s"]
+    params: list[Any] = [desde_date, hasta_date]
+    if sid is not None:
+        where.append("p.sucursal_id = %s")
+        params.append(sid)
+    if paciente_id is not None:
+        where.append("p.paciente_id = %s")
+        params.append(paciente_id)
+
+    headers = [
+        "paciente_id",
+        "sucursal_id",
+        "primer_nombre",
+        "segundo_nombre",
+        "apellido_paterno",
+        "apellido_materno",
+        "fecha_nacimiento",
+        "sexo",
+        "telefono",
+        "correo",
+        "creado_en",
+        "actualizado_en",
+        "activo",
+        "como_nos_conocio",
+        "calle",
+        "numero",
+        "colonia",
+        "cp",
+        "municipio",
+        "estado",
+        "pais",
+    ]
+    sql = f"""
+    SELECT
+      p.paciente_id,
+      p.sucursal_id,
+      p.primer_nombre,
+      p.segundo_nombre,
+      p.apellido_paterno,
+      p.apellido_materno,
+      p.fecha_nacimiento,
+      p.sexo,
+      p.telefono,
+      p.correo,
+      p.creado_en,
+      p.actualizado_en,
+      p.activo,
+      p.como_nos_conocio,
+      p.calle,
+      p.numero,
+      p.colonia,
+      COALESCE(NULLIF(p.codigo_postal, ''), NULLIF(p.cp, '')) AS cp,
+      p.municipio,
+      COALESCE(NULLIF(p.estado_direccion, ''), NULLIF(p.estado, '')) AS estado,
+      p.pais
+    FROM core.pacientes p
+    WHERE {' AND '.join(where)}
+    ORDER BY p.apellido_paterno ASC, p.apellido_materno ASC, p.primer_nombre ASC, p.paciente_id ASC;
+    """
+    filename = _export_filename("pacientes", desde_date, hasta_date, sid)
+    return StreamingResponse(
+        _stream_csv_query(sql, tuple(params), headers, delimiter_char),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.get("/export/historias_clinicas.csv", summary="Exportar historias clínicas CSV (solo admin)")
+def export_historias_clinicas_csv(
+    sucursal_id: str = "all",
+    desde: str | None = None,
+    hasta: str | None = None,
+    paciente_id: int | None = None,
+    doctor_id: int | None = None,
+    delimiter: str = "comma",
+    user=Depends(_current_user_dep),
+):
+    require_roles(user, ("admin",))
+    if doctor_id is not None:
+        raise HTTPException(status_code=400, detail="doctor_id no aplica para export de historias clínicas.")
+
+    sid = _parse_export_sucursal_id(sucursal_id)
+    delimiter_char = _parse_export_delimiter(delimiter)
+    desde_date, hasta_date = _resolve_export_date_range(desde, hasta, sid)
+
+    where = ["h.activo = true", "DATE(h.created_at_tz) BETWEEN %s AND %s"]
+    params: list[Any] = [desde_date, hasta_date]
+    if sid is not None:
+        where.append("h.sucursal_id = %s")
+        params.append(sid)
+    if paciente_id is not None:
+        where.append("h.paciente_id = %s")
+        params.append(paciente_id)
+
+    headers = [
+        "historia_id", "paciente_id", "sucursal_id",
+        "doctor_atencion", "puesto_laboral",
+        "diagnostico_general",
+        "antecedentes_generales", "antecedentes_otro",
+        "alergias", "enfermedades", "cirugias",
+        "diabetes_estado", "diabetes_control", "diabetes_anios", "diabetes_tratamiento",
+        "horas_pantalla_dia", "conduccion_nocturna_horas", "exposicion_uv",
+        "tabaquismo_estado", "tabaquismo_intensidad", "tabaquismo_anios", "tabaquismo_anios_desde_dejo",
+        "alcohol_frecuencia",
+        "marihuana_frecuencia", "marihuana_forma",
+        "drogas_consumo", "drogas_tipos", "drogas_frecuencia",
+        "deporte_frecuencia", "deporte_duracion", "deporte_tipos",
+        "hipertension",
+        "medicamentos",
+        "usa_lentes", "tipo_lentes_actual", "tiempo_uso_lentes", "lentes_contacto_horas_dia",
+        "sintomas",
+        "od_esfera", "od_cilindro", "od_eje", "od_add",
+        "oi_esfera", "oi_cilindro", "oi_eje", "oi_add",
+        "dp", "queratometria_od", "queratometria_oi", "presion_od", "presion_oi",
+        "ppc", "lejos", "cerca", "tension", "mmhg", "di",
+        "avsinrxod", "avsinrixoi", "capvisualod", "capvisualoi", "avrxantod", "avrxantoi",
+        "queraod", "queraoi", "retinosod", "retinosoi", "subjeod", "subjeoi",
+        "papila", "adicionod", "adicionoi",
+        "biomicroscopia",
+        "created_by", "created_at_tz", "updated_at", "activo",
+    ]
+    select_cols = ",\n      ".join([f"h.{col}" for col in headers])
+    sql = f"""
+    SELECT
+      {select_cols}
+    FROM core.historias_clinicas h
+    WHERE {' AND '.join(where)}
+    ORDER BY h.created_at_tz DESC, h.historia_id DESC;
+    """
+    filename = _export_filename("historias_clinicas", desde_date, hasta_date, sid)
+    return StreamingResponse(
+        _stream_csv_query(sql, tuple(params), headers, delimiter_char),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.get("/export/sucursales.csv", summary="Exportar sucursales CSV (solo admin)")
+def export_sucursales_csv(
+    delimiter: str = "comma",
+    user=Depends(_current_user_dep),
+):
+    require_roles(user, ("admin",))
+    delimiter_char = _parse_export_delimiter(delimiter)
+    headers = ["sucursal_id", "nombre", "codigo", "ciudad", "estado", "activa"]
+    sql = """
+    SELECT
+      s.sucursal_id,
+      s.nombre,
+      s.codigo,
+      s.ciudad,
+      s.estado,
+      s.activa
+    FROM core.sucursales s
+    ORDER BY s.sucursal_id ASC;
+    """
+    filename = f"sucursales_{date.today().isoformat()}.csv"
+    return StreamingResponse(
+        _stream_csv_query(sql, tuple(), headers, delimiter_char),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.get("/export/diccionario_columnas_fisico.csv", summary="Exportar diccionario físico CSV (solo admin)")
+def export_diccionario_columnas_fisico_csv(
+    delimiter: str = "comma",
+    user=Depends(_current_user_dep),
+):
+    require_roles(user, ("admin",))
+    delimiter_char = _parse_export_delimiter(delimiter)
+    headers = [
+        "schema_name",
+        "table_name",
+        "column_name",
+        "data_type",
+        "is_nullable",
+        "ordinal_position",
+    ]
+    sql = """
+    SELECT
+      c.table_schema AS schema_name,
+      c.table_name,
+      c.column_name,
+      c.data_type,
+      c.is_nullable,
+      c.ordinal_position
+    FROM information_schema.columns c
+    WHERE c.table_schema = 'core'
+    ORDER BY c.table_name ASC, c.ordinal_position ASC;
+    """
+    filename = f"diccionario_columnas_fisico_{date.today().isoformat()}.csv"
+    return StreamingResponse(
+        _stream_csv_query(sql, tuple(), headers, delimiter_char),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @app.post("/login", summary="Login (devuelve JWT)")
@@ -513,6 +1550,96 @@ def require_roles(user, allowed: Iterable[str]):
         raise HTTPException(status_code=403, detail="No tienes permisos para esta acción.")
 
 
+PACIENTE_ESTRELLA_CONSULTAS_6M = 15
+PACIENTE_ESTRELLA_VENTAS_6M = 15
+PACIENTE_ESTRELLA_MONTO_6M = 20000.0
+PACIENTE_INTERMEDIO_CONSULTAS_6M = 4
+PACIENTE_INTERMEDIO_VENTAS_6M = 4
+
+
+def _estado_paciente_desde_metricas(
+    consultas_6m: int,
+    ventas_6m: int,
+    monto_6m: float,
+) -> str:
+    if (
+        consultas_6m >= PACIENTE_ESTRELLA_CONSULTAS_6M
+        or ventas_6m >= PACIENTE_ESTRELLA_VENTAS_6M
+        or monto_6m >= PACIENTE_ESTRELLA_MONTO_6M
+    ):
+        return "estrella"
+    if (
+        consultas_6m >= PACIENTE_INTERMEDIO_CONSULTAS_6M
+        or ventas_6m >= PACIENTE_INTERMEDIO_VENTAS_6M
+    ):
+        return "intermedio"
+    return "nuevo"
+
+
+def _estado_paciente_map(sucursal_id: int | None, paciente_ids: list[int]) -> dict[int, str]:
+    ids = sorted({int(pid) for pid in paciente_ids if pid is not None})
+    if not ids:
+        return {}
+
+    sucursal_consultas_clause = "AND c.sucursal_id = %s" if sucursal_id is not None else ""
+    sucursal_ventas_clause = "AND v.sucursal_id = %s" if sucursal_id is not None else ""
+
+    sql = f"""
+    WITH ids AS (
+      SELECT UNNEST(%s::int[]) AS paciente_id
+    ),
+    consultas_agg AS (
+      SELECT c.paciente_id, COUNT(*)::int AS consultas_6m
+      FROM core.consultas c
+      JOIN ids i ON i.paciente_id = c.paciente_id
+      WHERE c.activo = true
+        {sucursal_consultas_clause}
+        AND c.fecha_hora >= (NOW() - INTERVAL '6 months')
+      GROUP BY c.paciente_id
+    ),
+    ventas_agg AS (
+      SELECT
+        v.paciente_id,
+        COUNT(*)::int AS ventas_6m,
+        COALESCE(SUM(v.monto_total), 0)::numeric AS monto_6m
+      FROM core.ventas v
+      JOIN ids i ON i.paciente_id = v.paciente_id
+      WHERE v.activo = true
+        {sucursal_ventas_clause}
+        AND v.fecha_hora >= (NOW() - INTERVAL '6 months')
+      GROUP BY v.paciente_id
+    )
+    SELECT
+      i.paciente_id,
+      COALESCE(ca.consultas_6m, 0) AS consultas_6m,
+      COALESCE(va.ventas_6m, 0) AS ventas_6m,
+      COALESCE(va.monto_6m, 0)::numeric AS monto_6m
+    FROM ids i
+    LEFT JOIN consultas_agg ca ON ca.paciente_id = i.paciente_id
+    LEFT JOIN ventas_agg va ON va.paciente_id = i.paciente_id;
+    """
+
+    params: list[Any] = [ids]
+    if sucursal_id is not None:
+        params.append(sucursal_id)
+    if sucursal_id is not None:
+        params.append(sucursal_id)
+
+    with psycopg.connect(DB_CONNINFO) as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, tuple(params))
+            rows = cur.fetchall()
+
+    out: dict[int, str] = {}
+    for row in rows:
+        pid = int(row[0])
+        consultas_6m = int(row[1] or 0)
+        ventas_6m = int(row[2] or 0)
+        monto_6m = float(row[3] or 0)
+        out[pid] = _estado_paciente_desde_metricas(consultas_6m, ventas_6m, monto_6m)
+    return out
+
+
 def _calendar_feature_enabled() -> bool:
     return os.getenv("ENABLE_GOOGLE_CALENDAR", "false").strip().lower() in {"1", "true", "yes", "on"}
 
@@ -523,6 +1650,21 @@ _GOOGLE_ENV_CACHE_LOADED = False
 _GOOGLE_OAUTH_REFRESH_TOKENS_BY_SUCURSAL: dict[str, str] = {}
 _GOOGLE_CALENDAR_IDS_BY_SUCURSAL: dict[str, str] = {}
 _GOOGLE_OAUTH_REFRESH_TOKEN_FALLBACK: str = ""
+
+SUCURSAL_INVITE_DEFAULTS = {
+    "1": {
+        "phone": "+52 5620868654",
+        "maps": "https://maps.app.goo.gl/wedsqkiCUB5q1ZFf7",
+        "display_name": "Óptica OLM Estado de México",
+        "address": "Alfonso Reyes 96, Paseos de Sta Maria, 54800 Cuautitlán, Méx., Mexico",
+    },
+    "2": {
+        "phone": "+52 9841776838",
+        "maps": "https://maps.app.goo.gl/A2s69jzrfTkZtfhY6",
+        "display_name": "Óptica OLM Playa del Carmen",
+        "address": "Av. 28 de Julio esquina-115, 77725 Playa del Carmen, Q.R., Mexico",
+    },
+}
 
 
 def _load_google_calendar_env_cache() -> dict[str, Any]:
@@ -588,6 +1730,89 @@ def _refresh_token_for_sucursal(sucursal_id: int | None) -> str:
         if mapped:
             return mapped
     return _GOOGLE_OAUTH_REFRESH_TOKEN_FALLBACK
+
+
+def _format_consulta_tipo_for_humans(tipo_consulta: str | None) -> str:
+    if not tipo_consulta or not str(tipo_consulta).strip():
+        return "General"
+    mapping = {
+        "primera_vez_en_clinica": "Primera vez",
+        "revision_general": "Revisión general",
+        "graduacion_lentes": "Graduación de lentes",
+        "lentes_contacto": "Lentes de contacto",
+        "seguimiento": "Seguimiento",
+        "molestia": "Molestia",
+        "otro": "Otro",
+    }
+    parts = [x.strip() for x in str(tipo_consulta).split("|") if x and x.strip()]
+    if not parts:
+        return "General"
+
+    labels: list[str] = []
+    for p in parts:
+        low = p.lower()
+        if low in mapping:
+            labels.append(mapping[low])
+        else:
+            normalized = p.replace("_", " ").strip()
+            labels.append(normalized[:1].upper() + normalized[1:] if normalized else p)
+
+    if len(labels) == 1:
+        return labels[0]
+    if len(labels) == 2:
+        return f"{labels[0]} y {labels[1]}"
+    return f"{labels[0]}, {labels[1]} +{len(labels) - 2}"
+
+
+def _timezone_display_label(tz_name: str) -> str:
+    mapping = {
+        "America/Cancun": "Hora Cancún",
+        "America/Mexico_City": "Hora Ciudad de México",
+    }
+    return mapping.get(tz_name, f"Hora {tz_name}")
+
+
+def _format_datetime_span_es(start_local: datetime, end_local: datetime, tz_name: str) -> str:
+    weekdays = ["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"]
+    months = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"]
+    weekday = weekdays[start_local.weekday()]
+    month = months[start_local.month - 1]
+    return (
+        f"{weekday} {start_local.day:02d} {month} {start_local.year} · "
+        f"{start_local.strftime('%H:%M')}–{end_local.strftime('%H:%M')} "
+        f"({_timezone_display_label(tz_name)})"
+    )
+
+
+def _sucursal_invite_contact(sucursal_id: int) -> dict[str, str]:
+    data = dict(SUCURSAL_INVITE_DEFAULTS.get(str(sucursal_id), {}))
+    raw = os.getenv("AGENDA_SUCURSAL_CONTACTS", "").strip()
+    if not raw:
+        return data
+    try:
+        parsed = json.loads(raw)
+        if not isinstance(parsed, dict):
+            return data
+        custom = parsed.get(str(sucursal_id))
+        if not isinstance(custom, dict):
+            return data
+        for key in ("phone", "maps", "display_name", "address"):
+            value = custom.get(key)
+            if value and str(value).strip():
+                data[key] = str(value).strip()
+    except Exception:
+        pass
+    return data
+
+
+def _cancel_url_for_consulta(consulta_id: int, sucursal_id: int) -> str | None:
+    template = os.getenv("AGENDA_CANCEL_URL_TEMPLATE", "").strip()
+    if not template:
+        return None
+    return (
+        template.replace("{consulta_id}", str(consulta_id))
+        .replace("{sucursal_id}", str(sucursal_id))
+    )
 
 
 def _cleanup_oauth_state() -> None:
@@ -1046,6 +2271,7 @@ def _build_slots_for_day(sucursal_id: int, fecha: date, duracion_min: int = 30) 
 
 
 def _create_calendar_event_for_consulta(
+    consulta_id: int,
     sucursal_id: int,
     start_dt: datetime,
     end_dt: datetime,
@@ -1053,18 +2279,77 @@ def _create_calendar_event_for_consulta(
     paciente_nombre: str,
     paciente_correo: str | None,
     tipo_consulta: str | None,
+    doctor_id: str | None,
     doctor_nombre: str | None,
+    sucursal_nombre: str | None,
+    sucursal_location: str | None,
 ) -> str:
     tz_name = _timezone_for_sucursal(sucursal_id)
     cal_id = _calendar_id_for_sucursal(sucursal_id)
     service = _get_google_calendar_service(sucursal_id=sucursal_id)
+    start_local = start_dt.astimezone(ZoneInfo(tz_name))
+    end_local = end_dt.astimezone(ZoneInfo(tz_name))
+    hora_label = _format_datetime_span_es(start_local, end_local, tz_name)
+    tipo_label = _format_consulta_tipo_for_humans(tipo_consulta)
+    sucursal_contact = _sucursal_invite_contact(sucursal_id)
+    phone = sucursal_contact.get("phone", "")
+    maps_url = sucursal_contact.get("maps", "")
+    display_name = sucursal_contact.get("display_name") or sucursal_nombre or f"Sucursal #{sucursal_id}"
+    full_address = sucursal_contact.get("address", "").strip()
+    final_location = full_address or (sucursal_location or "").strip()
+    cancel_url = _cancel_url_for_consulta(consulta_id, sucursal_id)
+
+    agradecimiento = os.getenv(
+        "AGENDA_INVITE_MESSAGE",
+        "Gracias por elegir Optica O&LM. Nos vemos pronto para tu consulta.",
+    ).strip()
+
+    description_lines = [
+        str(display_name),
+        f"Paciente: {paciente_nombre}",
+        f"Tipo de consulta: {tipo_label}",
+        f"Doctor: {doctor_nombre or 'Por confirmar'}",
+        f"Fecha: {hora_label}",
+        f"Ubicación: {final_location or 'Por confirmar'} (ver mapa abajo)",
+        "",
+        "Antes de tu cita",
+        "Llega 10 min antes",
+        "Trae tus lentes actuales y receta previa (si tienes)",
+        "",
+        "Cambios",
+        f"Cancelar: {cancel_url}" if cancel_url else "Cancelar: contáctanos por WhatsApp/Tel",
+        "",
+        "Contacto",
+        f"WhatsApp/Tel: {phone or 'Por confirmar'}",
+        "",
+        f"Dirección + mapa: {maps_url or 'Por confirmar'}",
+        "",
+        agradecimiento,
+    ]
 
     body = {
-        "summary": f"Consulta {tipo_consulta or 'general'} - {paciente_nombre}",
-        "description": f"Paciente ID: {paciente_id}\nDoctor: {doctor_nombre or ''}",
+        "summary": f"Óptica O&LM: Consulta ({tipo_label}) | {paciente_nombre}",
+        "description": "\n".join(description_lines),
         "start": {"dateTime": start_dt.isoformat(), "timeZone": tz_name},
         "end": {"dateTime": end_dt.isoformat(), "timeZone": tz_name},
+        "reminders": {
+            "useDefault": False,
+            "overrides": [
+                {"method": "email", "minutes": 120},
+            ],
+        },
+        "extendedProperties": {
+            "private": {
+                "consulta_id": str(consulta_id),
+                "paciente_id": str(paciente_id),
+                "sucursal_id": str(sucursal_id),
+                "doctor_id": str(doctor_id or ""),
+                "tipo_consulta": str(tipo_consulta or ""),
+            }
+        },
     }
+    if final_location:
+        body["location"] = final_location
     if _looks_like_email(paciente_correo):
         body["attendees"] = [{"email": str(paciente_correo).strip()}]
 
@@ -1187,8 +2472,8 @@ def listar_pacientes(
     sql = f"""
     SELECT paciente_id, primer_nombre, segundo_nombre, apellido_paterno, apellido_materno,
            fecha_nacimiento, sexo, telefono, correo, como_nos_conocio,
-           ocupacion, alergias, fumador_cigarro, consumidor_alcohol, consumidor_marihuana,
-           creado_en
+           creado_en,
+           calle, numero, colonia, cp, municipio, estado, pais
     FROM core.pacientes
     {where_sql}
     ORDER BY creado_en DESC, paciente_id DESC
@@ -1200,6 +2485,8 @@ def listar_pacientes(
         with conn.cursor() as cur:
             cur.execute(sql, tuple(params))
             rows = cur.fetchall()
+
+    estado_map = _estado_paciente_map(sucursal_id, [int(r[0]) for r in rows])
 
     return [
         {
@@ -1213,12 +2500,17 @@ def listar_pacientes(
             "telefono": r[7],
             "correo": r[8],
             "como_nos_conocio": r[9],
-            "ocupacion": r[10],
-            "alergias": r[11],
-            "fumador_tabaco": r[12],
-            "consumidor_alcohol": r[13],
-            "fumador_marihuana": r[14],
-            "creado_en": r[15].isoformat() if r[15] else None,
+            "creado_en": r[10].isoformat() if r[10] else None,
+            "calle": r[11],
+            "numero": r[12],
+            "colonia": r[13],
+            "cp": r[14],
+            "codigo_postal": r[14],
+            "municipio": r[15],
+            "estado": r[16],
+            "estado_direccion": r[16],
+            "pais": r[17],
+            "estado_paciente": estado_map.get(int(r[0]), "nuevo"),
         }
         for r in rows
     ]
@@ -1239,13 +2531,15 @@ def buscar_pacientes(
     if limit < 1 or limit > 200:
         raise HTTPException(status_code=400, detail="limit inválido (1-200).")
 
-    q_like = f"%{q.strip()}%"
+    q_clean = q.strip()
+    q_like = f"%{q_clean}%"
+    q_prefix = f"{q_clean}%"
     where = ["p.activo = true"]
-    params: list[Any] = []
+    where_params: list[Any] = []
 
     if sucursal_id is not None:
         where.append("p.sucursal_id = %s")
-        params.append(sucursal_id)
+        where_params.append(sucursal_id)
 
     where.append(
         """(
@@ -1259,23 +2553,44 @@ def buscar_pacientes(
             OR CONCAT_WS(' ', p.primer_nombre, p.segundo_nombre, p.apellido_paterno, p.apellido_materno) ILIKE %s
         )"""
     )
-    params.extend([q_like, q_like, q_like, q_like, q_like, q_like, q_like, q_like])
+    where_params.extend([q_like, q_like, q_like, q_like, q_like, q_like, q_like, q_like])
 
     sql = f"""
     SELECT
       p.paciente_id, p.primer_nombre, p.segundo_nombre, p.apellido_paterno, p.apellido_materno,
-      p.fecha_nacimiento, p.sexo, p.telefono, p.correo
+      p.fecha_nacimiento, p.sexo, p.telefono, p.correo,
+      p.calle, p.numero, p.colonia, p.cp, p.municipio, p.estado, p.pais,
+      CASE
+        WHEN CAST(p.paciente_id AS TEXT) ILIKE %s THEN 0
+        WHEN p.primer_nombre ILIKE %s THEN 1
+        WHEN COALESCE(p.segundo_nombre, '') ILIKE %s THEN 2
+        WHEN p.apellido_paterno ILIKE %s THEN 3
+        WHEN COALESCE(p.apellido_materno, '') ILIKE %s THEN 4
+        WHEN CONCAT_WS(' ', p.primer_nombre, p.segundo_nombre, p.apellido_paterno, p.apellido_materno) ILIKE %s THEN 5
+        ELSE 9
+      END AS orden_busqueda
     FROM core.pacientes p
     WHERE {" AND ".join(where)}
-    ORDER BY p.creado_en DESC, p.paciente_id DESC
+    ORDER BY orden_busqueda ASC, p.creado_en DESC, p.paciente_id DESC
     LIMIT %s;
     """
-    params.append(limit)
+    params = [
+        q_prefix,
+        q_prefix,
+        q_prefix,
+        q_prefix,
+        q_prefix,
+        q_prefix,
+        *where_params,
+        limit,
+    ]
 
     with psycopg.connect(DB_CONNINFO) as conn:
         with conn.cursor() as cur:
             cur.execute(sql, tuple(params))
             rows = cur.fetchall()
+
+    estado_map = _estado_paciente_map(sucursal_id, [int(r[0]) for r in rows])
 
     return [
         {
@@ -1288,6 +2603,16 @@ def buscar_pacientes(
             "sexo": r[6],
             "telefono": r[7],
             "correo": r[8],
+            "calle": r[9],
+            "numero": r[10],
+            "colonia": r[11],
+            "cp": r[12],
+            "codigo_postal": r[12],
+            "municipio": r[13],
+            "estado": r[14],
+            "estado_direccion": r[14],
+            "pais": r[15],
+            "estado_paciente": estado_map.get(int(r[0]), "nuevo"),
         }
         for r in rows
     ]
@@ -1325,21 +2650,30 @@ def crear_paciente(p: PacienteCreate, user=Depends(get_current_user)):
 
     require_roles(user, ("admin", "recepcion"))
     p.sucursal_id = force_sucursal(user, p.sucursal_id)
+    sanitize_model_strings(p)
 
     if user["rol"] == "admin" and p.sucursal_id is None:
         raise HTTPException(status_code=400, detail="Sucursal es requerida.")
+    if is_missing_value(p.primer_nombre):
+        raise HTTPException(status_code=400, detail="primer_nombre es obligatorio.")
+    if is_missing_value(p.apellido_paterno):
+        raise HTTPException(status_code=400, detail="apellido_paterno es obligatorio.")
     p.como_nos_conocio = normalize_como_nos_conocio(p.como_nos_conocio)
     p.telefono = normalize_patient_phone(p.telefono)
     if not p.telefono:
         raise HTTPException(status_code=400, detail="Teléfono es obligatorio y debe tener 10 dígitos.")
     
 
+    cp_value = p.cp if p.cp not in (None, "") else p.codigo_postal
+    estado_value = p.estado if p.estado not in (None, "") else p.estado_direccion
+
     sql = """
     INSERT INTO core.pacientes (
       sucursal_id, primer_nombre, segundo_nombre, apellido_paterno, apellido_materno,
-      fecha_nacimiento, sexo, telefono, correo, como_nos_conocio
+      fecha_nacimiento, sexo, telefono, correo, como_nos_conocio,
+      calle, numero, colonia, cp, municipio, estado, pais
     )
-    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
     RETURNING paciente_id;
     """
     try:
@@ -1370,7 +2704,14 @@ def crear_paciente(p: PacienteCreate, user=Depends(get_current_user)):
                     p.sexo,
                     p.telefono,
                     p.correo,
-                    p.como_nos_conocio
+                    p.como_nos_conocio,
+                    p.calle,
+                    p.numero,
+                    p.colonia,
+                    cp_value,
+                    p.municipio,
+                    estado_value,
+                    p.pais,
                 ))
                 new_id = cur.fetchone()[0]
 
@@ -1391,14 +2732,22 @@ def actualizar_paciente(paciente_id: int, p: PacienteCreate, user=Depends(get_cu
 
     require_roles(user, ("admin", "recepcion", "doctor"))
     p.sucursal_id = force_sucursal(user, p.sucursal_id)
+    sanitize_model_strings(p)
 
     if user["rol"] == "admin" and p.sucursal_id is None:
         raise HTTPException(status_code=400, detail="Sucursal es requerida.")
+    if is_missing_value(p.primer_nombre):
+        raise HTTPException(status_code=400, detail="primer_nombre es obligatorio.")
+    if is_missing_value(p.apellido_paterno):
+        raise HTTPException(status_code=400, detail="apellido_paterno es obligatorio.")
     p.como_nos_conocio = normalize_como_nos_conocio(p.como_nos_conocio)
     p.telefono = normalize_patient_phone(p.telefono)
     if not p.telefono:
         raise HTTPException(status_code=400, detail="Teléfono es obligatorio y debe tener 10 dígitos.")
 
+
+    cp_value = p.cp if p.cp not in (None, "") else p.codigo_postal
+    estado_value = p.estado if p.estado not in (None, "") else p.estado_direccion
 
     sql = """
     UPDATE core.pacientes
@@ -1411,7 +2760,14 @@ def actualizar_paciente(paciente_id: int, p: PacienteCreate, user=Depends(get_cu
       sexo = %s,
       telefono = %s,
       correo = %s,
-      como_nos_conocio = %s
+      como_nos_conocio = %s,
+      calle = %s,
+      numero = %s,
+      colonia = %s,
+      cp = %s,
+      municipio = %s,
+      estado = %s,
+      pais = %s
     WHERE paciente_id = %s
       AND sucursal_id = %s
       AND activo = true
@@ -1446,6 +2802,13 @@ def actualizar_paciente(paciente_id: int, p: PacienteCreate, user=Depends(get_cu
                         p.telefono,
                         p.correo,
                         p.como_nos_conocio,
+                        p.calle,
+                        p.numero,
+                        p.colonia,
+                        cp_value,
+                        p.municipio,
+                        estado_value,
+                        p.pais,
                         paciente_id,
                         p.sucursal_id,
                     ),
@@ -1468,6 +2831,185 @@ def actualizar_paciente(paciente_id: int, p: PacienteCreate, user=Depends(get_cu
         raise HTTPException(status_code=400, detail=str(e))
 
 
+def _calc_paciente_age(value: Any) -> int | None:
+    if not value:
+        return None
+    try:
+        nacimiento = value
+        if isinstance(nacimiento, str):
+            nacimiento = datetime.fromisoformat(nacimiento).date()
+        today = datetime.now().date()
+        return today.year - nacimiento.year - (
+            (today.month, today.day) < (nacimiento.month, nacimiento.day)
+        )
+    except Exception:
+        return None
+
+
+def _fetch_paciente_snapshot(cur: psycopg.Cursor, paciente_id: int, sucursal_id: int) -> tuple[Any, ...]:
+    cur.execute(
+        """
+        SELECT
+          fecha_nacimiento,
+          primer_nombre,
+          segundo_nombre,
+          apellido_paterno,
+          apellido_materno,
+          telefono,
+          correo,
+          calle,
+          numero,
+          colonia,
+          COALESCE(NULLIF(codigo_postal, ''), NULLIF(cp, '')) AS codigo_postal,
+          municipio,
+          COALESCE(NULLIF(estado_direccion, ''), NULLIF(estado, '')) AS estado,
+          pais
+        FROM core.pacientes
+        WHERE paciente_id = %s
+          AND sucursal_id = %s
+          AND activo = TRUE
+        """,
+        (paciente_id, sucursal_id),
+    )
+    row = cur.fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Paciente no válido en esta sucursal.")
+    return row
+
+
+def _ensure_historia_clinica_base(cur: psycopg.Cursor, paciente_id: int, sucursal_id: int, created_by: str) -> bool:
+    cur.execute(
+        """
+        SELECT historia_id, activo
+        FROM core.historias_clinicas
+        WHERE paciente_id = %s
+          AND sucursal_id = %s
+        ORDER BY historia_id DESC
+        LIMIT 1
+        """,
+        (paciente_id, sucursal_id),
+    )
+    existing = cur.fetchone()
+
+    paciente_snapshot = _fetch_paciente_snapshot(cur, paciente_id, sucursal_id)
+    (
+        paciente_fecha_nacimiento,
+        paciente_primer_nombre,
+        paciente_segundo_nombre,
+        paciente_apellido_paterno,
+        paciente_apellido_materno,
+        paciente_telefono,
+        paciente_correo,
+        paciente_calle,
+        paciente_numero,
+        paciente_colonia,
+        paciente_codigo_postal,
+        paciente_municipio,
+        paciente_estado,
+        paciente_pais,
+    ) = paciente_snapshot
+    paciente_edad = _calc_paciente_age(paciente_fecha_nacimiento)
+
+    if existing is None:
+        cur.execute(
+            """
+            INSERT INTO core.historias_clinicas (
+              paciente_id,
+              sucursal_id,
+              paciente_fecha_nacimiento,
+              paciente_edad,
+              paciente_primer_nombre,
+              paciente_segundo_nombre,
+              paciente_apellido_paterno,
+              paciente_apellido_materno,
+              paciente_telefono,
+              paciente_correo,
+              paciente_calle,
+              paciente_numero,
+              paciente_colonia,
+              paciente_codigo_postal,
+              paciente_municipio,
+              paciente_estado,
+              paciente_pais,
+              created_by,
+              created_at_tz,
+              activo
+            )
+            VALUES (
+              %s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW(),TRUE
+            );
+            """,
+            (
+                paciente_id,
+                sucursal_id,
+                str(paciente_fecha_nacimiento) if paciente_fecha_nacimiento else None,
+                paciente_edad,
+                paciente_primer_nombre,
+                paciente_segundo_nombre,
+                paciente_apellido_paterno,
+                paciente_apellido_materno,
+                paciente_telefono,
+                paciente_correo,
+                paciente_calle,
+                paciente_numero,
+                paciente_colonia,
+                paciente_codigo_postal,
+                paciente_municipio,
+                paciente_estado,
+                paciente_pais,
+                created_by,
+            ),
+        )
+        return True
+
+    historia_id, activo = existing
+    if not bool(activo):
+        cur.execute(
+            """
+            UPDATE core.historias_clinicas
+            SET activo = TRUE,
+                updated_at = NOW(),
+                paciente_fecha_nacimiento = %s,
+                paciente_edad = %s,
+                paciente_primer_nombre = %s,
+                paciente_segundo_nombre = %s,
+                paciente_apellido_paterno = %s,
+                paciente_apellido_materno = %s,
+                paciente_telefono = %s,
+                paciente_correo = %s,
+                paciente_calle = %s,
+                paciente_numero = %s,
+                paciente_colonia = %s,
+                paciente_codigo_postal = %s,
+                paciente_municipio = %s,
+                paciente_estado = %s,
+                paciente_pais = %s
+            WHERE historia_id = %s
+            """,
+            (
+                str(paciente_fecha_nacimiento) if paciente_fecha_nacimiento else None,
+                paciente_edad,
+                paciente_primer_nombre,
+                paciente_segundo_nombre,
+                paciente_apellido_paterno,
+                paciente_apellido_materno,
+                paciente_telefono,
+                paciente_correo,
+                paciente_calle,
+                paciente_numero,
+                paciente_colonia,
+                paciente_codigo_postal,
+                paciente_municipio,
+                paciente_estado,
+                paciente_pais,
+                historia_id,
+            ),
+        )
+        return True
+
+    return False
+
+
 @app.put("/pacientes/{paciente_id}/historia", summary="Editar historia clínica (solo doctor/admin)")
 def update_historia(
     paciente_id: int,
@@ -1478,7 +3020,7 @@ def update_historia(
     require_roles(user, ("admin", "doctor"))
     sucursal_id = force_sucursal(user, sucursal_id)
 
-    data = h.dict(exclude_unset=True)
+    data = sanitize_payload_strings(h.dict(exclude_unset=True))
     if not data:
         raise HTTPException(status_code=400, detail="No enviaste campos para actualizar.")
 
@@ -1491,16 +3033,27 @@ def update_historia(
         "paciente_primer_nombre","paciente_segundo_nombre",
         "paciente_apellido_paterno","paciente_apellido_materno",
         "paciente_telefono","paciente_correo","puesto_laboral",
+        "paciente_calle","paciente_numero","paciente_colonia","paciente_codigo_postal","paciente_municipio","paciente_estado","paciente_pais",
         "doctor_atencion",
-        "historia","antecedentes",
-        "antecedentes_generales","antecedentes_familiares","antecedentes_otro",
+        "antecedentes",
+        "antecedentes_generales","antecedentes_otro",
         "alergias","enfermedades","cirugias",
         "fumador_tabaco","fumador_marihuana","consumidor_alcohol","diabetes","tipo_diabetes","deportista",
+        "horas_pantalla_dia","conduccion_nocturna_horas","exposicion_uv",
+        "tabaquismo_estado","tabaquismo_intensidad","tabaquismo_anios","tabaquismo_anios_desde_dejo",
+        "alcohol_frecuencia","alcohol_copas",
+        "marihuana_frecuencia","marihuana_forma",
+        "drogas_consumo","drogas_tipos","drogas_frecuencia",
+        "deporte_frecuencia","deporte_duracion","deporte_tipos",
+        "hipertension","medicamentos",
+        "diabetes_estado","diabetes_control","diabetes_anios","diabetes_tratamiento",
+        "usa_lentes","tipo_lentes_actual","tiempo_uso_lentes",
+        "lentes_contacto_horas_dia","lentes_contacto_dias_semana","sintomas",
         "ppc","lejos","cerca","tension","mmhg","di",
-        "avsinrxod","avsinrixoi","avsinrxoi","capvisualod","capvisualoi","avrxantod","avrxantoi",
-        "queraod","queraoi","retinosod","retinosoi","subjeoi","adicionod","adicionoi",
+        "avsinrxod","avsinrixoi","capvisualod","capvisualoi","avrxantod","avrxantoi",
+        "queraod","queraoi","retinosod","retinosoi","subjeod","subjeoi","adicionod","adicionoi",
         "papila","biomicroscopia",
-        "diagnostico_general","observaciones",
+        "diagnostico_general",
     }
     for k in list(data.keys()):
         if k not in allowed:
@@ -1510,12 +3063,32 @@ def update_historia(
         raise HTTPException(status_code=400, detail="Campos no válidos para actualizar.")
 
     # Estandarizamos al nombre canónico solicitado.
-    if "avsinrxoi" in data and "avsinrixoi" not in data:
-        data["avsinrixoi"] = data["avsinrxoi"]
+    if "diabetes_estado" in data:
+        estado_dm = str(data.get("diabetes_estado") or "").strip().lower()
+        if estado_dm in {"tipo_1", "tipo_2", "prediabetes"}:
+            data["diabetes"] = True
+            if is_missing_value(data.get("tipo_diabetes")):
+                data["tipo_diabetes"] = estado_dm
+        elif estado_dm == "no":
+            data["diabetes"] = False
+            data["tipo_diabetes"] = "no_aplica"
+        elif estado_dm == "no_sabe":
+            data["diabetes"] = False
+            data["tipo_diabetes"] = "no_sabe"
+
+    if "tabaquismo_estado" in data and "fumador_tabaco" not in data:
+        data["fumador_tabaco"] = str(data.get("tabaquismo_estado") or "").strip().lower() == "fumador_actual"
+    if "marihuana_frecuencia" in data and "fumador_marihuana" not in data:
+        freq_m = str(data.get("marihuana_frecuencia") or "").strip().lower()
+        data["fumador_marihuana"] = bool(freq_m and freq_m != "nunca")
+    if "alcohol_frecuencia" in data and "consumidor_alcohol" not in data:
+        freq_a = str(data.get("alcohol_frecuencia") or "").strip().lower()
+        data["consumidor_alcohol"] = bool(freq_a and freq_a != "nunca")
+    if "deporte_frecuencia" in data and "deportista" not in data:
+        data["deportista"] = str(data.get("deporte_frecuencia") or "").strip() not in {"", "0"}
+
     if "diabetes" in data and data.get("diabetes") is False and is_missing_value(data.get("tipo_diabetes")):
         data["tipo_diabetes"] = "no_aplica"
-
-    validate_historia_required(data)
 
     set_parts = []
     params = []
@@ -1536,6 +3109,7 @@ def update_historia(
 
     with psycopg.connect(DB_CONNINFO) as conn:
         with conn.cursor() as cur:
+            _ensure_historia_clinica_base(cur, paciente_id, sucursal_id, user["username"])
             cur.execute(sql, tuple(params))
             row = cur.fetchone()
             if row is None:
@@ -1550,7 +3124,7 @@ def update_historia(
 
 
 
-@app.delete("/pacientes/{paciente_id}/historia", summary="Borrar historia clínica (soft delete) (solo admin)")
+@app.delete("/pacientes/{paciente_id}/historia", summary="Borrar historia clínica (definitivo) (solo admin)")
 def delete_historia(
     paciente_id: int,
     sucursal_id: int,
@@ -1563,22 +3137,19 @@ def delete_historia(
         with conn.cursor() as cur:
             cur.execute(
                 """
-                UPDATE core.historias_clinicas
-                SET activo = false,
-                    updated_at = NOW()
+                DELETE FROM core.historias_clinicas
                 WHERE paciente_id = %s
                   AND sucursal_id = %s
-                  AND activo = true
                 RETURNING historia_id;
                 """,
                 (paciente_id, sucursal_id),
             )
             row = cur.fetchone()
             if row is None:
-                raise HTTPException(status_code=404, detail="Historia clínica no encontrada (o ya estaba inactiva).")
+                raise HTTPException(status_code=404, detail="Historia clínica no encontrada.")
             conn.commit()
 
-    return {"ok": True, "historia_id": row[0]}
+    return {"ok": True, "deleted_historia_id": row[0], "hard_deleted": True}
 
 
 
@@ -1616,6 +3187,7 @@ def listar_ventas(
     fecha_hasta: str | None = None,
     anio: int | None = None,
     mes: int | None = None,
+    q: str | None = None,
     user=Depends(get_current_user),
 ):
     require_roles(user, ("admin", "recepcion", "doctor"))
@@ -1648,7 +3220,24 @@ def listar_ventas(
         where.append("EXTRACT(YEAR FROM v.fecha_hora) = %s")
         params.append(anio)
     else:
-        where.append("DATE(v.fecha_hora) = CURRENT_DATE")
+        # Si hay texto de búsqueda, no limitar automáticamente a "hoy"
+        if not (q and q.strip()):
+            where.append("DATE(v.fecha_hora) = CURRENT_DATE")
+
+    if q and q.strip():
+        qq = f"%{q.strip()}%"
+        where.append(
+            """
+            (
+              CAST(v.venta_id AS TEXT) ILIKE %s
+              OR TO_CHAR(v.fecha_hora AT TIME ZONE 'America/Mexico_City', 'YYYY-MM-DD HH24:MI') ILIKE %s
+              OR CONCAT_WS(' ', v.primer_nombre, v.segundo_nombre, v.apellido_paterno, v.apellido_materno) ILIKE %s
+              OR COALESCE(v.compra, '') ILIKE %s
+              OR CAST(v.monto_total AS TEXT) ILIKE %s
+            )
+            """
+        )
+        params.extend([qq, qq, qq, qq, qq])
 
     sql = f"""
     SELECT
@@ -1660,16 +3249,12 @@ def listar_ventas(
       v.adelanto_aplica,
       v.adelanto_monto,
       v.adelanto_metodo,
-      v.como_nos_conocio,
       v.notas,
       v.paciente_id,
-      p.primer_nombre,
-      p.segundo_nombre,
-      p.apellido_paterno,
-      p.apellido_materno,
-      v.sucursal_id
-    FROM core.ventas v
-    JOIN core.pacientes p ON p.paciente_id = v.paciente_id
+      v.paciente_nombre,
+      v.sucursal_id,
+      v.sucursal_nombre
+    FROM core.ventas_detalle v
     WHERE {" AND ".join(where)}
     ORDER BY v.fecha_hora DESC, v.venta_id DESC
     LIMIT %s
@@ -1681,6 +3266,8 @@ def listar_ventas(
             cur.execute(sql, tuple(params))
             rows = cur.fetchall()
 
+    estado_map = _estado_paciente_map(sucursal_id, [int(r[9]) for r in rows])
+
     return [
         {
             "venta_id": r[0],
@@ -1691,11 +3278,13 @@ def listar_ventas(
             "adelanto_aplica": bool(r[5]),
             "adelanto_monto": float(r[6]) if r[6] is not None else None,
             "adelanto_metodo": r[7],
-            "como_nos_conocio": r[8],
-            "notas": r[9],
-            "paciente_id": r[10],
-            "paciente_nombre": " ".join([x for x in [r[11], r[12], r[13], r[14]] if x]),
-            "sucursal_id": r[15],
+            "como_nos_conocio": None,
+            "notas": r[8],
+            "paciente_id": r[9],
+            "paciente_nombre": r[10],
+            "sucursal_id": r[11],
+            "sucursal_nombre": r[12],
+            "estado_paciente": estado_map.get(int(r[9]), "nuevo"),
         }
         for r in rows
     ]
@@ -1705,18 +3294,21 @@ def listar_ventas(
 def crear_venta(v: VentaCreate, user=Depends(get_current_user)):
     require_roles(user, ("admin", "recepcion", "doctor"))
     v.sucursal_id = force_sucursal(user, v.sucursal_id)
+    sanitize_model_strings(v)
     if user["rol"] == "admin" and v.sucursal_id is None:
         raise HTTPException(status_code=400, detail="Sucursal es requerida.")
     if not v.compra or not v.compra.strip():
         raise HTTPException(status_code=400, detail="Compra es obligatoria.")
     if v.monto_total is None or float(v.monto_total) <= 0:
         raise HTTPException(status_code=400, detail="Monto total debe ser mayor a 0.")
-    v.como_nos_conocio = normalize_como_nos_conocio(v.como_nos_conocio)
+    v.compra = normalize_compra_tokens(v.compra)
+    v.metodo_pago = normalize_controlled_token(v.metodo_pago)
     if (v.metodo_pago or "").strip() not in {"efectivo", "tarjeta_credito", "tarjeta_debito"}:
         raise HTTPException(status_code=400, detail="metodo_pago inválido.")
     if v.adelanto_aplica:
         if v.adelanto_monto is None or float(v.adelanto_monto) <= 0:
             raise HTTPException(status_code=400, detail="adelanto_monto debe ser mayor a 0.")
+        v.adelanto_metodo = normalize_controlled_token(v.adelanto_metodo)
         if (v.adelanto_metodo or "").strip() not in {"efectivo", "tarjeta_credito", "tarjeta_debito"}:
             raise HTTPException(status_code=400, detail="adelanto_metodo inválido.")
     else:
@@ -1751,9 +3343,9 @@ def crear_venta(v: VentaCreate, user=Depends(get_current_user)):
                     INSERT INTO core.ventas (
                       sucursal_id, paciente_id, compra, monto_total,
                       metodo_pago, adelanto_aplica, adelanto_monto, adelanto_metodo,
-                      como_nos_conocio, notas, created_by
+                      notas, created_by
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     RETURNING venta_id;
                     """,
                     (
@@ -1765,7 +3357,6 @@ def crear_venta(v: VentaCreate, user=Depends(get_current_user)):
                         v.adelanto_aplica,
                         v.adelanto_monto,
                         v.adelanto_metodo,
-                        v.como_nos_conocio,
                         v.notas,
                         user["username"],
                     ),
@@ -1783,18 +3374,21 @@ def crear_venta(v: VentaCreate, user=Depends(get_current_user)):
 def actualizar_venta(venta_id: int, v: VentaCreate, user=Depends(get_current_user)):
     require_roles(user, ("admin", "recepcion", "doctor"))
     v.sucursal_id = force_sucursal(user, v.sucursal_id)
+    sanitize_model_strings(v)
     if user["rol"] == "admin" and v.sucursal_id is None:
         raise HTTPException(status_code=400, detail="Sucursal es requerida.")
     if not v.compra or not v.compra.strip():
         raise HTTPException(status_code=400, detail="Compra es obligatoria.")
     if v.monto_total is None or float(v.monto_total) <= 0:
         raise HTTPException(status_code=400, detail="Monto total debe ser mayor a 0.")
-    v.como_nos_conocio = normalize_como_nos_conocio(v.como_nos_conocio)
+    v.compra = normalize_compra_tokens(v.compra)
+    v.metodo_pago = normalize_controlled_token(v.metodo_pago)
     if (v.metodo_pago or "").strip() not in {"efectivo", "tarjeta_credito", "tarjeta_debito"}:
         raise HTTPException(status_code=400, detail="metodo_pago inválido.")
     if v.adelanto_aplica:
         if v.adelanto_monto is None or float(v.adelanto_monto) <= 0:
             raise HTTPException(status_code=400, detail="adelanto_monto debe ser mayor a 0.")
+        v.adelanto_metodo = normalize_controlled_token(v.adelanto_metodo)
         if (v.adelanto_metodo or "").strip() not in {"efectivo", "tarjeta_credito", "tarjeta_debito"}:
             raise HTTPException(status_code=400, detail="adelanto_metodo inválido.")
     else:
@@ -1814,7 +3408,6 @@ def actualizar_venta(venta_id: int, v: VentaCreate, user=Depends(get_current_use
                         adelanto_aplica = %s,
                         adelanto_monto = %s,
                         adelanto_metodo = %s,
-                        como_nos_conocio = %s,
                         notas = %s,
                         updated_at = NOW()
                     WHERE venta_id = %s
@@ -1830,7 +3423,6 @@ def actualizar_venta(venta_id: int, v: VentaCreate, user=Depends(get_current_use
                         v.adelanto_aplica,
                         v.adelanto_monto,
                         v.adelanto_metodo,
-                        v.como_nos_conocio,
                         v.notas,
                         venta_id,
                         v.sucursal_id,
@@ -1847,7 +3439,7 @@ def actualizar_venta(venta_id: int, v: VentaCreate, user=Depends(get_current_use
         raise HTTPException(status_code=400, detail=str(e))
 
 
-@app.delete("/ventas/{venta_id}", summary="Eliminar venta (soft delete)")
+@app.delete("/ventas/{venta_id}", summary="Eliminar venta (definitivo)")
 def eliminar_venta(venta_id: int, sucursal_id: int, user=Depends(get_current_user)):
     require_roles(user, ("admin", "recepcion", "doctor"))
     sucursal_id = force_sucursal(user, sucursal_id)
@@ -1858,28 +3450,38 @@ def eliminar_venta(venta_id: int, sucursal_id: int, user=Depends(get_current_use
         with conn.cursor() as cur:
             cur.execute(
                 """
-                UPDATE core.ventas
-                SET activo = false, updated_at = NOW()
+                DELETE FROM core.ventas
                 WHERE venta_id = %s
                   AND sucursal_id = %s
-                  AND activo = true
                 RETURNING venta_id
                 """,
                 (venta_id, sucursal_id),
             )
             row = cur.fetchone()
             if row is None:
-                raise HTTPException(status_code=404, detail="Venta no existe en esa sucursal o ya estaba eliminada.")
+                raise HTTPException(status_code=404, detail="Venta no existe en esa sucursal.")
         conn.commit()
-    return {"deleted_venta_id": row[0], "soft_deleted": True}
+    return {"deleted_venta_id": row[0], "hard_deleted": True}
 
 
 @app.get("/estadisticas/resumen", summary="Resumen estadístico por sucursal")
 def estadisticas_resumen(
     sucursal_id: int | None = None,
     modo: str = "hoy",
+    fecha: str | None = None,
+    fecha_desde: str | None = None,
+    fecha_hasta: str | None = None,
     anio: int | None = None,
     mes: int | None = None,
+    q_paciente: str | None = None,
+    pacientes_modo: str = "mes",
+    pacientes_anio: int | None = None,
+    pacientes_mes: int | None = None,
+    pacientes_semana: int | None = None,
+    pacientes_fecha: str | None = None,
+    pacientes_fecha_desde: str | None = None,
+    pacientes_fecha_hasta: str | None = None,
+    series_anio: int | None = None,
     user=Depends(get_current_user),
 ):
     require_roles(user, ("admin", "recepcion", "doctor"))
@@ -1894,6 +3496,22 @@ def estadisticas_resumen(
         fecha_desde = hoy
         fecha_hasta = hoy
         periodo_label = f"Hoy ({hoy.isoformat()})"
+    elif modo == "ayer":
+        ayer = hoy - timedelta(days=1)
+        fecha_desde = ayer
+        fecha_hasta = ayer
+        periodo_label = f"Ayer ({ayer.isoformat()})"
+    elif modo == "dia":
+        if fecha:
+            try:
+                fecha_val = datetime.fromisoformat(fecha).date()
+            except Exception:
+                raise HTTPException(status_code=400, detail="fecha inválida. Usa YYYY-MM-DD.")
+        else:
+            fecha_val = hoy
+        fecha_desde = fecha_val
+        fecha_hasta = fecha_val
+        periodo_label = f"Día {fecha_val.isoformat()}"
     elif modo == "semana":
         fecha_desde = hoy - timedelta(days=hoy.weekday())
         fecha_hasta = hoy
@@ -1912,16 +3530,52 @@ def estadisticas_resumen(
         fecha_desde = date(anio_val, 1, 1)
         fecha_hasta = date(anio_val, 12, 31)
         periodo_label = f"Año {anio_val}"
+    elif modo == "rango":
+        if not fecha_desde or not fecha_hasta:
+            raise HTTPException(status_code=400, detail="Para modo=rango envía fecha_desde y fecha_hasta (YYYY-MM-DD).")
+        try:
+            fecha_desde = datetime.fromisoformat(fecha_desde).date()
+            fecha_hasta = datetime.fromisoformat(fecha_hasta).date()
+        except Exception:
+            raise HTTPException(status_code=400, detail="fecha_desde/fecha_hasta inválidas. Usa YYYY-MM-DD.")
+        periodo_label = f"Rango ({fecha_desde.isoformat()} a {fecha_hasta.isoformat()})"
     else:
-        raise HTTPException(status_code=400, detail="modo inválido. Usa: hoy, semana, mes o anio.")
+        raise HTTPException(status_code=400, detail="modo inválido. Usa: hoy, ayer, dia, semana, mes, anio o rango.")
 
     if fecha_hasta < fecha_desde:
         raise HTTPException(status_code=400, detail="Rango de fechas inválido.")
+    q_name = (q_paciente or "").strip()
+    q_like = f"%{q_name}%"
+    is_admin_user = str(user.get("rol", "")).lower() == "admin"
+
+    def _patient_filter_sql(alias: str) -> tuple[str, list[Any]]:
+        if not q_name:
+            return "", []
+        return (
+            f"""
+              AND EXISTS (
+                SELECT 1
+                FROM core.pacientes p
+                WHERE p.paciente_id = {alias}.paciente_id
+                  AND p.sucursal_id = {alias}.sucursal_id
+                  AND p.activo = true
+                  AND CONCAT_WS(' ', p.primer_nombre, p.segundo_nombre, p.apellido_paterno, p.apellido_materno) ILIKE %s
+              )
+            """,
+            [q_like],
+        )
+
+    c_patient_sql, c_patient_params = _patient_filter_sql("c")
+    v_patient_sql, v_patient_params = _patient_filter_sql("v")
+    admin_sucursales_rows: list[tuple[Any, ...]] = []
+    admin_consultas_period_rows: list[tuple[Any, ...]] = []
+    admin_ventas_mensuales_rows: list[tuple[Any, ...]] = []
+    admin_pacientes_mensuales_rows: list[tuple[Any, ...]] = []
 
     with psycopg.connect(DB_CONNINFO) as conn:
         with conn.cursor() as cur:
             cur.execute(
-                """
+                f"""
                 SELECT
                   COUNT(*)::int AS total,
                   COUNT(*) FILTER (
@@ -1930,56 +3584,60 @@ def estadisticas_resumen(
                 FROM core.consultas
                 WHERE activo = true
                   AND sucursal_id = %s
-                  AND DATE(fecha_hora) BETWEEN %s AND %s;
+                  AND DATE(fecha_hora) BETWEEN %s AND %s
+                  {c_patient_sql};
                 """,
-                (sucursal_id, fecha_desde, fecha_hasta),
+                (sucursal_id, fecha_desde, fecha_hasta, *c_patient_params),
             )
             c_total, c_no_show = cur.fetchone()
 
             cur.execute(
-                """
+                f"""
                 SELECT
                   COUNT(*)::int AS total,
                   COALESCE(SUM(monto_total), 0)::numeric AS monto_total
                 FROM core.ventas
                 WHERE activo = true
                   AND sucursal_id = %s
-                  AND DATE(fecha_hora) BETWEEN %s AND %s;
+                  AND DATE(fecha_hora) BETWEEN %s AND %s
+                  {v_patient_sql};
                 """,
-                (sucursal_id, fecha_desde, fecha_hasta),
+                (sucursal_id, fecha_desde, fecha_hasta, *v_patient_params),
             )
             v_total, v_monto_total = cur.fetchone()
 
             cur.execute(
-                """
+                f"""
                 SELECT DATE(fecha_hora) AS dia, COUNT(*)::int
                 FROM core.consultas
                 WHERE activo = true
                   AND sucursal_id = %s
                   AND DATE(fecha_hora) BETWEEN %s AND %s
+                  {c_patient_sql}
                 GROUP BY DATE(fecha_hora)
                 ORDER BY dia;
                 """,
-                (sucursal_id, fecha_desde, fecha_hasta),
+                (sucursal_id, fecha_desde, fecha_hasta, *c_patient_params),
             )
             consultas_dia_rows = cur.fetchall()
 
             cur.execute(
-                """
+                f"""
                 SELECT DATE(fecha_hora) AS dia, COUNT(*)::int
                 FROM core.ventas
                 WHERE activo = true
                   AND sucursal_id = %s
                   AND DATE(fecha_hora) BETWEEN %s AND %s
+                  {v_patient_sql}
                 GROUP BY DATE(fecha_hora)
                 ORDER BY dia;
                 """,
-                (sucursal_id, fecha_desde, fecha_hasta),
+                (sucursal_id, fecha_desde, fecha_hasta, *v_patient_params),
             )
             ventas_dia_rows = cur.fetchall()
 
             cur.execute(
-                """
+                f"""
                 SELECT
                   COALESCE(NULLIF(LOWER(TRIM(metodo_pago)), ''), 'sin_metodo') AS etiqueta,
                   COUNT(*)::int AS total
@@ -1987,37 +3645,39 @@ def estadisticas_resumen(
                 WHERE activo = true
                   AND sucursal_id = %s
                   AND DATE(fecha_hora) BETWEEN %s AND %s
+                  {v_patient_sql}
                 GROUP BY etiqueta
                 ORDER BY total DESC, etiqueta ASC;
                 """,
-                (sucursal_id, fecha_desde, fecha_hasta),
+                (sucursal_id, fecha_desde, fecha_hasta, *v_patient_params),
             )
             ventas_metodo_rows = cur.fetchall()
 
             cur.execute(
-                """
+                f"""
                 SELECT
                   item AS etiqueta,
                   COUNT(*)::int AS total
                 FROM (
                   SELECT LOWER(TRIM(x.item)) AS item
                   FROM core.consultas c
-                  CROSS JOIN LATERAL regexp_split_to_table(COALESCE(c.tipo_consulta, ''), '\\|') AS x(item)
+                  CROSS JOIN LATERAL regexp_split_to_table(COALESCE(NULLIF(c.motivo_consulta, ''), COALESCE(c.tipo_consulta, '')), '\\|') AS x(item)
                   WHERE c.activo = true
                     AND c.sucursal_id = %s
                     AND DATE(c.fecha_hora) BETWEEN %s AND %s
+                    {c_patient_sql}
                 ) t
                 WHERE item <> ''
                 GROUP BY item
                 ORDER BY total DESC, etiqueta ASC
                 LIMIT 10;
                 """,
-                (sucursal_id, fecha_desde, fecha_hasta),
+                (sucursal_id, fecha_desde, fecha_hasta, *c_patient_params),
             )
             consultas_tipo_rows = cur.fetchall()
 
             cur.execute(
-                """
+                f"""
                 SELECT
                   CASE
                     WHEN POSITION('otro:' IN item) = 1 THEN 'otro'
@@ -2031,15 +3691,291 @@ def estadisticas_resumen(
                   WHERE v.activo = true
                     AND v.sucursal_id = %s
                     AND DATE(v.fecha_hora) BETWEEN %s AND %s
+                    {v_patient_sql}
                 ) t
                 WHERE item <> ''
                 GROUP BY producto
                 ORDER BY total DESC, producto ASC
                 LIMIT 10;
                 """,
-                (sucursal_id, fecha_desde, fecha_hasta),
+                (sucursal_id, fecha_desde, fecha_hasta, *v_patient_params),
             )
             productos_top_rows = cur.fetchall()
+
+            mes_actual_desde = date(hoy.year, hoy.month, 1)
+            mes_actual_hasta = date(hoy.year, hoy.month, monthrange(hoy.year, hoy.month)[1])
+            top_mes_extra_sql = ""
+            top_mes_extra_params: list[Any] = []
+            if q_name:
+                top_mes_extra_sql = "AND CONCAT_WS(' ', p.primer_nombre, p.segundo_nombre, p.apellido_paterno, p.apellido_materno) ILIKE %s"
+                top_mes_extra_params.append(q_like)
+            cur.execute(
+                """
+                SELECT
+                  v.paciente_id,
+                  CONCAT_WS(' ', p.primer_nombre, p.segundo_nombre, p.apellido_paterno, p.apellido_materno) AS paciente_nombre,
+                  COUNT(*)::int AS total_ventas,
+                  COALESCE(SUM(v.monto_total), 0)::numeric AS monto_total
+                FROM core.ventas v
+                JOIN core.pacientes p ON p.paciente_id = v.paciente_id
+                WHERE v.activo = true
+                  AND p.activo = true
+                  AND v.sucursal_id = %s
+                  AND DATE(v.fecha_hora) BETWEEN %s AND %s
+                  {top_mes_extra_sql}
+                GROUP BY v.paciente_id, paciente_nombre
+                ORDER BY monto_total DESC, total_ventas DESC, paciente_nombre ASC
+                LIMIT 10;
+                """.format(top_mes_extra_sql=top_mes_extra_sql),
+                (sucursal_id, mes_actual_desde, mes_actual_hasta, *top_mes_extra_params),
+            )
+            top_pacientes_mes_actual_rows = cur.fetchall()
+
+            top_consultas_extra_sql = ""
+            top_consultas_extra_params: list[Any] = []
+            if q_name:
+                top_consultas_extra_sql = "AND CONCAT_WS(' ', p.primer_nombre, p.segundo_nombre, p.apellido_paterno, p.apellido_materno) ILIKE %s"
+                top_consultas_extra_params.append(q_like)
+            cur.execute(
+                """
+                SELECT
+                  c.paciente_id,
+                  CONCAT_WS(' ', p.primer_nombre, p.segundo_nombre, p.apellido_paterno, p.apellido_materno) AS paciente_nombre,
+                  COUNT(*)::int AS total_consultas
+                FROM core.consultas c
+                JOIN core.pacientes p
+                  ON p.paciente_id = c.paciente_id
+                 AND p.sucursal_id = c.sucursal_id
+                WHERE c.activo = true
+                  AND p.activo = true
+                  AND c.sucursal_id = %s
+                  AND DATE(c.fecha_hora) BETWEEN %s AND %s
+                  {top_consultas_extra_sql}
+                GROUP BY c.paciente_id, paciente_nombre
+                ORDER BY total_consultas DESC, paciente_nombre ASC
+                LIMIT 10;
+                """.format(top_consultas_extra_sql=top_consultas_extra_sql),
+                (sucursal_id, fecha_desde, fecha_hasta, *top_consultas_extra_params),
+            )
+            top_pacientes_consultas_rows = cur.fetchall()
+
+            pacientes_modo_clean = (pacientes_modo or "mes").strip().lower()
+            if pacientes_modo_clean not in {"dia", "semana", "mes", "rango"}:
+                raise HTTPException(status_code=400, detail="pacientes_modo inválido. Usa: dia, semana, mes o rango.")
+
+            p_anio = pacientes_anio or hoy.year
+            p_mes = pacientes_mes or hoy.month
+            p_semana = pacientes_semana or int(hoy.strftime("%V"))
+            p_extra_sql = ""
+            p_extra_params: list[Any] = []
+            if q_name:
+                p_extra_sql = "AND CONCAT_WS(' ', p.primer_nombre, p.segundo_nombre, p.apellido_paterno, p.apellido_materno) ILIKE %s"
+                p_extra_params.append(q_like)
+
+            pacientes_label = ""
+            pacientes_series: list[dict[str, Any]] = []
+            if pacientes_modo_clean == "mes":
+                cur.execute(
+                    f"""
+                    SELECT EXTRACT(MONTH FROM p.creado_en)::int AS mes_idx, COUNT(*)::int AS total
+                    FROM core.pacientes p
+                    WHERE p.activo = true
+                      AND p.sucursal_id = %s
+                      AND EXTRACT(YEAR FROM p.creado_en) = %s
+                      {p_extra_sql}
+                    GROUP BY mes_idx
+                    ORDER BY mes_idx;
+                    """,
+                    (sucursal_id, p_anio, *p_extra_params),
+                )
+                rows = cur.fetchall()
+                month_map = {int(r[0]): int(r[1]) for r in rows}
+                meses_label = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"]
+                pacientes_series = [
+                    {"etiqueta": meses_label[idx - 1], "total": int(month_map.get(idx, 0))}
+                    for idx in range(1, 13)
+                ]
+                pacientes_label = f"Pacientes creados por mes ({p_anio})"
+            elif pacientes_modo_clean == "dia":
+                if pacientes_fecha:
+                    try:
+                        p_fecha = datetime.fromisoformat(pacientes_fecha).date()
+                    except Exception:
+                        raise HTTPException(status_code=400, detail="pacientes_fecha inválida. Usa YYYY-MM-DD.")
+                else:
+                    p_fecha = hoy
+                cur.execute(
+                    f"""
+                    SELECT COUNT(*)::int AS total
+                    FROM core.pacientes p
+                    WHERE p.activo = true
+                      AND p.sucursal_id = %s
+                      AND DATE(p.creado_en) = %s
+                      {p_extra_sql}
+                    ;
+                    """,
+                    (sucursal_id, p_fecha, *p_extra_params),
+                )
+                total_dia = int((cur.fetchone() or [0])[0] or 0)
+                pacientes_series = [{"etiqueta": str(p_fecha), "total": total_dia}]
+                pacientes_label = f"Pacientes creados en día ({p_fecha.isoformat()})"
+            elif pacientes_modo_clean == "rango":
+                if not pacientes_fecha_desde or not pacientes_fecha_hasta:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Para pacientes_modo=rango envía pacientes_fecha_desde y pacientes_fecha_hasta.",
+                    )
+                try:
+                    p_desde = datetime.fromisoformat(pacientes_fecha_desde).date()
+                    p_hasta = datetime.fromisoformat(pacientes_fecha_hasta).date()
+                except Exception:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="pacientes_fecha_desde/pacientes_fecha_hasta inválidas. Usa YYYY-MM-DD.",
+                    )
+                if p_hasta < p_desde:
+                    raise HTTPException(status_code=400, detail="Rango inválido en pacientes creados.")
+                cur.execute(
+                    f"""
+                    SELECT DATE(p.creado_en) AS dia, COUNT(*)::int AS total
+                    FROM core.pacientes p
+                    WHERE p.activo = true
+                      AND p.sucursal_id = %s
+                      AND DATE(p.creado_en) BETWEEN %s AND %s
+                      {p_extra_sql}
+                    GROUP BY dia
+                    ORDER BY dia;
+                    """,
+                    (sucursal_id, p_desde, p_hasta, *p_extra_params),
+                )
+                rows = cur.fetchall()
+                day_map = {str(r[0]): int(r[1]) for r in rows}
+                dcur = p_desde
+                while dcur <= p_hasta:
+                    k = str(dcur)
+                    pacientes_series.append({"etiqueta": k, "total": int(day_map.get(k, 0))})
+                    dcur += timedelta(days=1)
+                pacientes_label = f"Pacientes creados por rango ({p_desde.isoformat()} a {p_hasta.isoformat()})"
+            else:
+                if p_semana < 1 or p_semana > 53:
+                    raise HTTPException(status_code=400, detail="pacientes_semana inválida. Debe ser 1..53.")
+                try:
+                    p_desde = date.fromisocalendar(p_anio, p_semana, 1)
+                except ValueError:
+                    raise HTTPException(status_code=400, detail="Semana/año inválidos para calendario ISO.")
+                p_hasta = p_desde + timedelta(days=6)
+                cur.execute(
+                    f"""
+                    SELECT DATE(p.creado_en) AS dia, COUNT(*)::int AS total
+                    FROM core.pacientes p
+                    WHERE p.activo = true
+                      AND p.sucursal_id = %s
+                      AND DATE(p.creado_en) BETWEEN %s AND %s
+                      {p_extra_sql}
+                    GROUP BY dia
+                    ORDER BY dia;
+                    """,
+                    (sucursal_id, p_desde, p_hasta, *p_extra_params),
+                )
+                rows = cur.fetchall()
+                day_map = {str(r[0]): int(r[1]) for r in rows}
+                dcur = p_desde
+                while dcur <= p_hasta:
+                    k = str(dcur)
+                    pacientes_series.append({"etiqueta": k, "total": int(day_map.get(k, 0))})
+                    dcur += timedelta(days=1)
+                pacientes_label = f"Pacientes creados por semana (S{p_semana} {p_anio})"
+
+            series_year = series_anio or hoy.year
+            cur.execute(
+                """
+                SELECT EXTRACT(MONTH FROM v.fecha_hora)::int AS mes_idx, COALESCE(SUM(v.monto_total), 0)::numeric AS total
+                FROM core.ventas v
+                WHERE v.activo = true
+                  AND v.sucursal_id = %s
+                  AND EXTRACT(YEAR FROM v.fecha_hora) = %s
+                GROUP BY mes_idx
+                ORDER BY mes_idx;
+                """,
+                (sucursal_id, series_year),
+            )
+            ingresos_rows = cur.fetchall()
+
+            cur.execute(
+                """
+                SELECT EXTRACT(MONTH FROM c.fecha_hora)::int AS mes_idx, COUNT(*)::int AS total
+                FROM core.consultas c
+                WHERE c.activo = true
+                  AND c.sucursal_id = %s
+                  AND EXTRACT(YEAR FROM c.fecha_hora) = %s
+                GROUP BY mes_idx
+                ORDER BY mes_idx;
+                """,
+                (sucursal_id, series_year),
+            )
+            consultas_mensuales_rows = cur.fetchall()
+
+            if is_admin_user:
+                cur.execute(
+                    """
+                    SELECT s.sucursal_id, s.nombre
+                    FROM core.sucursales s
+                    WHERE s.activa = true
+                    ORDER BY s.sucursal_id ASC;
+                    """
+                )
+                admin_sucursales_rows = cur.fetchall()
+
+                cur.execute(
+                    """
+                    SELECT c.sucursal_id, COUNT(*)::int AS total
+                    FROM core.consultas c
+                    JOIN core.sucursales s ON s.sucursal_id = c.sucursal_id
+                    WHERE c.activo = true
+                      AND s.activa = true
+                      AND DATE(c.fecha_hora) BETWEEN %s AND %s
+                    GROUP BY c.sucursal_id
+                    ORDER BY c.sucursal_id ASC;
+                    """,
+                    (fecha_desde, fecha_hasta),
+                )
+                admin_consultas_period_rows = cur.fetchall()
+
+                cur.execute(
+                    """
+                    SELECT
+                      v.sucursal_id,
+                      EXTRACT(MONTH FROM v.fecha_hora)::int AS mes_idx,
+                      COALESCE(SUM(v.monto_total), 0)::numeric AS total
+                    FROM core.ventas v
+                    JOIN core.sucursales s ON s.sucursal_id = v.sucursal_id
+                    WHERE v.activo = true
+                      AND s.activa = true
+                      AND EXTRACT(YEAR FROM v.fecha_hora) = %s
+                    GROUP BY v.sucursal_id, mes_idx
+                    ORDER BY v.sucursal_id ASC, mes_idx ASC;
+                    """,
+                    (series_year,),
+                )
+                admin_ventas_mensuales_rows = cur.fetchall()
+
+                cur.execute(
+                    """
+                    SELECT
+                      p.sucursal_id,
+                      EXTRACT(MONTH FROM p.creado_en)::int AS mes_idx,
+                      COUNT(*)::int AS total
+                    FROM core.pacientes p
+                    JOIN core.sucursales s ON s.sucursal_id = p.sucursal_id
+                    WHERE p.activo = true
+                      AND s.activa = true
+                      AND EXTRACT(YEAR FROM p.creado_en) = %s
+                    GROUP BY p.sucursal_id, mes_idx
+                    ORDER BY p.sucursal_id ASC, mes_idx ASC;
+                    """,
+                    (series_year,),
+                )
+                admin_pacientes_mensuales_rows = cur.fetchall()
 
     def _series_map(rows: list[tuple[Any, int]]) -> dict[str, int]:
         return {str(r[0]): int(r[1]) for r in rows}
@@ -2059,6 +3995,90 @@ def estadisticas_resumen(
     ventas_metodo = [{"etiqueta": str(r[0]), "total": int(r[1] or 0)} for r in ventas_metodo_rows]
     consultas_tipo = [{"etiqueta": str(r[0]), "total": int(r[1] or 0)} for r in consultas_tipo_rows]
     productos_top = [{"producto": str(r[0]), "total": int(r[1] or 0)} for r in productos_top_rows]
+    top_pacientes_mes_actual = [
+        {
+            "paciente_id": int(r[0]),
+            "paciente_nombre": str(r[1] or "").strip(),
+            "total_ventas": int(r[2] or 0),
+            "monto_total": float(r[3] or 0),
+        }
+        for r in top_pacientes_mes_actual_rows
+    ]
+    top_pacientes_consultas = [
+        {
+            "paciente_id": int(r[0]),
+            "paciente_nombre": str(r[1] or "").strip(),
+            "total_consultas": int(r[2] or 0),
+        }
+        for r in top_pacientes_consultas_rows
+    ]
+    meses_label = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"]
+    ingresos_map = {int(r[0]): float(r[1] or 0) for r in ingresos_rows}
+    consultas_mensuales_map = {int(r[0]): int(r[1] or 0) for r in consultas_mensuales_rows}
+    ingresos_por_mes = [
+        {"mes": idx, "etiqueta": meses_label[idx - 1], "total": float(ingresos_map.get(idx, 0))}
+        for idx in range(1, 13)
+    ]
+    consultas_por_mes = [
+        {"mes": idx, "etiqueta": meses_label[idx - 1], "total": int(consultas_mensuales_map.get(idx, 0))}
+        for idx in range(1, 13)
+    ]
+    ventas_monto_total_visible = float(v_monto_total or 0) if is_admin_user else None
+    comparativo_sucursales = None
+    if is_admin_user:
+        suc_list = [
+            {
+                "sucursal_id": int(r[0]),
+                "sucursal_nombre": str(r[1] or f"Sucursal #{r[0]}"),
+            }
+            for r in admin_sucursales_rows
+        ]
+        consultas_tot_map = {int(r[0]): int(r[1] or 0) for r in admin_consultas_period_rows}
+        ventas_mes_map = {(int(r[0]), int(r[1])): float(r[2] or 0) for r in admin_ventas_mensuales_rows}
+        pacientes_mes_map = {(int(r[0]), int(r[1])): int(r[2] or 0) for r in admin_pacientes_mensuales_rows}
+
+        comparativo_sucursales = {
+            "anio": int(series_year),
+            "consultas_periodo_label": periodo_label,
+            "consultas_periodo_por_sucursal": [
+                {
+                    "sucursal_id": s["sucursal_id"],
+                    "sucursal_nombre": s["sucursal_nombre"],
+                    "total": int(consultas_tot_map.get(s["sucursal_id"], 0)),
+                }
+                for s in suc_list
+            ],
+            "ventas_por_mes_por_sucursal": [
+                {
+                    "sucursal_id": s["sucursal_id"],
+                    "sucursal_nombre": s["sucursal_nombre"],
+                    "serie": [
+                        {
+                            "mes": idx,
+                            "etiqueta": meses_label[idx - 1],
+                            "total": float(ventas_mes_map.get((s["sucursal_id"], idx), 0)),
+                        }
+                        for idx in range(1, 13)
+                    ],
+                }
+                for s in suc_list
+            ],
+            "pacientes_por_mes_por_sucursal": [
+                {
+                    "sucursal_id": s["sucursal_id"],
+                    "sucursal_nombre": s["sucursal_nombre"],
+                    "serie": [
+                        {
+                            "mes": idx,
+                            "etiqueta": meses_label[idx - 1],
+                            "total": int(pacientes_mes_map.get((s["sucursal_id"], idx), 0)),
+                        }
+                        for idx in range(1, 13)
+                    ],
+                }
+                for s in suc_list
+            ],
+        }
 
     return {
         "sucursal_id": sucursal_id,
@@ -2068,6 +4088,7 @@ def estadisticas_resumen(
             "fecha_hasta": str(fecha_hasta),
             "label": periodo_label,
         },
+        "filtro_paciente": q_name or None,
         "consultas": {
             "total": int(c_total or 0),
             "no_show": int(c_no_show or 0),
@@ -2076,12 +4097,35 @@ def estadisticas_resumen(
         },
         "ventas": {
             "total": int(v_total or 0),
-            "monto_total": float(v_monto_total or 0),
+            "monto_total": ventas_monto_total_visible,
             "por_dia": ventas_series,
             "por_metodo_pago": ventas_metodo,
         },
         "productos_top": productos_top,
         "top_productos_mes": productos_top,
+        "top_pacientes_mes_actual": {
+            "label": f"Top 10 pacientes por compra total ({hoy.month:02d}/{hoy.year})",
+            "fecha_desde": str(mes_actual_desde),
+            "fecha_hasta": str(mes_actual_hasta),
+            "rows": top_pacientes_mes_actual,
+        },
+        "top_pacientes_consultas": {
+            "label": f"Top 10 pacientes con más consultas ({periodo_label})",
+            "fecha_desde": str(fecha_desde),
+            "fecha_hasta": str(fecha_hasta),
+            "rows": top_pacientes_consultas,
+        },
+        "pacientes_creados": {
+            "modo": pacientes_modo_clean,
+            "label": pacientes_label,
+            "serie": pacientes_series,
+        },
+        "anual_mensual": {
+            "anio": int(series_year),
+            "ingresos_por_mes": ingresos_por_mes,
+            "consultas_por_mes": consultas_por_mes,
+        },
+        "comparativo_sucursales": comparativo_sucursales,
     }
 
 
@@ -2093,13 +4137,14 @@ def listar_consultas(
     fecha_hasta: str | None = None,
     anio: int | None = None,
     mes: int | None = None,
+    q: str | None = None,
     user=Depends(get_current_user),
 ):
 
     require_roles(user, ("admin", "recepcion", "doctor"))
     sucursal_id = force_sucursal(user, sucursal_id)
 
-    where = ["v.activo = true", "c.activo = true"]
+    where = ["v.activo = true"]
     params = []
 
     if sucursal_id is not None:
@@ -2131,20 +4176,44 @@ def listar_consultas(
         where.append("EXTRACT(YEAR FROM v.fecha_hora) = %s")
         params.append(anio)
     else:
-        where.append("DATE(v.fecha_hora) = CURRENT_DATE")
+        # Si hay texto de búsqueda, no limitar automáticamente a "hoy"
+        if not (q and q.strip()):
+            where.append("DATE(v.fecha_hora) = CURRENT_DATE")
+
+    if q and q.strip():
+        qq = f"%{q.strip()}%"
+        where.append(
+            """
+            (
+              CAST(v.consulta_id AS TEXT) ILIKE %s
+              OR CONCAT_WS(' ', v.primer_nombre, v.segundo_nombre, v.apellido_paterno, v.apellido_materno) ILIKE %s
+              OR CONCAT_WS(' ', v.doctor_primer_nombre, v.doctor_apellido_paterno) ILIKE %s
+              OR COALESCE(v.etapa_consulta, '') ILIKE %s
+              OR COALESCE(v.motivo_consulta, '') ILIKE %s
+              OR TO_CHAR(v.fecha_hora AT TIME ZONE 'America/Mexico_City', 'YYYY-MM-DD HH24:MI') ILIKE %s
+            )
+            """
+        )
+        params.extend([qq, qq, qq, qq, qq, qq])
 
     where_sql = "WHERE " + " AND ".join(where)
 
     sql = f"""
     SELECT
-      v.consulta_id, v.fecha_hora, v.tipo_consulta,
-      v.doctor_primer_nombre, v.doctor_apellido_paterno,
-      v.motivo, v.diagnostico, v.plan, v.notas,
-      v.paciente_id, v.primer_nombre, v.segundo_nombre, v.apellido_paterno, v.apellido_materno,
-      v.sucursal_id, v.sucursal_nombre,
-      c.como_nos_conocio
-    FROM core.v_consultas_forma v
-    JOIN core.consultas c ON c.consulta_id = v.consulta_id
+      v.consulta_id,
+      v.fecha_hora,
+      v.doctor_primer_nombre,
+      v.doctor_apellido_paterno,
+      v.notas,
+      v.paciente_id,
+      v.paciente_nombre,
+      v.sucursal_id,
+      v.sucursal_nombre,
+      v.agenda_inicio,
+      v.agenda_fin,
+      v.etapa_consulta,
+      v.motivo_consulta
+    FROM core.consultas_detalle v
     {where_sql}
     ORDER BY v.fecha_hora DESC, v.consulta_id DESC
     LIMIT %s;
@@ -2157,25 +4226,33 @@ def listar_consultas(
             cur.execute(sql, tuple(params))
             rows = cur.fetchall()
 
-    return [
-        {
-            "consulta_id": r[0],
-            "fecha_hora": str(r[1]) if r[1] else None,
-            "tipo_consulta": r[2],
-            "doctor_primer_nombre": r[3],
-            "doctor_apellido_paterno": r[4],
-            "motivo": r[5],
-            "diagnostico": r[6],
-            "plan": r[7],
-            "notas": r[8],
-            "paciente_id": r[9],
-            "paciente_nombre": " ".join([x for x in [r[10], r[11], r[12], r[13]] if x]),
-            "sucursal_id": r[14],
-            "sucursal_nombre": r[15],
-            "como_nos_conocio": r[16],
-        }
-        for r in rows
-    ]
+    estado_map = _estado_paciente_map(sucursal_id, [int(r[5]) for r in rows])
+
+    out = []
+    for r in rows:
+        etapa_consulta, motivo_consulta = resolve_consulta_read_fields(r[11], r[12], None)
+        tipo_consulta_compuesto = compose_consulta_tipo(etapa_consulta, motivo_consulta)
+        out.append(
+            {
+                "consulta_id": r[0],
+                "fecha_hora": str(r[1]) if r[1] else None,
+                "tipo_consulta": tipo_consulta_compuesto,
+                "etapa_consulta": etapa_consulta,
+                "motivo_consulta": motivo_consulta,
+                "doctor_primer_nombre": r[2],
+                "doctor_apellido_paterno": r[3],
+                "notas": r[4],
+                "paciente_id": r[5],
+                "paciente_nombre": r[6],
+                "sucursal_id": r[7],
+                "sucursal_nombre": r[8],
+                "como_nos_conocio": None,
+                "agenda_inicio": str(r[9]) if r[9] else None,
+                "agenda_fin": str(r[10]) if r[10] else None,
+                "estado_paciente": estado_map.get(int(r[5]), "nuevo"),
+            }
+        )
+    return out
 
 
 @app.get("/pacientes/{paciente_id}/consultas", summary="Historial de consultas por paciente (y sucursal)")
@@ -2199,14 +4276,20 @@ def historial_consultas_paciente(
 
             sql = """
             SELECT
-              v.consulta_id, v.fecha_hora, v.tipo_consulta,
-              v.doctor_primer_nombre, v.doctor_apellido_paterno,
-              v.motivo, v.diagnostico, v.plan, v.notas,
-              v.paciente_id, v.primer_nombre, v.segundo_nombre, v.apellido_paterno, v.apellido_materno,
-              v.sucursal_id, v.sucursal_nombre,
-              c.como_nos_conocio
-            FROM core.v_consultas_forma v
-            JOIN core.consultas c ON c.consulta_id = v.consulta_id
+              v.consulta_id,
+              v.fecha_hora,
+              v.doctor_primer_nombre,
+              v.doctor_apellido_paterno,
+              v.notas,
+              v.paciente_id,
+              v.paciente_nombre,
+              v.sucursal_id,
+              v.sucursal_nombre,
+              v.agenda_inicio,
+              v.agenda_fin,
+              v.etapa_consulta,
+              v.motivo_consulta
+            FROM core.consultas_detalle v
             WHERE v.paciente_id = %s AND v.sucursal_id = %s AND v.activo = true
             ORDER BY v.consulta_id DESC
             LIMIT %s;
@@ -2214,25 +4297,30 @@ def historial_consultas_paciente(
             cur.execute(sql, (paciente_id, sucursal_id, limit))
             rows = cur.fetchall()
 
-    return [
-        {
-            "consulta_id": r[0],
-            "fecha_hora": str(r[1]) if r[1] else None,
-            "tipo_consulta": r[2],
-            "doctor_primer_nombre": r[3],
-            "doctor_apellido_paterno": r[4],
-            "motivo": r[5],
-            "diagnostico": r[6],
-            "plan": r[7],
-            "notas": r[8],
-            "paciente_id": r[9],
-            "paciente_nombre": " ".join([x for x in [r[10], r[11], r[12], r[13]] if x]),
-            "sucursal_id": r[14],
-            "sucursal_nombre": r[15],
-            "como_nos_conocio": r[16],
-        }
-        for r in rows
-    ]
+    out = []
+    for r in rows:
+        etapa_consulta, motivo_consulta = resolve_consulta_read_fields(r[11], r[12], None)
+        tipo_consulta_compuesto = compose_consulta_tipo(etapa_consulta, motivo_consulta)
+        out.append(
+            {
+                "consulta_id": r[0],
+                "fecha_hora": str(r[1]) if r[1] else None,
+                "tipo_consulta": tipo_consulta_compuesto,
+                "etapa_consulta": etapa_consulta,
+                "motivo_consulta": motivo_consulta,
+                "doctor_primer_nombre": r[2],
+                "doctor_apellido_paterno": r[3],
+                "notas": r[4],
+                "paciente_id": r[5],
+                "paciente_nombre": r[6],
+                "sucursal_id": r[7],
+                "sucursal_nombre": r[8],
+                "como_nos_conocio": None,
+                "agenda_inicio": str(r[9]) if r[9] else None,
+                "agenda_fin": str(r[10]) if r[10] else None,
+            }
+        )
+    return out
 
 
 @app.get("/pacientes/{paciente_id}/ventas", summary="Historial de ventas por paciente (y sucursal)")
@@ -2265,16 +4353,12 @@ def historial_ventas_paciente(
                   v.adelanto_aplica,
                   v.adelanto_monto,
                   v.adelanto_metodo,
-                  v.como_nos_conocio,
                   v.notas,
                   v.paciente_id,
-                  p.primer_nombre,
-                  p.segundo_nombre,
-                  p.apellido_paterno,
-                  p.apellido_materno,
-                  v.sucursal_id
-                FROM core.ventas v
-                JOIN core.pacientes p ON p.paciente_id = v.paciente_id
+                  v.paciente_nombre,
+                  v.sucursal_id,
+                  v.sucursal_nombre
+                FROM core.ventas_detalle v
                 WHERE v.paciente_id = %s
                   AND v.sucursal_id = %s
                   AND v.activo = true
@@ -2295,11 +4379,12 @@ def historial_ventas_paciente(
             "adelanto_aplica": bool(r[5]),
             "adelanto_monto": float(r[6]) if r[6] is not None else None,
             "adelanto_metodo": r[7],
-            "como_nos_conocio": r[8],
-            "notas": r[9],
-            "paciente_id": r[10],
-            "paciente_nombre": " ".join([x for x in [r[11], r[12], r[13], r[14]] if x]),
-            "sucursal_id": r[15],
+            "como_nos_conocio": None,
+            "notas": r[8],
+            "paciente_id": r[9],
+            "paciente_nombre": r[10],
+            "sucursal_id": r[11],
+            "sucursal_nombre": r[12],
         }
         for r in rows
     ]
@@ -2317,42 +4402,56 @@ def get_historia_clinica(
 
     with psycopg.connect(DB_CONNINFO) as conn:
         with conn.cursor() as cur:
-
-            cur.execute(
-                """
-                SELECT historia_id, paciente_id, sucursal_id,
-                       od_esfera, od_cilindro, od_eje, od_add,
-                       oi_esfera, oi_cilindro, oi_eje, oi_add,
-                       dp,
-                       queratometria_od, queratometria_oi,
-                       presion_od, presion_oi,
-                       paciente_fecha_nacimiento, paciente_edad,
-                       paciente_primer_nombre, paciente_segundo_nombre,
-                       paciente_apellido_paterno, paciente_apellido_materno,
-                       paciente_telefono, paciente_correo, puesto_laboral,
-                       historia, antecedentes,
-                       antecedentes_generales, antecedentes_familiares, antecedentes_otro,
-                       alergias, enfermedades, cirugias,
-                       fumador_tabaco, fumador_marihuana, consumidor_alcohol, diabetes, tipo_diabetes, deportista,
-                       ppc, lejos, cerca, tension, mmhg, di,
-                       avsinrxod, avsinrixoi, avsinrxoi, capvisualod, capvisualoi, avrxantod, avrxantoi,
-                       queraod, queraoi, retinosod, retinosoi, subjeoi, adicionod, adicionoi,
-                       papila, biomicroscopia,
-                       doctor_atencion,
-                       diagnostico_general, observaciones,
-                       created_by, created_at, updated_at, activo
-                FROM core.historias_clinicas
-                WHERE paciente_id = %s
-                  AND sucursal_id = %s
-                  AND activo = TRUE
-                """,
-                (paciente_id, sucursal_id),
-            )
+            query_historia = """
+            SELECT historia_id, paciente_id, sucursal_id,
+                   od_esfera, od_cilindro, od_eje, od_add,
+                   oi_esfera, oi_cilindro, oi_eje, oi_add,
+                   dp,
+                   queratometria_od, queratometria_oi,
+                   presion_od, presion_oi,
+                   paciente_fecha_nacimiento, paciente_edad,
+                   paciente_primer_nombre, paciente_segundo_nombre,
+                   paciente_apellido_paterno, paciente_apellido_materno,
+                   paciente_telefono, paciente_correo,
+                   paciente_calle, paciente_numero, paciente_colonia, paciente_codigo_postal, paciente_municipio, paciente_estado, paciente_pais,
+                   puesto_laboral,
+                   antecedentes,
+                   antecedentes_generales, antecedentes_otro,
+                   alergias, enfermedades, cirugias,
+                   fumador_tabaco, fumador_marihuana, consumidor_alcohol, diabetes, tipo_diabetes, deportista,
+                   horas_pantalla_dia, conduccion_nocturna_horas, exposicion_uv,
+                   tabaquismo_estado, tabaquismo_intensidad, tabaquismo_anios, tabaquismo_anios_desde_dejo,
+                   alcohol_frecuencia, alcohol_copas,
+                   marihuana_frecuencia, marihuana_forma,
+                   drogas_consumo, drogas_tipos, drogas_frecuencia,
+                   deporte_frecuencia, deporte_duracion, deporte_tipos,
+                   hipertension, medicamentos,
+                   diabetes_estado, diabetes_control, diabetes_anios, diabetes_tratamiento,
+                   usa_lentes, tipo_lentes_actual, tiempo_uso_lentes,
+                   lentes_contacto_horas_dia, lentes_contacto_dias_semana, sintomas,
+                   ppc, lejos, cerca, tension, mmhg, di,
+                   avsinrxod, avsinrixoi, capvisualod, capvisualoi, avrxantod, avrxantoi,
+                   queraod, queraoi, retinosod, retinosoi, subjeod, subjeoi, adicionod, adicionoi,
+                   papila, biomicroscopia,
+                   doctor_atencion,
+                   diagnostico_general,
+                   created_by, created_at, created_at_tz, updated_at, activo
+            FROM core.historias_clinicas
+            WHERE paciente_id = %s
+              AND sucursal_id = %s
+              AND activo = TRUE
+            """
+            cur.execute(query_historia, (paciente_id, sucursal_id))
 
             row = cur.fetchone()
 
             if not row:
-                raise HTTPException(status_code=404, detail="Historia clínica no encontrada.")
+                _ensure_historia_clinica_base(cur, paciente_id, sucursal_id, user["username"])
+                cur.execute(query_historia, (paciente_id, sucursal_id))
+                row = cur.fetchone()
+                if not row:
+                    raise HTTPException(status_code=404, detail="Historia clínica no encontrada.")
+                conn.commit()
 
             columns = [desc[0] for desc in cur.description]
             return dict(zip(columns, row))
@@ -2368,6 +4467,7 @@ def create_historia_clinica(
 ):
     require_roles(user, ("admin", "doctor"))
     sucursal_id = force_sucursal(user, sucursal_id)
+    sanitize_model_strings(data)
 
     with psycopg.connect(DB_CONNINFO) as conn:
         with conn.cursor() as cur:
@@ -2377,7 +4477,7 @@ def create_historia_clinica(
                 """
                 SELECT fecha_nacimiento, primer_nombre, segundo_nombre,
                        apellido_paterno, apellido_materno,
-                       telefono, correo, ocupacion
+                       telefono, correo, calle, numero, colonia, cp, municipio, estado, pais
                 FROM core.pacientes
                 WHERE paciente_id = %s
                   AND sucursal_id = %s
@@ -2396,7 +4496,13 @@ def create_historia_clinica(
                 paciente_apellido_materno,
                 paciente_telefono,
                 paciente_correo,
-                paciente_puesto_laboral,
+                paciente_calle,
+                paciente_numero,
+                paciente_colonia,
+                paciente_codigo_postal,
+                paciente_municipio,
+                paciente_estado,
+                paciente_pais,
             ) = paciente_row
 
             paciente_edad = None
@@ -2438,17 +4544,20 @@ def create_historia_clinica(
                     paciente_fecha_nacimiento, paciente_edad,
                     paciente_primer_nombre, paciente_segundo_nombre,
                     paciente_apellido_paterno, paciente_apellido_materno,
-                    paciente_telefono, paciente_correo, puesto_laboral,
-                    historia, antecedentes,
-                    antecedentes_generales, antecedentes_familiares, antecedentes_otro,
+                    paciente_telefono, paciente_correo,
+                    paciente_calle, paciente_numero, paciente_colonia, paciente_codigo_postal, paciente_municipio, paciente_estado, paciente_pais,
+                    puesto_laboral,
+                    antecedentes,
+                    antecedentes_generales, antecedentes_otro,
                     alergias, enfermedades, cirugias,
                     fumador_tabaco, fumador_marihuana, consumidor_alcohol, diabetes, tipo_diabetes, deportista,
                     ppc, lejos, cerca, tension, mmhg, di,
-                    avsinrxod, avsinrixoi, avsinrxoi, capvisualod, capvisualoi, avrxantod, avrxantoi,
-                    queraod, queraoi, retinosod, retinosoi, subjeoi, adicionod, adicionoi,
+                    avsinrxod, avsinrixoi, capvisualod, capvisualoi, avrxantod, avrxantoi,
+                    queraod, queraoi, retinosod, retinosoi, subjeod, subjeoi, adicionod, adicionoi,
                     papila, biomicroscopia,
                     doctor_atencion,
-                    diagnostico_general, observaciones,
+                    diagnostico_general,
+                    created_at_tz,
                     created_by
                 )
                 VALUES (
@@ -2461,9 +4570,9 @@ def create_historia_clinica(
                     %s, %s,
                     %s, %s,
                     %s, %s,
-                    %s, %s, %s,
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                    %s,
                     %s, %s,
-                    %s, %s, %s,
                     %s, %s, %s,
                     %s, %s, %s, %s, %s, %s,
                     %s, %s, %s, %s, %s, %s,
@@ -2471,7 +4580,8 @@ def create_historia_clinica(
                     %s, %s, %s, %s, %s, %s, %s,
                     %s, %s,
                     %s,
-                    %s, %s,
+                    %s,
+                    NOW(),
                     %s
                 )
                 RETURNING *
@@ -2491,20 +4601,26 @@ def create_historia_clinica(
                     data.paciente_apellido_materno or paciente_apellido_materno,
                     data.paciente_telefono or paciente_telefono,
                     data.paciente_correo or paciente_correo,
-                    data.puesto_laboral or paciente_puesto_laboral,
-                    data.historia, data.antecedentes,
-                    data.antecedentes_generales, data.antecedentes_familiares, data.antecedentes_otro,
+                    data.paciente_calle or paciente_calle,
+                    data.paciente_numero or paciente_numero,
+                    data.paciente_colonia or paciente_colonia,
+                    data.paciente_codigo_postal or paciente_codigo_postal,
+                    data.paciente_municipio or paciente_municipio,
+                    data.paciente_estado or paciente_estado,
+                    data.paciente_pais or paciente_pais,
+                    data.puesto_laboral,
+                    data.antecedentes,
+                    data.antecedentes_generales, data.antecedentes_otro,
                     data.alergias, data.enfermedades, data.cirugias,
                     data.fumador_tabaco, data.fumador_marihuana, data.consumidor_alcohol, data.diabetes, data.tipo_diabetes, data.deportista,
                     data.ppc, data.lejos, data.cerca, data.tension, data.mmhg, data.di,
                     data.avsinrxod,
-                    (data.avsinrixoi if data.avsinrixoi is not None else data.avsinrxoi),
-                    (data.avsinrxoi if data.avsinrxoi is not None else data.avsinrixoi),
+                    data.avsinrixoi,
                     data.capvisualod, data.capvisualoi, data.avrxantod, data.avrxantoi,
-                    data.queraod, data.queraoi, data.retinosod, data.retinosoi, data.subjeoi, data.adicionod, data.adicionoi,
+                    data.queraod, data.queraoi, data.retinosod, data.retinosoi, data.subjeod, data.subjeoi, data.adicionod, data.adicionoi,
                     data.papila, data.biomicroscopia,
                     data.doctor_atencion,
-                    data.diagnostico_general, data.observaciones,
+                    data.diagnostico_general,
                     user["username"],
                 ),
             )
@@ -2526,10 +4642,18 @@ def crear_consulta(c: ConsultaCreate, user=Depends(get_current_user)):
 
     require_roles(user, ("admin", "doctor", "recepcion"))
     c.sucursal_id = force_sucursal(user, c.sucursal_id)
+    sanitize_model_strings(c)
 
     if user["rol"] == "admin" and c.sucursal_id is None:
         raise HTTPException(status_code=400, detail="Sucursal es requerida.")
-    c.como_nos_conocio = normalize_como_nos_conocio(c.como_nos_conocio)
+    etapa_consulta, motivo_consulta, tipo_consulta_compuesto = resolve_consulta_etapa_motivo_tipo(
+        c.etapa_consulta,
+        c.motivo_consulta,
+        c.tipo_consulta,
+    )
+    c.etapa_consulta = etapa_consulta
+    c.motivo_consulta = motivo_consulta
+    c.tipo_consulta = tipo_consulta_compuesto
 
     agenda_event_id: str | None = None
     try:
@@ -2537,7 +4661,7 @@ def crear_consulta(c: ConsultaCreate, user=Depends(get_current_user)):
             with conn.cursor() as cur:
 
                 cur.execute(
-                    "SELECT activa FROM core.sucursales WHERE sucursal_id = %s;",
+                    "SELECT activa, nombre, ciudad, estado FROM core.sucursales WHERE sucursal_id = %s;",
                     (c.sucursal_id,),
                 )
                 row = cur.fetchone()
@@ -2545,6 +4669,10 @@ def crear_consulta(c: ConsultaCreate, user=Depends(get_current_user)):
                     raise HTTPException(status_code=400, detail="Sucursal no existe.")
                 if row[0] is not True:
                     raise HTTPException(status_code=400, detail="Sucursal está inactiva.")
+                sucursal_nombre = str(row[1]).strip() if row[1] else None
+                ciudad = str(row[2]).strip() if row[2] else ""
+                estado = str(row[3]).strip() if row[3] else ""
+                sucursal_location = ", ".join([x for x in [ciudad, estado] if x]) or None
 
                 cur.execute(
                     """
@@ -2565,40 +4693,46 @@ def crear_consulta(c: ConsultaCreate, user=Depends(get_current_user)):
                 agenda_start: datetime | None = None
                 agenda_end: datetime | None = None
                 calendar_enabled = _calendar_feature_enabled()
-                if c.agendar_en_calendario and calendar_enabled:
-                    if not c.agenda_inicio or not c.agenda_fin:
-                        raise HTTPException(
-                            status_code=400,
-                            detail="Para agendar en calendario debes enviar agenda_inicio y agenda_fin.",
-                        )
-                    tz_name = _timezone_for_sucursal(c.sucursal_id)
-                    agenda_start = _parse_dt_in_tz(c.agenda_inicio, tz_name)
-                    agenda_end = _parse_dt_in_tz(c.agenda_fin, tz_name)
-                    if agenda_end <= agenda_start:
-                        raise HTTPException(status_code=400, detail="agenda_fin debe ser mayor que agenda_inicio.")
-                    _validate_in_business_hours(c.sucursal_id, agenda_start, agenda_end)
-
-                    cal_id = _calendar_id_for_sucursal(c.sucursal_id)
-                    busy = _fetch_busy_intervals(
-                        cal_id,
-                        tz_name,
-                        agenda_start,
-                        agenda_end,
-                        sucursal_id=c.sucursal_id,
+                if not calendar_enabled:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Google Calendar es obligatorio para crear consultas. Verifica configuración OAuth y calendario por sucursal.",
                     )
-                    if _has_overlap(agenda_start, agenda_end, busy):
-                        raise HTTPException(
-                            status_code=409,
-                            detail="El horario seleccionado ya no está disponible en Google Calendar.",
-                        )
+                if not c.agenda_inicio or not c.agenda_fin:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Para crear consulta debes enviar agenda_inicio y agenda_fin.",
+                    )
+
+                tz_name = _timezone_for_sucursal(c.sucursal_id)
+                agenda_start = _parse_dt_in_tz(c.agenda_inicio, tz_name)
+                agenda_end = _parse_dt_in_tz(c.agenda_fin, tz_name)
+                if agenda_end <= agenda_start:
+                    raise HTTPException(status_code=400, detail="agenda_fin debe ser mayor que agenda_inicio.")
+                _validate_in_business_hours(c.sucursal_id, agenda_start, agenda_end)
+
+                cal_id = _calendar_id_for_sucursal(c.sucursal_id)
+                busy = _fetch_busy_intervals(
+                    cal_id,
+                    tz_name,
+                    agenda_start,
+                    agenda_end,
+                    sucursal_id=c.sucursal_id,
+                )
+                if _has_overlap(agenda_start, agenda_end, busy):
+                    raise HTTPException(
+                        status_code=409,
+                        detail="El horario seleccionado ya no está disponible en Google Calendar.",
+                    )
 
                 sql = """
                 INSERT INTO core.consultas (
-                  paciente_id, sucursal_id, tipo_consulta,
+                  paciente_id, sucursal_id, etapa_consulta, motivo_consulta,
                   doctor_primer_nombre, doctor_apellido_paterno,
-                  motivo, diagnostico, plan, notas, como_nos_conocio
+                  notas,
+                  agenda_inicio, agenda_fin
                 )
-                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
                 RETURNING consulta_id;
                 """
                 cur.execute(
@@ -2606,19 +4740,18 @@ def crear_consulta(c: ConsultaCreate, user=Depends(get_current_user)):
                     (
                         c.paciente_id,
                         c.sucursal_id,
-                        c.tipo_consulta,
+                        c.etapa_consulta,
+                        c.motivo_consulta,
                         c.doctor_primer_nombre,
                         c.doctor_apellido_paterno,
-                        c.motivo,
-                        c.diagnostico,
-                        c.plan,
                         c.notas,
-                        c.como_nos_conocio,
+                        agenda_start,
+                        agenda_end,
                     ),
                 )
                 new_id = cur.fetchone()[0]
 
-                if c.agendar_en_calendario and calendar_enabled and agenda_start and agenda_end:
+                if agenda_start and agenda_end:
                     doctor_nombre = " ".join(
                         [
                             x
@@ -2627,6 +4760,7 @@ def crear_consulta(c: ConsultaCreate, user=Depends(get_current_user)):
                         ]
                     )
                     agenda_event_id = _create_calendar_event_for_consulta(
+                        consulta_id=new_id,
                         sucursal_id=c.sucursal_id,
                         start_dt=agenda_start,
                         end_dt=agenda_end,
@@ -2634,7 +4768,10 @@ def crear_consulta(c: ConsultaCreate, user=Depends(get_current_user)):
                         paciente_nombre=paciente_nombre,
                         paciente_correo=paciente_correo,
                         tipo_consulta=c.tipo_consulta,
+                        doctor_id=str(user.get("user_id") or user.get("username") or ""),
                         doctor_nombre=doctor_nombre,
+                        sucursal_nombre=sucursal_nombre,
+                        sucursal_location=sucursal_location,
                     )
                     if agenda_event_id:
                         cur.execute(
@@ -2660,7 +4797,7 @@ def crear_consulta(c: ConsultaCreate, user=Depends(get_current_user)):
 
 
 
-@app.delete("/consultas/{consulta_id}", summary="Eliminar consulta (soft delete)")
+@app.delete("/consultas/{consulta_id}", summary="Eliminar consulta (definitivo)")
 def eliminar_consulta(consulta_id: int, sucursal_id: int, user=Depends(get_current_user)):
 
     require_roles(user, ("admin", "doctor", "recepcion"))
@@ -2670,11 +4807,9 @@ def eliminar_consulta(consulta_id: int, sucursal_id: int, user=Depends(get_curre
         raise HTTPException(status_code=400, detail="Sucursal es requerida.")
 
     sql = """
-    UPDATE core.consultas
-    SET activo = false
+    DELETE FROM core.consultas
     WHERE consulta_id = %s
       AND sucursal_id = %s
-      AND activo = true
     RETURNING consulta_id, agenda_event_id;
     """
 
@@ -2684,7 +4819,7 @@ def eliminar_consulta(consulta_id: int, sucursal_id: int, user=Depends(get_curre
                 cur.execute(sql, (consulta_id, sucursal_id))
                 row = cur.fetchone()
                 if row is None:
-                    raise HTTPException(status_code=404, detail="Consulta no existe en esa sucursal o ya estaba eliminada.")
+                    raise HTTPException(status_code=404, detail="Consulta no existe en esa sucursal.")
                 agenda_event_id = row[1]
                 if agenda_event_id:
                     _delete_calendar_event_for_consulta(
@@ -2693,7 +4828,7 @@ def eliminar_consulta(consulta_id: int, sucursal_id: int, user=Depends(get_curre
                     )
             conn.commit()
 
-        return {"deleted_consulta_id": row[0], "soft_deleted": True, "calendar_event_deleted": bool(row[1])}
+        return {"deleted_consulta_id": row[0], "hard_deleted": True, "calendar_event_deleted": bool(row[1])}
 
     except HTTPException:
         raise
@@ -2705,10 +4840,18 @@ def eliminar_consulta(consulta_id: int, sucursal_id: int, user=Depends(get_curre
 def actualizar_consulta(consulta_id: int, c: ConsultaCreate, user=Depends(get_current_user)):
     require_roles(user, ("admin", "doctor", "recepcion"))
     c.sucursal_id = force_sucursal(user, c.sucursal_id)
+    sanitize_model_strings(c)
 
     if user["rol"] == "admin" and c.sucursal_id is None:
         raise HTTPException(status_code=400, detail="Sucursal es requerida.")
-    c.como_nos_conocio = normalize_como_nos_conocio(c.como_nos_conocio)
+    etapa_consulta, motivo_consulta, tipo_consulta_compuesto = resolve_consulta_etapa_motivo_tipo(
+        c.etapa_consulta,
+        c.motivo_consulta,
+        c.tipo_consulta,
+    )
+    c.etapa_consulta = etapa_consulta
+    c.motivo_consulta = motivo_consulta
+    c.tipo_consulta = tipo_consulta_compuesto
 
     try:
         with psycopg.connect(DB_CONNINFO) as conn:
@@ -2740,14 +4883,11 @@ def actualizar_consulta(consulta_id: int, c: ConsultaCreate, user=Depends(get_cu
                     """
                     UPDATE core.consultas
                     SET paciente_id = %s,
-                        tipo_consulta = %s,
+                        etapa_consulta = %s,
+                        motivo_consulta = %s,
                         doctor_primer_nombre = %s,
                         doctor_apellido_paterno = %s,
-                        motivo = %s,
-                        diagnostico = %s,
-                        plan = %s,
-                        notas = %s,
-                        como_nos_conocio = %s
+                        notas = %s
                     WHERE consulta_id = %s
                       AND sucursal_id = %s
                       AND activo = true
@@ -2755,14 +4895,11 @@ def actualizar_consulta(consulta_id: int, c: ConsultaCreate, user=Depends(get_cu
                     """,
                     (
                         c.paciente_id,
-                        c.tipo_consulta,
+                        c.etapa_consulta,
+                        c.motivo_consulta,
                         c.doctor_primer_nombre,
                         c.doctor_apellido_paterno,
-                        c.motivo,
-                        c.diagnostico,
-                        c.plan,
                         c.notas,
-                        c.como_nos_conocio,
                         consulta_id,
                         c.sucursal_id,
                     ),
@@ -2780,7 +4917,7 @@ def actualizar_consulta(consulta_id: int, c: ConsultaCreate, user=Depends(get_cu
     
 
     
-@app.delete("/pacientes/{paciente_id}", summary="Eliminar paciente (soft delete)")
+@app.delete("/pacientes/{paciente_id}", summary="Eliminar paciente (definitivo + relacionados)")
 def eliminar_paciente(paciente_id: int, sucursal_id: int, user=Depends(get_current_user)):
 
     require_roles(user, ("admin",))
@@ -2790,33 +4927,65 @@ def eliminar_paciente(paciente_id: int, sucursal_id: int, user=Depends(get_curre
     try:
         with psycopg.connect(DB_CONNINFO) as conn:
             with conn.cursor() as cur:
-
-                # 1) verificar que no tenga consultas activas
+                # Consultas ligadas para borrar también evento en Google Calendar.
                 cur.execute(
                     """
-                    SELECT 1
+                    SELECT consulta_id, agenda_event_id
                     FROM core.consultas
                     WHERE paciente_id = %s
-                      AND sucursal_id = %s
-                      AND activo = true
-                    LIMIT 1;
+                      AND sucursal_id = %s;
                     """,
                     (paciente_id, sucursal_id),
                 )
-                if cur.fetchone() is not None:
-                    raise HTTPException(
-                        status_code=409,
-                        detail="No se puede eliminar: el paciente tiene consultas activas.",
-                    )
+                consultas_rows = cur.fetchall()
+                calendar_deleted = 0
+                for _, agenda_event_id in consultas_rows:
+                    if agenda_event_id:
+                        try:
+                            _delete_calendar_event_for_consulta(
+                                sucursal_id=sucursal_id,
+                                event_id=str(agenda_event_id),
+                            )
+                            calendar_deleted += 1
+                        except Exception:
+                            # Si falla Calendar, priorizamos limpieza de DB.
+                            pass
 
-                # 2) hacer soft delete del paciente
                 cur.execute(
                     """
-                    UPDATE core.pacientes
-                    SET activo = false
+                    DELETE FROM core.historias_clinicas
+                    WHERE paciente_id = %s
+                      AND sucursal_id = %s;
+                    """,
+                    (paciente_id, sucursal_id),
+                )
+                historias_deleted = int(cur.rowcount or 0)
+
+                cur.execute(
+                    """
+                    DELETE FROM core.consultas
+                    WHERE paciente_id = %s
+                      AND sucursal_id = %s;
+                    """,
+                    (paciente_id, sucursal_id),
+                )
+                consultas_deleted = int(cur.rowcount or 0)
+
+                cur.execute(
+                    """
+                    DELETE FROM core.ventas
+                    WHERE paciente_id = %s
+                      AND sucursal_id = %s;
+                    """,
+                    (paciente_id, sucursal_id),
+                )
+                ventas_deleted = int(cur.rowcount or 0)
+
+                cur.execute(
+                    """
+                    DELETE FROM core.pacientes
                     WHERE paciente_id = %s
                       AND sucursal_id = %s
-                      AND activo = true
                     RETURNING paciente_id;
                     """,
                     (paciente_id, sucursal_id),
@@ -2828,10 +4997,19 @@ def eliminar_paciente(paciente_id: int, sucursal_id: int, user=Depends(get_curre
         if row is None:
             raise HTTPException(
                 status_code=404,
-                detail="Paciente no existe en esa sucursal o ya estaba eliminado.",
+                detail="Paciente no existe en esa sucursal.",
             )
 
-        return {"deleted_paciente_id": row[0], "soft_deleted": True}
+        return {
+            "deleted_paciente_id": row[0],
+            "hard_deleted": True,
+            "related_deleted": {
+                "historias_clinicas": historias_deleted,
+                "consultas": consultas_deleted,
+                "ventas": ventas_deleted,
+                "calendar_events_deleted": calendar_deleted,
+            },
+        }
 
     except HTTPException:
         raise

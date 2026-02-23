@@ -1,0 +1,47 @@
+.olm-date-input-wrapper {
+  display: block;
+  width: 100%;
+}
+
+.olm-date-input {
+  width: 100%;
+  padding: 10px;
+  border-radius: 10px;
+  border: 1px solid #ddd;
+  background: #fff;
+  color: #1f130a;
+  font-size: 1rem;
+  box-sizing: border-box;
+}
+
+.olm-date-input:focus {
+  outline: none;
+  border-color: #17817a;
+  box-shadow: 0 0 0 2px rgba(23, 129, 122, 0.18);
+}
+
+.olm-date-popper {
+  z-index: 1200;
+}
+
+.react-datepicker {
+  font-family: inherit;
+  border: 1px solid #e8d9c7;
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.react-datepicker__header {
+  background: #fff9f2;
+  border-bottom: 1px solid #e8d9c7;
+}
+
+.react-datepicker__day--selected,
+.react-datepicker__day--keyboard-selected {
+  background: #17817a;
+  color: #fff;
+}
+
+.react-datepicker__day:hover {
+  background: #d7f3f0;
+}
