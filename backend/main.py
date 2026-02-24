@@ -44,10 +44,18 @@ def _resolve_cors_origins() -> list[str]:
     ]
 
 
-DB_CONNINFO = os.getenv(
-    "DB_CONNINFO",
-    "host=localhost port=5432 dbname=eyecare user=alejandromoncadag",
+DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
+
+DB_CONNINFO = (
+    DATABASE_URL
+    if DATABASE_URL
+    else os.getenv(
+        "DB_CONNINFO",
+        "host=localhost port=5432 dbname=eyecare user=alejandromoncadag",
+    )
 )
+
+
 CORS_ORIGINS = _resolve_cors_origins()
 CORS_ALLOW_CREDENTIALS = "*" not in CORS_ORIGINS
 
@@ -80,6 +88,7 @@ def ensure_historia_schema():
         with conn.cursor() as cur:
             cur.execute(
                 """
+                CREATE SCHEMA IF NOT EXISTS core;
                 ALTER TABLE core.historias_clinicas
                 ADD COLUMN IF NOT EXISTS puesto_laboral text,
                 ADD COLUMN IF NOT EXISTS antecedentes_generales text,
