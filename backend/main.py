@@ -9,6 +9,7 @@ from passlib.hash import argon2
 from pydantic import BaseModel
 from typing import Optional, Any
 from datetime import datetime, timedelta, timezone, date, time
+from decimal import Decimal, InvalidOperation
 from zoneinfo import ZoneInfo
 import json
 import csv
@@ -116,7 +117,45 @@ def ensure_historia_schema():
                 ADD COLUMN IF NOT EXISTS lentes_contacto_horas_dia text,
                 ADD COLUMN IF NOT EXISTS sintomas text,
                 ADD COLUMN IF NOT EXISTS created_at_tz timestamptz,
-                ADD COLUMN IF NOT EXISTS doctor_atencion text;
+                ADD COLUMN IF NOT EXISTS doctor_atencion text,
+                ADD COLUMN IF NOT EXISTS antecedentes_oculares_familiares text,
+                ADD COLUMN IF NOT EXISTS antecedentes_oculares_familiares_otro text,
+                ADD COLUMN IF NOT EXISTS recomendacion_tratamiento text,
+                ADD COLUMN IF NOT EXISTS fotofobia_escala text,
+                ADD COLUMN IF NOT EXISTS dolor_ocular_escala text,
+                ADD COLUMN IF NOT EXISTS cefalea_frecuencia text,
+                ADD COLUMN IF NOT EXISTS trabajo_cerca_horas_dia text,
+                ADD COLUMN IF NOT EXISTS distancia_promedio_pantalla_cm text,
+                ADD COLUMN IF NOT EXISTS iluminacion_trabajo text,
+                ADD COLUMN IF NOT EXISTS flotadores_destellos text,
+                ADD COLUMN IF NOT EXISTS flotadores_inicio_reciente boolean,
+                ADD COLUMN IF NOT EXISTS flotadores_lateralidad text,
+                ADD COLUMN IF NOT EXISTS uso_lentes_proteccion_uv text,
+                ADD COLUMN IF NOT EXISTS uso_lentes_sol_frecuencia text,
+                ADD COLUMN IF NOT EXISTS horas_exterior_dia text,
+                ADD COLUMN IF NOT EXISTS nivel_educativo text,
+                ADD COLUMN IF NOT EXISTS horas_lectura_dia text,
+                ADD COLUMN IF NOT EXISTS horas_sueno_promedio text,
+                ADD COLUMN IF NOT EXISTS estres_nivel text,
+                ADD COLUMN IF NOT EXISTS peso_kg numeric(5,1),
+                ADD COLUMN IF NOT EXISTS altura_cm integer,
+                ADD COLUMN IF NOT EXISTS sintomas_al_despertar text,
+                ADD COLUMN IF NOT EXISTS sintomas_al_despertar_otro text,
+                ADD COLUMN IF NOT EXISTS convive_mascotas text,
+                ADD COLUMN IF NOT EXISTS convive_mascotas_otro text,
+                ADD COLUMN IF NOT EXISTS uso_aire_acondicionado_frecuencia text,
+                ADD COLUMN IF NOT EXISTS uso_aire_acondicionado_horas_dia text,
+                ADD COLUMN IF NOT EXISTS uso_calefaccion_frecuencia text,
+                ADD COLUMN IF NOT EXISTS uso_calefaccion_horas_dia text,
+                ADD COLUMN IF NOT EXISTS uso_pantalla_en_oscuridad text,
+                ADD COLUMN IF NOT EXISTS cafeina_por_dia text,
+                ADD COLUMN IF NOT EXISTS diagnostico_principal text,
+                ADD COLUMN IF NOT EXISTS diagnostico_principal_otro text,
+                ADD COLUMN IF NOT EXISTS diagnosticos_secundarios text,
+                ADD COLUMN IF NOT EXISTS diagnosticos_secundarios_otro text,
+                ADD COLUMN IF NOT EXISTS seguimiento_requerido boolean,
+                ADD COLUMN IF NOT EXISTS seguimiento_tipo text,
+                ADD COLUMN IF NOT EXISTS seguimiento_valor text;
                 """
             )
             cur.execute(
@@ -509,6 +548,8 @@ class HistoriaClinicaBase(BaseModel):
     antecedentes: Optional[str] = None
     antecedentes_generales: Optional[str] = None
     antecedentes_otro: Optional[str] = None
+    antecedentes_oculares_familiares: Optional[str] = None
+    antecedentes_oculares_familiares_otro: Optional[str] = None
     alergias: Optional[str] = None
     enfermedades: Optional[str] = None
     cirugias: Optional[str] = None
@@ -546,7 +587,35 @@ class HistoriaClinicaBase(BaseModel):
     tiempo_uso_lentes: Optional[str] = None
     lentes_contacto_horas_dia: Optional[str] = None
     lentes_contacto_dias_semana: Optional[str] = None
+    uso_lentes_proteccion_uv: Optional[str] = None
+    uso_lentes_sol_frecuencia: Optional[str] = None
     sintomas: Optional[str] = None
+    fotofobia_escala: Optional[str] = None
+    dolor_ocular_escala: Optional[str] = None
+    cefalea_frecuencia: Optional[str] = None
+    trabajo_cerca_horas_dia: Optional[str] = None
+    distancia_promedio_pantalla_cm: Optional[str] = None
+    iluminacion_trabajo: Optional[str] = None
+    flotadores_destellos: Optional[str] = None
+    flotadores_inicio_reciente: Optional[bool] = None
+    flotadores_lateralidad: Optional[str] = None
+    horas_exterior_dia: Optional[str] = None
+    nivel_educativo: Optional[str] = None
+    horas_lectura_dia: Optional[str] = None
+    horas_sueno_promedio: Optional[str] = None
+    estres_nivel: Optional[str] = None
+    peso_kg: Optional[float] = None
+    altura_cm: Optional[int] = None
+    sintomas_al_despertar: Optional[str] = None
+    sintomas_al_despertar_otro: Optional[str] = None
+    convive_mascotas: Optional[str] = None
+    convive_mascotas_otro: Optional[str] = None
+    uso_aire_acondicionado_frecuencia: Optional[str] = None
+    uso_aire_acondicionado_horas_dia: Optional[str] = None
+    uso_calefaccion_frecuencia: Optional[str] = None
+    uso_calefaccion_horas_dia: Optional[str] = None
+    uso_pantalla_en_oscuridad: Optional[str] = None
+    cafeina_por_dia: Optional[str] = None
 
     ppc: Optional[str] = None
     lejos: Optional[str] = None
@@ -573,6 +642,14 @@ class HistoriaClinicaBase(BaseModel):
     biomicroscopia: Optional[str] = None
 
     diagnostico_general: Optional[str] = None
+    diagnostico_principal: Optional[str] = None
+    diagnostico_principal_otro: Optional[str] = None
+    diagnosticos_secundarios: Optional[str] = None
+    diagnosticos_secundarios_otro: Optional[str] = None
+    recomendacion_tratamiento: Optional[str] = None
+    seguimiento_requerido: Optional[bool] = None
+    seguimiento_tipo: Optional[str] = None
+    seguimiento_valor: Optional[str] = None
 
 
 class HistoriaClinicaCreate(HistoriaClinicaBase):
@@ -591,6 +668,10 @@ class HistoriaClinicaOut(HistoriaClinicaBase):
 
 class HistoriaClinicaUpdate(HistoriaClinicaBase):
     pass
+
+
+class HistoriaEstadoBatchIn(BaseModel):
+    paciente_ids: list[int]
 
 COMO_NOS_CONOCIO_VALUES = {"instagram", "fb", "google", "linkedin", "linkedln", "referencia"}
 COMO_NOS_CONOCIO_CANONICAL = {"linkedln": "linkedin"}
@@ -894,6 +975,33 @@ def sanitize_model_strings(model: BaseModel) -> None:
     for key, value in cleaned.items():
         if hasattr(model, key):
             setattr(model, key, value)
+
+
+def normalize_peso_kg(value: Any) -> float | None:
+    if is_missing_value(value):
+        return None
+    raw = str(value).strip().replace(",", ".")
+    try:
+        dec = Decimal(raw)
+    except (InvalidOperation, ValueError):
+        raise HTTPException(status_code=400, detail="peso_kg inválido. Usa número con máximo 1 decimal.")
+    if dec < 0:
+        raise HTTPException(status_code=400, detail="peso_kg inválido. Debe ser mayor o igual a 0.")
+    if dec.as_tuple().exponent < -1:
+        raise HTTPException(status_code=400, detail="peso_kg inválido. Solo se permite 1 decimal.")
+    return float(dec)
+
+
+def normalize_altura_cm(value: Any) -> int | None:
+    if is_missing_value(value):
+        return None
+    raw = str(value).strip()
+    if not re.fullmatch(r"\d+", raw):
+        raise HTTPException(status_code=400, detail="altura_cm inválido. Debe ser entero (cm).")
+    altura = int(raw)
+    if altura < 0:
+        raise HTTPException(status_code=400, detail="altura_cm inválido. Debe ser mayor o igual a 0.")
+    return altura
 
 
 
@@ -1344,7 +1452,12 @@ def export_historias_clinicas_csv(
         "historia_id", "paciente_id", "sucursal_id",
         "doctor_atencion", "puesto_laboral",
         "diagnostico_general",
+        "diagnostico_principal", "diagnostico_principal_otro",
+        "diagnosticos_secundarios", "diagnosticos_secundarios_otro",
+        "recomendacion_tratamiento",
+        "seguimiento_requerido", "seguimiento_tipo", "seguimiento_valor",
         "antecedentes_generales", "antecedentes_otro",
+        "antecedentes_oculares_familiares", "antecedentes_oculares_familiares_otro",
         "alergias", "enfermedades", "cirugias",
         "diabetes_estado", "diabetes_control", "diabetes_anios", "diabetes_tratamiento",
         "horas_pantalla_dia", "conduccion_nocturna_horas", "exposicion_uv",
@@ -1356,6 +1469,17 @@ def export_historias_clinicas_csv(
         "hipertension",
         "medicamentos",
         "usa_lentes", "tipo_lentes_actual", "tiempo_uso_lentes", "lentes_contacto_horas_dia",
+        "uso_lentes_proteccion_uv", "uso_lentes_sol_frecuencia",
+        "fotofobia_escala", "dolor_ocular_escala", "cefalea_frecuencia",
+        "trabajo_cerca_horas_dia", "distancia_promedio_pantalla_cm", "iluminacion_trabajo",
+        "flotadores_destellos", "flotadores_inicio_reciente", "flotadores_lateralidad",
+        "horas_exterior_dia", "nivel_educativo", "horas_lectura_dia",
+        "horas_sueno_promedio", "estres_nivel", "peso_kg", "altura_cm",
+        "sintomas_al_despertar", "sintomas_al_despertar_otro",
+        "convive_mascotas", "convive_mascotas_otro",
+        "uso_aire_acondicionado_frecuencia", "uso_aire_acondicionado_horas_dia",
+        "uso_calefaccion_frecuencia", "uso_calefaccion_horas_dia",
+        "uso_pantalla_en_oscuridad", "cafeina_por_dia",
         "sintomas",
         "od_esfera", "od_cilindro", "od_eje", "od_add",
         "oi_esfera", "oi_cilindro", "oi_eje", "oi_add",
@@ -3010,59 +3134,62 @@ def _ensure_historia_clinica_base(cur: psycopg.Cursor, paciente_id: int, sucursa
     return False
 
 
-@app.put("/pacientes/{paciente_id}/historia", summary="Editar historia clínica (solo doctor/admin)")
-def update_historia(
-    paciente_id: int,
-    sucursal_id: int,
-    h: HistoriaClinicaUpdate,
-    user=Depends(get_current_user),
-):
-    require_roles(user, ("admin", "doctor"))
-    sucursal_id = force_sucursal(user, sucursal_id)
+HISTORIA_ALLOWED_FIELDS = {
+    "od_esfera", "od_cilindro", "od_eje", "od_add",
+    "oi_esfera", "oi_cilindro", "oi_eje", "oi_add",
+    "dp", "queratometria_od", "queratometria_oi",
+    "presion_od", "presion_oi",
+    "paciente_fecha_nacimiento", "paciente_edad",
+    "paciente_primer_nombre", "paciente_segundo_nombre",
+    "paciente_apellido_paterno", "paciente_apellido_materno",
+    "paciente_telefono", "paciente_correo",
+    "paciente_calle", "paciente_numero", "paciente_colonia", "paciente_codigo_postal", "paciente_municipio", "paciente_estado", "paciente_pais",
+    "puesto_laboral", "doctor_atencion",
+    "antecedentes", "antecedentes_generales", "antecedentes_otro",
+    "antecedentes_oculares_familiares", "antecedentes_oculares_familiares_otro",
+    "alergias", "enfermedades", "cirugias",
+    "fumador_tabaco", "fumador_marihuana", "consumidor_alcohol", "diabetes", "tipo_diabetes", "deportista",
+    "horas_pantalla_dia", "conduccion_nocturna_horas", "exposicion_uv",
+    "tabaquismo_estado", "tabaquismo_intensidad", "tabaquismo_anios", "tabaquismo_anios_desde_dejo",
+    "alcohol_frecuencia", "alcohol_copas",
+    "marihuana_frecuencia", "marihuana_forma",
+    "drogas_consumo", "drogas_tipos", "drogas_frecuencia",
+    "deporte_frecuencia", "deporte_duracion", "deporte_tipos",
+    "hipertension", "medicamentos",
+    "diabetes_estado", "diabetes_control", "diabetes_anios", "diabetes_tratamiento",
+    "usa_lentes", "tipo_lentes_actual", "tiempo_uso_lentes",
+    "lentes_contacto_horas_dia", "lentes_contacto_dias_semana", "sintomas",
+    "uso_lentes_proteccion_uv", "uso_lentes_sol_frecuencia",
+    "fotofobia_escala", "dolor_ocular_escala", "cefalea_frecuencia",
+    "trabajo_cerca_horas_dia", "distancia_promedio_pantalla_cm", "iluminacion_trabajo",
+    "flotadores_destellos", "flotadores_inicio_reciente", "flotadores_lateralidad",
+    "horas_exterior_dia", "nivel_educativo", "horas_lectura_dia",
+    "horas_sueno_promedio", "estres_nivel", "peso_kg", "altura_cm",
+    "sintomas_al_despertar", "sintomas_al_despertar_otro",
+    "convive_mascotas", "convive_mascotas_otro",
+    "uso_aire_acondicionado_frecuencia", "uso_aire_acondicionado_horas_dia",
+    "uso_calefaccion_frecuencia", "uso_calefaccion_horas_dia",
+    "uso_pantalla_en_oscuridad", "cafeina_por_dia",
+    "ppc", "lejos", "cerca", "tension", "mmhg", "di",
+    "avsinrxod", "avsinrixoi", "capvisualod", "capvisualoi", "avrxantod", "avrxantoi",
+    "queraod", "queraoi", "retinosod", "retinosoi", "subjeod", "subjeoi", "adicionod", "adicionoi",
+    "papila", "biomicroscopia",
+    "diagnostico_general",
+    "diagnostico_principal", "diagnostico_principal_otro",
+    "diagnosticos_secundarios", "diagnosticos_secundarios_otro",
+    "recomendacion_tratamiento",
+    "seguimiento_requerido", "seguimiento_tipo", "seguimiento_valor",
+}
 
-    data = sanitize_payload_strings(h.dict(exclude_unset=True))
-    if not data:
-        raise HTTPException(status_code=400, detail="No enviaste campos para actualizar.")
 
-    allowed = {
-        "od_esfera","od_cilindro","od_eje","od_add",
-        "oi_esfera","oi_cilindro","oi_eje","oi_add",
-        "dp","queratometria_od","queratometria_oi",
-        "presion_od","presion_oi",
-        "paciente_fecha_nacimiento","paciente_edad",
-        "paciente_primer_nombre","paciente_segundo_nombre",
-        "paciente_apellido_paterno","paciente_apellido_materno",
-        "paciente_telefono","paciente_correo","puesto_laboral",
-        "paciente_calle","paciente_numero","paciente_colonia","paciente_codigo_postal","paciente_municipio","paciente_estado","paciente_pais",
-        "doctor_atencion",
-        "antecedentes",
-        "antecedentes_generales","antecedentes_otro",
-        "alergias","enfermedades","cirugias",
-        "fumador_tabaco","fumador_marihuana","consumidor_alcohol","diabetes","tipo_diabetes","deportista",
-        "horas_pantalla_dia","conduccion_nocturna_horas","exposicion_uv",
-        "tabaquismo_estado","tabaquismo_intensidad","tabaquismo_anios","tabaquismo_anios_desde_dejo",
-        "alcohol_frecuencia","alcohol_copas",
-        "marihuana_frecuencia","marihuana_forma",
-        "drogas_consumo","drogas_tipos","drogas_frecuencia",
-        "deporte_frecuencia","deporte_duracion","deporte_tipos",
-        "hipertension","medicamentos",
-        "diabetes_estado","diabetes_control","diabetes_anios","diabetes_tratamiento",
-        "usa_lentes","tipo_lentes_actual","tiempo_uso_lentes",
-        "lentes_contacto_horas_dia","lentes_contacto_dias_semana","sintomas",
-        "ppc","lejos","cerca","tension","mmhg","di",
-        "avsinrxod","avsinrixoi","capvisualod","capvisualoi","avrxantod","avrxantoi",
-        "queraod","queraoi","retinosod","retinosoi","subjeod","subjeoi","adicionod","adicionoi",
-        "papila","biomicroscopia",
-        "diagnostico_general",
-    }
-    for k in list(data.keys()):
-        if k not in allowed:
-            data.pop(k, None)
+def _normalize_historia_payload(raw_data: dict[str, Any]) -> dict[str, Any]:
+    data = {k: v for k, v in raw_data.items() if k in HISTORIA_ALLOWED_FIELDS}
 
-    if not data:
-        raise HTTPException(status_code=400, detail="Campos no válidos para actualizar.")
+    if "peso_kg" in data:
+        data["peso_kg"] = normalize_peso_kg(data.get("peso_kg"))
+    if "altura_cm" in data:
+        data["altura_cm"] = normalize_altura_cm(data.get("altura_cm"))
 
-    # Estandarizamos al nombre canónico solicitado.
     if "diabetes_estado" in data:
         estado_dm = str(data.get("diabetes_estado") or "").strip().lower()
         if estado_dm in {"tipo_1", "tipo_2", "prediabetes"}:
@@ -3089,6 +3216,44 @@ def update_historia(
 
     if "diabetes" in data and data.get("diabetes") is False and is_missing_value(data.get("tipo_diabetes")):
         data["tipo_diabetes"] = "no_aplica"
+
+    if "seguimiento_tipo" in data:
+        tipo = normalize_controlled_token(data.get("seguimiento_tipo"))
+        if tipo and tipo != "fecha":
+            raise HTTPException(status_code=400, detail="seguimiento_tipo inválido: solo se permite 'fecha'.")
+        data["seguimiento_tipo"] = "fecha" if tipo else None
+
+    if data.get("seguimiento_requerido") is True:
+        data["seguimiento_tipo"] = "fecha"
+        if "seguimiento_valor" in data:
+            valor = str(data.get("seguimiento_valor") or "").strip()
+            if valor and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", valor):
+                raise HTTPException(status_code=400, detail="seguimiento_valor inválido: usa formato YYYY-MM-DD.")
+            data["seguimiento_valor"] = valor or None
+    elif "seguimiento_requerido" in data and data.get("seguimiento_requerido") is not True:
+        data["seguimiento_tipo"] = None
+        data["seguimiento_valor"] = None
+
+    return data
+
+
+@app.put("/pacientes/{paciente_id}/historia", summary="Editar historia clínica (solo doctor/admin)")
+def update_historia(
+    paciente_id: int,
+    sucursal_id: int,
+    h: HistoriaClinicaUpdate,
+    user=Depends(get_current_user),
+):
+    require_roles(user, ("admin", "doctor"))
+    sucursal_id = force_sucursal(user, sucursal_id)
+
+    data = sanitize_payload_strings(h.dict(exclude_unset=True))
+    if not data:
+        raise HTTPException(status_code=400, detail="No enviaste campos para actualizar.")
+    data = _normalize_historia_payload(data)
+
+    if not data:
+        raise HTTPException(status_code=400, detail="Campos no válidos para actualizar.")
 
     set_parts = []
     params = []
@@ -3915,6 +4080,20 @@ def estadisticas_resumen(
             )
             consultas_mensuales_rows = cur.fetchall()
 
+            cur.execute(
+                """
+                SELECT EXTRACT(MONTH FROM v.fecha_hora)::int AS mes_idx, COUNT(*)::int AS total
+                FROM core.ventas v
+                WHERE v.activo = true
+                  AND v.sucursal_id = %s
+                  AND EXTRACT(YEAR FROM v.fecha_hora) = %s
+                GROUP BY mes_idx
+                ORDER BY mes_idx;
+                """,
+                (sucursal_id, series_year),
+            )
+            ventas_mensuales_count_rows = cur.fetchall()
+
             if is_admin_user:
                 cur.execute(
                     """
@@ -4015,12 +4194,17 @@ def estadisticas_resumen(
     meses_label = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"]
     ingresos_map = {int(r[0]): float(r[1] or 0) for r in ingresos_rows}
     consultas_mensuales_map = {int(r[0]): int(r[1] or 0) for r in consultas_mensuales_rows}
+    ventas_mensuales_count_map = {int(r[0]): int(r[1] or 0) for r in ventas_mensuales_count_rows}
     ingresos_por_mes = [
         {"mes": idx, "etiqueta": meses_label[idx - 1], "total": float(ingresos_map.get(idx, 0))}
         for idx in range(1, 13)
     ]
     consultas_por_mes = [
         {"mes": idx, "etiqueta": meses_label[idx - 1], "total": int(consultas_mensuales_map.get(idx, 0))}
+        for idx in range(1, 13)
+    ]
+    ventas_por_mes = [
+        {"mes": idx, "etiqueta": meses_label[idx - 1], "total": int(ventas_mensuales_count_map.get(idx, 0))}
         for idx in range(1, 13)
     ]
     ventas_monto_total_visible = float(v_monto_total or 0) if is_admin_user else None
@@ -4124,6 +4308,7 @@ def estadisticas_resumen(
             "anio": int(series_year),
             "ingresos_por_mes": ingresos_por_mes,
             "consultas_por_mes": consultas_por_mes,
+            "ventas_por_mes": ventas_por_mes,
         },
         "comparativo_sucursales": comparativo_sucursales,
     }
@@ -4417,6 +4602,7 @@ def get_historia_clinica(
                    puesto_laboral,
                    antecedentes,
                    antecedentes_generales, antecedentes_otro,
+                   antecedentes_oculares_familiares, antecedentes_oculares_familiares_otro,
                    alergias, enfermedades, cirugias,
                    fumador_tabaco, fumador_marihuana, consumidor_alcohol, diabetes, tipo_diabetes, deportista,
                    horas_pantalla_dia, conduccion_nocturna_horas, exposicion_uv,
@@ -4429,12 +4615,27 @@ def get_historia_clinica(
                    diabetes_estado, diabetes_control, diabetes_anios, diabetes_tratamiento,
                    usa_lentes, tipo_lentes_actual, tiempo_uso_lentes,
                    lentes_contacto_horas_dia, lentes_contacto_dias_semana, sintomas,
+                   uso_lentes_proteccion_uv, uso_lentes_sol_frecuencia,
+                   fotofobia_escala, dolor_ocular_escala, cefalea_frecuencia,
+                   trabajo_cerca_horas_dia, distancia_promedio_pantalla_cm, iluminacion_trabajo,
+                   flotadores_destellos, flotadores_inicio_reciente, flotadores_lateralidad,
+                   horas_exterior_dia, nivel_educativo, horas_lectura_dia,
+                   horas_sueno_promedio, estres_nivel, peso_kg, altura_cm,
+                   sintomas_al_despertar, sintomas_al_despertar_otro,
+                   convive_mascotas, convive_mascotas_otro,
+                   uso_aire_acondicionado_frecuencia, uso_aire_acondicionado_horas_dia,
+                   uso_calefaccion_frecuencia, uso_calefaccion_horas_dia,
+                   uso_pantalla_en_oscuridad, cafeina_por_dia,
                    ppc, lejos, cerca, tension, mmhg, di,
                    avsinrxod, avsinrixoi, capvisualod, capvisualoi, avrxantod, avrxantoi,
                    queraod, queraoi, retinosod, retinosoi, subjeod, subjeoi, adicionod, adicionoi,
                    papila, biomicroscopia,
                    doctor_atencion,
                    diagnostico_general,
+                   diagnostico_principal, diagnostico_principal_otro,
+                   diagnosticos_secundarios, diagnosticos_secundarios_otro,
+                   recomendacion_tratamiento,
+                   seguimiento_requerido, seguimiento_tipo, seguimiento_valor,
                    created_by, created_at, created_at_tz, updated_at, activo
             FROM core.historias_clinicas
             WHERE paciente_id = %s
@@ -4457,6 +4658,48 @@ def get_historia_clinica(
             return dict(zip(columns, row))
 
 
+@app.post("/historias/estado", summary="Estado de historia clínica por lista de pacientes")
+def get_historias_estado_batch(
+    payload: HistoriaEstadoBatchIn,
+    sucursal_id: int | None = None,
+    user=Depends(get_current_user),
+):
+    require_roles(user, ("admin", "doctor"))
+    sucursal_id = force_sucursal(user, sucursal_id)
+    if user["rol"] == "admin" and sucursal_id is None:
+        raise HTTPException(status_code=400, detail="Sucursal es requerida.")
+
+    unique_ids = sorted({int(pid) for pid in (payload.paciente_ids or []) if int(pid) > 0})
+    if not unique_ids:
+        return {"sucursal_id": sucursal_id, "items": []}
+
+    with psycopg.connect(DB_CONNINFO) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT paciente_id
+                FROM core.historias_clinicas
+                WHERE sucursal_id = %s
+                  AND paciente_id = ANY(%s)
+                  AND activo = TRUE
+                GROUP BY paciente_id
+                """,
+                (sucursal_id, unique_ids),
+            )
+            existing_ids = {int(r[0]) for r in cur.fetchall()}
+
+    return {
+        "sucursal_id": sucursal_id,
+        "items": [
+            {
+                "paciente_id": pid,
+                "estado": "exists" if pid in existing_ids else "missing",
+            }
+            for pid in unique_ids
+        ],
+    }
+
+
 
 @app.post("/pacientes/{paciente_id}/historia", response_model=HistoriaClinicaOut)
 def create_historia_clinica(
@@ -4471,164 +4714,50 @@ def create_historia_clinica(
 
     with psycopg.connect(DB_CONNINFO) as conn:
         with conn.cursor() as cur:
-
-            # verificar que paciente existe en esa sucursal
-            cur.execute(
-                """
-                SELECT fecha_nacimiento, primer_nombre, segundo_nombre,
-                       apellido_paterno, apellido_materno,
-                       telefono, correo, calle, numero, colonia, cp, municipio, estado, pais
-                FROM core.pacientes
-                WHERE paciente_id = %s
-                  AND sucursal_id = %s
-                  AND activo = TRUE
-                """,
-                (paciente_id, sucursal_id),
-            )
-            paciente_row = cur.fetchone()
-            if paciente_row is None:
-                raise HTTPException(status_code=404, detail="Paciente no válido en esta sucursal.")
-            (
-                paciente_fecha_nacimiento,
-                paciente_primer_nombre,
-                paciente_segundo_nombre,
-                paciente_apellido_paterno,
-                paciente_apellido_materno,
-                paciente_telefono,
-                paciente_correo,
-                paciente_calle,
-                paciente_numero,
-                paciente_colonia,
-                paciente_codigo_postal,
-                paciente_municipio,
-                paciente_estado,
-                paciente_pais,
-            ) = paciente_row
-
-            paciente_edad = None
-            if paciente_fecha_nacimiento:
-                try:
-                    nacimiento = paciente_fecha_nacimiento
-                    if isinstance(nacimiento, str):
-                        nacimiento = datetime.fromisoformat(nacimiento).date()
-                    today = datetime.now().date()
-                    paciente_edad = today.year - nacimiento.year - (
-                        (today.month, today.day) < (nacimiento.month, nacimiento.day)
-                    )
-                except Exception:
-                    paciente_edad = None
-
-            # verificar que NO exista ya historia clínica (porque es UNIQUE)
-            cur.execute(
-                """
-                SELECT 1 FROM core.historias_clinicas
-                WHERE paciente_id = %s
-                  AND sucursal_id = %s
-                  AND activo = TRUE
-                """,
-                (paciente_id, sucursal_id),
-            )
-            if cur.fetchone():
+            _fetch_paciente_snapshot(cur, paciente_id, sucursal_id)
+            inserted_or_reactivated = _ensure_historia_clinica_base(cur, paciente_id, sucursal_id, user["username"])
+            if not inserted_or_reactivated:
                 raise HTTPException(status_code=400, detail="El paciente ya tiene historia clínica.")
 
-            # insertar
-            cur.execute(
+            payload = sanitize_payload_strings(data.dict(exclude_unset=True))
+            payload.pop("paciente_id", None)
+            payload = _normalize_historia_payload(payload)
+
+            if payload:
+                set_parts: list[str] = []
+                params: list[Any] = []
+                for k, v in payload.items():
+                    set_parts.append(f"{k} = %s")
+                    params.append(v)
+                sql = f"""
+                UPDATE core.historias_clinicas
+                SET {", ".join(set_parts)},
+                    updated_at = NOW()
+                WHERE paciente_id = %s
+                  AND sucursal_id = %s
+                  AND activo = true
+                RETURNING *;
                 """
-                INSERT INTO core.historias_clinicas (
-                    paciente_id, sucursal_id,
-                    od_esfera, od_cilindro, od_eje, od_add,
-                    oi_esfera, oi_cilindro, oi_eje, oi_add,
-                    dp,
-                    queratometria_od, queratometria_oi,
-                    presion_od, presion_oi,
-                    paciente_fecha_nacimiento, paciente_edad,
-                    paciente_primer_nombre, paciente_segundo_nombre,
-                    paciente_apellido_paterno, paciente_apellido_materno,
-                    paciente_telefono, paciente_correo,
-                    paciente_calle, paciente_numero, paciente_colonia, paciente_codigo_postal, paciente_municipio, paciente_estado, paciente_pais,
-                    puesto_laboral,
-                    antecedentes,
-                    antecedentes_generales, antecedentes_otro,
-                    alergias, enfermedades, cirugias,
-                    fumador_tabaco, fumador_marihuana, consumidor_alcohol, diabetes, tipo_diabetes, deportista,
-                    ppc, lejos, cerca, tension, mmhg, di,
-                    avsinrxod, avsinrixoi, capvisualod, capvisualoi, avrxantod, avrxantoi,
-                    queraod, queraoi, retinosod, retinosoi, subjeod, subjeoi, adicionod, adicionoi,
-                    papila, biomicroscopia,
-                    doctor_atencion,
-                    diagnostico_general,
-                    created_at_tz,
-                    created_by
+                params.extend([paciente_id, sucursal_id])
+                cur.execute(sql, tuple(params))
+            else:
+                cur.execute(
+                    """
+                    SELECT *
+                    FROM core.historias_clinicas
+                    WHERE paciente_id = %s
+                      AND sucursal_id = %s
+                      AND activo = true
+                    LIMIT 1;
+                    """,
+                    (paciente_id, sucursal_id),
                 )
-                VALUES (
-                    %s, %s,
-                    %s, %s, %s, %s,
-                    %s, %s, %s, %s,
-                    %s,
-                    %s, %s,
-                    %s, %s,
-                    %s, %s,
-                    %s, %s,
-                    %s, %s,
-                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                    %s,
-                    %s, %s,
-                    %s, %s, %s,
-                    %s, %s, %s, %s, %s, %s,
-                    %s, %s, %s, %s, %s, %s,
-                    %s, %s, %s, %s, %s, %s, %s,
-                    %s, %s, %s, %s, %s, %s, %s,
-                    %s, %s,
-                    %s,
-                    %s,
-                    NOW(),
-                    %s
-                )
-                RETURNING *
-                """,
-                (
-                    paciente_id, sucursal_id,
-                    data.od_esfera, data.od_cilindro, data.od_eje, data.od_add,
-                    data.oi_esfera, data.oi_cilindro, data.oi_eje, data.oi_add,
-                    data.dp,
-                    data.queratometria_od, data.queratometria_oi,
-                    data.presion_od, data.presion_oi,
-                    data.paciente_fecha_nacimiento or (str(paciente_fecha_nacimiento) if paciente_fecha_nacimiento else None),
-                    data.paciente_edad if data.paciente_edad is not None else paciente_edad,
-                    data.paciente_primer_nombre or paciente_primer_nombre,
-                    data.paciente_segundo_nombre or paciente_segundo_nombre,
-                    data.paciente_apellido_paterno or paciente_apellido_paterno,
-                    data.paciente_apellido_materno or paciente_apellido_materno,
-                    data.paciente_telefono or paciente_telefono,
-                    data.paciente_correo or paciente_correo,
-                    data.paciente_calle or paciente_calle,
-                    data.paciente_numero or paciente_numero,
-                    data.paciente_colonia or paciente_colonia,
-                    data.paciente_codigo_postal or paciente_codigo_postal,
-                    data.paciente_municipio or paciente_municipio,
-                    data.paciente_estado or paciente_estado,
-                    data.paciente_pais or paciente_pais,
-                    data.puesto_laboral,
-                    data.antecedentes,
-                    data.antecedentes_generales, data.antecedentes_otro,
-                    data.alergias, data.enfermedades, data.cirugias,
-                    data.fumador_tabaco, data.fumador_marihuana, data.consumidor_alcohol, data.diabetes, data.tipo_diabetes, data.deportista,
-                    data.ppc, data.lejos, data.cerca, data.tension, data.mmhg, data.di,
-                    data.avsinrxod,
-                    data.avsinrixoi,
-                    data.capvisualod, data.capvisualoi, data.avrxantod, data.avrxantoi,
-                    data.queraod, data.queraoi, data.retinosod, data.retinosoi, data.subjeod, data.subjeoi, data.adicionod, data.adicionoi,
-                    data.papila, data.biomicroscopia,
-                    data.doctor_atencion,
-                    data.diagnostico_general,
-                    user["username"],
-                ),
-            )
 
             row = cur.fetchone()
-            conn.commit()
-
+            if row is None:
+                raise HTTPException(status_code=404, detail="Historia clínica no encontrada (o inactiva).")
             columns = [desc[0] for desc in cur.description]
+            conn.commit()
             return dict(zip(columns, row))
 
 

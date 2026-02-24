@@ -224,6 +224,7 @@ type StatsResumen = {
     anio: number;
     ingresos_por_mes: StatsAnualMesSerie[];
     consultas_por_mes: StatsAnualMesSerie[];
+    ventas_por_mes: StatsAnualMesSerie[];
   };
   comparativo_sucursales?: StatsComparativoSucursales | null;
 };
@@ -684,6 +685,134 @@ const SINTOMAS_OPTIONS: Array<{ value: string; label: string }> = [
 
 const DROGAS_TIPOS_OPTIONS = ["estimulantes", "sedantes", "alucinogenos", "opioides", "otras"];
 const DIABETES_TRATAMIENTO_OPTIONS = ["dieta_ejercicio", "pastillas", "insulina", "no_sabe"];
+const FLOTADORES_DESTELLOS_OPTIONS = [
+  { value: "ninguno", label: "Ninguno" },
+  { value: "flotadores_solos", label: "Flotadores solos (moscas volantes)" },
+  { value: "destellos_solos", label: "Destellos solos (flashes)" },
+  { value: "flotadores_y_destellos", label: "Flotadores y destellos" },
+  { value: "cortina_sombra", label: "Cortina/sombra" },
+] as const;
+const FLOTADORES_LATERALIDAD_OPTIONS = [
+  { value: "un_ojo", label: "Un ojo" },
+  { value: "ambos_ojos", label: "Ambos ojos" },
+] as const;
+const TIEMPO_USO_DIARIO_RANGO_OPTIONS = [
+  { value: "lt_30min", label: "<30 minutos" },
+  { value: "30min_1h", label: "30 minutos - 1 hora" },
+  { value: "2h_4h", label: "2 horas - 4 horas" },
+  { value: "4h_6h", label: "4 horas - 6 horas" },
+  { value: "6h_plus", label: "+6 horas" },
+] as const;
+const USO_LENTES_SOL_DIAS_SEMANA_OPTIONS = [
+  { value: "0_dias", label: "0 días" },
+  { value: "1_2_dias", label: "1-2 días" },
+  { value: "3_4_dias", label: "3-4 días" },
+  { value: "5_6_dias", label: "5-6 días" },
+  { value: "7_dias", label: "7 días" },
+] as const;
+const TIEMPO_USO_ANTIBLUERAY_DIA_OPTIONS = [
+  { value: "lt_30min", label: "<30 minutos" },
+  { value: "30min_1h", label: "30 minutos - 1 hora" },
+  { value: "2h_4h", label: "2 horas - 4 horas" },
+  { value: "4h_6h", label: "4 horas - 6 horas" },
+  { value: "6h_8h", label: "6 horas - 8 horas" },
+  { value: "8h_plus", label: "+8 horas" },
+] as const;
+const HORAS_EXTERIOR_DIA_OPTIONS = [
+  { value: "0_30min", label: "0-30 min" },
+  { value: "30_60min", label: "30-60 min" },
+  { value: "1_2h", label: "1-2 h" },
+  { value: "2_4h", label: "2-4 h" },
+  { value: "4h_mas", label: "4 h o más" },
+] as const;
+const NIVEL_EDUCATIVO_OPTIONS = [
+  { value: "ninguno", label: "Ninguno" },
+  { value: "primaria", label: "Primaria" },
+  { value: "secundaria", label: "Secundaria" },
+  { value: "preparatoria", label: "Preparatoria" },
+  { value: "universidad", label: "Universidad" },
+  { value: "posgrado", label: "Posgrado" },
+] as const;
+const CEFALEA_FRECUENCIA_OPTIONS = [
+  { value: "nunca", label: "Nunca" },
+  { value: "mensual", label: "Mensual" },
+  { value: "semanal", label: "Semanal" },
+  { value: "diaria", label: "Diaria" },
+] as const;
+const ILUMINACION_TRABAJO_OPTIONS = [
+  { value: "alta", label: "Alta" },
+  { value: "media", label: "Media" },
+  { value: "baja", label: "Baja" },
+] as const;
+const SINTOMAS_AL_DESPERTAR_OPTIONS = [
+  { value: "ojos_rojos", label: "Ojos rojos" },
+  { value: "resequedad", label: "Resequedad" },
+  { value: "dolor", label: "Dolor" },
+  { value: "vision_borrosa", label: "Visión borrosa" },
+  { value: "mareo", label: "Mareo" },
+  { value: "ninguno", label: "Ninguno" },
+  { value: "otro", label: "Otro" },
+] as const;
+const CONVIVE_MASCOTAS_OPTIONS = [
+  { value: "perro", label: "Perro" },
+  { value: "gato", label: "Gato" },
+  { value: "ave", label: "Ave" },
+  { value: "otro", label: "Otro" },
+  { value: "ninguno", label: "Ninguno" },
+] as const;
+const FRECUENCIA_AMBIENTE_OPTIONS = [
+  { value: "nunca", label: "Nunca" },
+  { value: "a_veces", label: "A veces" },
+  { value: "frecuente", label: "Frecuente" },
+  { value: "diario", label: "Diario" },
+] as const;
+const CAFEINA_POR_DIA_OPTIONS = [
+  { value: "0", label: "0" },
+  { value: "1", label: "1" },
+  { value: "2_3", label: "2-3" },
+  { value: "4_5", label: "4-5" },
+  { value: "6_plus", label: "6+" },
+] as const;
+const CONDUCCION_NOCTURNA_OPTIONS = [
+  { value: "0", label: "0" },
+  { value: "lt_1h", label: "<1h" },
+  { value: "1_3h", label: "1-3h" },
+  { value: "4_plus_h", label: "4+h" },
+] as const;
+const USO_PANTALLA_OSCURIDAD_UNIDAD_OPTIONS = [
+  { value: "lt_30min", label: "<30 minutos" },
+  { value: "30min_1h", label: "30 minutos - 1 hora" },
+  { value: "2h_4h", label: "2 horas - 4 horas" },
+  { value: "4h_6h", label: "4 horas - 6 horas" },
+  { value: "6h_plus", label: "+6 horas" },
+] as const;
+const DIAGNOSTICO_PRINCIPAL_OPTIONS = [
+  { value: "miopia", label: "Miopía" },
+  { value: "hipermetropia", label: "Hipermetropía" },
+  { value: "astigmatismo", label: "Astigmatismo" },
+  { value: "presbicia", label: "Presbicia" },
+  { value: "ojo_seco", label: "Ojo seco" },
+  { value: "conjuntivitis_alergica", label: "Conjuntivitis alérgica" },
+  { value: "blefaritis_mgd", label: "Blefaritis / MGD" },
+  { value: "pterigion_pinguecula", label: "Pterigión / Pinguécula" },
+  { value: "catarata", label: "Catarata" },
+  { value: "glaucoma", label: "Glaucoma" },
+  { value: "queratocono", label: "Queratocono" },
+  { value: "patologia_retiniana", label: "Patología retiniana" },
+  { value: "otro", label: "Otro" },
+] as const;
+const DIAGNOSTICO_SECUNDARIO_OPTIONS = [
+  { value: "anisometropia", label: "Anisometropía" },
+  { value: "astenopia", label: "Astenopía" },
+  { value: "insuficiencia_convergencia", label: "Insuficiencia de convergencia" },
+  { value: "disfuncion_acomodativa", label: "Disfunción acomodativa" },
+  { value: "intolerancia_lentes_contacto", label: "Intolerancia a lentes de contacto" },
+  { value: "chalazion_orzuelo", label: "Chalazión / Orzuelo" },
+  { value: "ojo_rojo", label: "Ojo rojo" },
+  { value: "moscas_volantes", label: "Moscas volantes" },
+  { value: "cefalea_asociada", label: "Cefalea asociada" },
+  { value: "otro_secundario", label: "Otro secundario" },
+] as const;
 const CONSULTA_ETAPA_OPTIONS = [
   "primera_vez_en_clinica",
   "seguimiento",
@@ -909,6 +1038,82 @@ function normalizeLegacyNumericValue(
   return mapping[lowered] ?? "";
 }
 
+function normalizeOneDecimalInput(value: string): string {
+  const cleaned = value.replace(",", ".").replace(/[^0-9.]/g, "");
+  if (!cleaned) return "";
+  const [intPartRaw, ...rest] = cleaned.split(".");
+  const intPart = intPartRaw.replace(/^0+(?=\d)/, "") || "0";
+  if (rest.length === 0) return intPart;
+  const decimals = rest.join("").replace(/\./g, "").slice(0, 1);
+  return decimals ? `${intPart}.${decimals}` : intPart;
+}
+
+function normalizeIntegerInput(value: string): string {
+  const digits = value.replace(/\D/g, "");
+  if (!digits) return "";
+  return digits.replace(/^0+(?=\d)/, "") || "0";
+}
+
+function normalizeTiempoRango5(value: unknown): string {
+  const raw = String(value ?? "").trim();
+  if (!raw) return "";
+  const allowed = new Set<string>(TIEMPO_USO_DIARIO_RANGO_OPTIONS.map((opt) => opt.value));
+  if (allowed.has(raw)) return raw;
+  const normalized = raw.toLowerCase();
+  if (allowed.has(normalized)) return normalized;
+  const num = Number(raw.replace(",", "."));
+  if (!Number.isFinite(num)) return "";
+  if (num < 0.5) return "lt_30min";
+  if (num <= 1) return "30min_1h";
+  if (num <= 4) return "2h_4h";
+  if (num <= 6) return "4h_6h";
+  return "6h_plus";
+}
+
+function normalizeUsoLentesSolFrecuencia(value: unknown): string {
+  const raw = String(value ?? "").trim();
+  if (!raw) return "";
+  const allowed = new Set<string>(USO_LENTES_SOL_DIAS_SEMANA_OPTIONS.map((opt) => opt.value));
+  if (allowed.has(raw)) return raw;
+  const normalized = raw.toLowerCase();
+  if (allowed.has(normalized)) return normalized;
+
+  // Compatibilidad con valores legacy usados antes (rango por horas)
+  const legacyMap: Record<string, string> = {
+    lt_30min: "1_2_dias",
+    "30min_1h": "3_4_dias",
+    "2h_4h": "5_6_dias",
+    "4h_6h": "7_dias",
+    "6h_plus": "7_dias",
+  };
+  if (legacyMap[normalized]) return legacyMap[normalized];
+
+  const num = Number(raw.replace(",", "."));
+  if (!Number.isFinite(num)) return "";
+  if (num <= 0) return "0_dias";
+  if (num <= 2) return "1_2_dias";
+  if (num <= 4) return "3_4_dias";
+  if (num <= 6) return "5_6_dias";
+  return "7_dias";
+}
+
+function normalizeTiempoRango6(value: unknown): string {
+  const raw = String(value ?? "").trim();
+  if (!raw) return "";
+  const allowed = new Set<string>(TIEMPO_USO_ANTIBLUERAY_DIA_OPTIONS.map((opt) => opt.value));
+  if (allowed.has(raw)) return raw;
+  const normalized = raw.toLowerCase();
+  if (allowed.has(normalized)) return normalized;
+  const num = Number(raw.replace(",", "."));
+  if (!Number.isFinite(num)) return "";
+  if (num < 0.5) return "lt_30min";
+  if (num <= 1) return "30min_1h";
+  if (num <= 4) return "2h_4h";
+  if (num <= 6) return "4h_6h";
+  if (num <= 8) return "6h_8h";
+  return "8h_plus";
+}
+
 function splitPipeList(value: string | null | undefined): string[] {
   return String(value ?? "")
     .split("|")
@@ -1091,7 +1296,9 @@ function normalizeHistoriaForUi(data: any, fallbackDoctor: string) {
   const puestoLaboralParts = splitCantidadYTexto(data?.puesto_laboral ?? "");
   const medicamentosParts = splitCantidadYTexto(data?.medicamentos ?? "");
   const diagnosticoGeneralParts = splitCantidadYTexto(data?.diagnostico_general ?? "");
+  const recomendacionTratamientoParts = splitCantidadYTexto(data?.recomendacion_tratamiento ?? "");
   const antecedentesOtroGeneralParts = splitCantidadYTexto(antecedentesOtroParts.antecedentes_otro_general ?? "");
+  const antecedentesOcularesFamiliaresOtroParts = splitCantidadYTexto(data?.antecedentes_oculares_familiares_otro ?? "");
   const deporteTiposParts = splitCantidadYTexto(data?.deporte_tipos ?? "");
   const sintomasParts = splitSintomasForUi(data?.sintomas ?? "");
   const tiempoUsoLentesParts = splitTiempoUsoLentes(data?.tiempo_uso_lentes ?? "");
@@ -1099,6 +1306,8 @@ function normalizeHistoriaForUi(data: any, fallbackDoctor: string) {
   const puestoLaboralItems = splitHistoriaItems(puestoLaboralParts.texto);
   const deporteTiposItems = splitHistoriaItems(deporteTiposParts.texto);
   const antecedentesOtroGeneralItems = splitHistoriaItems(antecedentesOtroGeneralParts.texto);
+  const antecedentesOcularesFamiliaresOtroItems = splitHistoriaItems(antecedentesOcularesFamiliaresOtroParts.texto);
+  const recomendacionTratamientoItems = splitHistoriaItems(recomendacionTratamientoParts.texto);
   const diagnosticoGeneralCantidad =
     clampHistoriaCantidad(diagnosticoGeneralParts.cantidad) ??
     (diagnosticoGeneralItems.length > 0 ? Math.min(diagnosticoGeneralItems.length, 15) : null);
@@ -1111,6 +1320,14 @@ function normalizeHistoriaForUi(data: any, fallbackDoctor: string) {
   const antecedentesOtroGeneralCantidad =
     clampHistoriaCantidad(antecedentesOtroGeneralParts.cantidad) ??
     (antecedentesOtroGeneralItems.length > 0 ? Math.min(antecedentesOtroGeneralItems.length, 15) : null);
+  const antecedentesOcularesFamiliaresOtroCantidad =
+    clampHistoriaCantidad(antecedentesOcularesFamiliaresOtroParts.cantidad) ??
+    (antecedentesOcularesFamiliaresOtroItems.length > 0
+      ? Math.min(antecedentesOcularesFamiliaresOtroItems.length, 15)
+      : null);
+  const recomendacionTratamientoCantidad =
+    clampHistoriaCantidad(recomendacionTratamientoParts.cantidad) ??
+    (recomendacionTratamientoItems.length > 0 ? Math.min(recomendacionTratamientoItems.length, 15) : null);
   const diagnosticoGeneralTexto = joinHistoriaItems(
     resizeHistoriaItems(diagnosticoGeneralItems, diagnosticoGeneralCantidad ?? 0)
   );
@@ -1123,6 +1340,52 @@ function normalizeHistoriaForUi(data: any, fallbackDoctor: string) {
   const antecedentesOtroGeneralTexto = joinHistoriaItems(
     resizeHistoriaItems(antecedentesOtroGeneralItems, antecedentesOtroGeneralCantidad ?? 0)
   );
+  const antecedentesOcularesFamiliaresOtroTexto = joinHistoriaItems(
+    resizeHistoriaItems(antecedentesOcularesFamiliaresOtroItems, antecedentesOcularesFamiliaresOtroCantidad ?? 0)
+  );
+  const recomendacionTratamientoTexto = joinHistoriaItems(
+    resizeHistoriaItems(recomendacionTratamientoItems, recomendacionTratamientoCantidad ?? 0)
+  );
+  const normalizeDiagToken = (value: string): string =>
+    value
+      .toLowerCase()
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .replace(/[^a-z0-9]+/g, "_")
+      .replace(/^_+|_+$/g, "");
+  const principalKnown = new Set<string>(DIAGNOSTICO_PRINCIPAL_OPTIONS.map((opt) => opt.value));
+  const secundarioKnown = new Set<string>(DIAGNOSTICO_SECUNDARIO_OPTIONS.map((opt) => opt.value));
+  const legacyDiagnosticoTokens = diagnosticoGeneralItems
+    .flatMap((line) => line.split(/[|,]/))
+    .map((token) => token.replace(/^principal:\s*/i, "").replace(/^secundarios?:\s*/i, "").trim())
+    .filter(Boolean)
+    .map((token) => normalizeDiagToken(token));
+  let diagnosticoPrincipal = joinPipeList(splitPipeList(data?.diagnostico_principal ?? ""));
+  let diagnosticoPrincipalOtro = String(data?.diagnostico_principal_otro ?? "").trim();
+  let diagnosticosSecundarios = joinPipeList(splitPipeList(data?.diagnosticos_secundarios ?? ""));
+  let diagnosticosSecundariosOtro = String(data?.diagnosticos_secundarios_otro ?? "").trim();
+  if (!diagnosticoPrincipal && !diagnosticosSecundarios && legacyDiagnosticoTokens.length > 0) {
+    const principalSet = new Set<string>();
+    const secundarioSet = new Set<string>();
+    const principalOtros: string[] = [];
+    for (const token of legacyDiagnosticoTokens) {
+      if (!token) continue;
+      if (principalKnown.has(token)) {
+        principalSet.add(token);
+        continue;
+      }
+      if (secundarioKnown.has(token)) {
+        secundarioSet.add(token);
+        continue;
+      }
+      principalOtros.push(token.replace(/_/g, " "));
+    }
+    diagnosticoPrincipal = joinPipeList(Array.from(principalSet));
+    diagnosticosSecundarios = joinPipeList(Array.from(secundarioSet));
+    diagnosticoPrincipalOtro = diagnosticoPrincipalOtro || principalOtros.join(", ");
+  }
+  const seguimientoValorRaw = String(data?.seguimiento_valor ?? "").trim();
+  const seguimientoValorFecha = /^\d{4}-\d{2}-\d{2}$/.test(seguimientoValorRaw) ? seguimientoValorRaw : "";
   let diabetesEstado = String(data?.diabetes_estado ?? "").trim();
   if (!diabetesEstado) {
     const tipoDiabetes = String(data?.tipo_diabetes ?? "").trim().toLowerCase();
@@ -1253,8 +1516,48 @@ function normalizeHistoriaForUi(data: any, fallbackDoctor: string) {
     enfermedades_cantidad: enfermedadesParts.cantidad,
     cirugias: cirugiasParts.texto,
     cirugias_cantidad: cirugiasParts.cantidad,
+    antecedentes_oculares_familiares: data?.antecedentes_oculares_familiares ?? "",
+    antecedentes_oculares_familiares_otro: antecedentesOcularesFamiliaresOtroTexto,
+    antecedentes_oculares_familiares_otro_cantidad: antecedentesOcularesFamiliaresOtroCantidad,
     diagnostico_general: diagnosticoGeneralTexto,
     diagnostico_general_cantidad: diagnosticoGeneralCantidad,
+    diagnostico_principal: diagnosticoPrincipal,
+    diagnostico_principal_otro: diagnosticoPrincipalOtro,
+    diagnosticos_secundarios: diagnosticosSecundarios,
+    diagnosticos_secundarios_otro: diagnosticosSecundariosOtro,
+    recomendacion_tratamiento: recomendacionTratamientoTexto,
+    recomendacion_tratamiento_cantidad: recomendacionTratamientoCantidad,
+    fotofobia_escala: data?.fotofobia_escala ?? "",
+    dolor_ocular_escala: data?.dolor_ocular_escala ?? "",
+    cefalea_frecuencia: data?.cefalea_frecuencia ?? "",
+    trabajo_cerca_horas_dia: normalizeLegacyNumericValue(data?.trabajo_cerca_horas_dia ?? "", {}),
+    distancia_promedio_pantalla_cm: normalizeLegacyNumericValue(data?.distancia_promedio_pantalla_cm ?? "", {}),
+    iluminacion_trabajo: data?.iluminacion_trabajo ?? "",
+    flotadores_destellos: data?.flotadores_destellos ?? "",
+    flotadores_inicio_reciente: data?.flotadores_inicio_reciente ?? null,
+    flotadores_lateralidad: data?.flotadores_lateralidad ?? "",
+    uso_lentes_proteccion_uv: normalizeTiempoRango6(data?.uso_lentes_proteccion_uv ?? ""),
+    uso_lentes_sol_frecuencia: normalizeUsoLentesSolFrecuencia(data?.uso_lentes_sol_frecuencia ?? ""),
+    horas_exterior_dia: data?.horas_exterior_dia ?? "",
+    nivel_educativo: data?.nivel_educativo ?? "",
+    horas_lectura_dia: normalizeTiempoRango5(data?.horas_lectura_dia ?? ""),
+    horas_sueno_promedio: normalizeLegacyNumericValue(data?.horas_sueno_promedio ?? "", {}),
+    estres_nivel: normalizeLegacyNumericValue(data?.estres_nivel ?? "", {}),
+    peso_kg: normalizeOneDecimalInput(String(data?.peso_kg ?? "")),
+    altura_cm: normalizeIntegerInput(String(data?.altura_cm ?? "")),
+    sintomas_al_despertar: data?.sintomas_al_despertar ?? "",
+    sintomas_al_despertar_otro: data?.sintomas_al_despertar_otro ?? "",
+    convive_mascotas: data?.convive_mascotas ?? "",
+    convive_mascotas_otro: data?.convive_mascotas_otro ?? "",
+    uso_aire_acondicionado_frecuencia: data?.uso_aire_acondicionado_frecuencia ?? "",
+    uso_aire_acondicionado_horas_dia: normalizeLegacyNumericValue(data?.uso_aire_acondicionado_horas_dia ?? "", {}),
+    uso_calefaccion_frecuencia: data?.uso_calefaccion_frecuencia ?? "",
+    uso_calefaccion_horas_dia: normalizeLegacyNumericValue(data?.uso_calefaccion_horas_dia ?? "", {}),
+    uso_pantalla_en_oscuridad: data?.uso_pantalla_en_oscuridad ?? "",
+    cafeina_por_dia: data?.cafeina_por_dia === "6_mas" ? "6_plus" : (data?.cafeina_por_dia ?? ""),
+    seguimiento_requerido: data?.seguimiento_requerido ?? null,
+    seguimiento_tipo: data?.seguimiento_requerido === true ? "fecha" : "",
+    seguimiento_valor: data?.seguimiento_requerido === true ? seguimientoValorFecha : "",
     antecedentes_otro: composeAntecedentesOtro(
       antecedentesOtroParts.antecedentes_otro_general,
       antecedentesOtroParts.antecedentes_otro_familiar
@@ -1352,6 +1655,7 @@ export default function App() {
   const [successVentaMsg, setSuccessVentaMsg] = useState<string | null>(null);
   const [editingVentaId, setEditingVentaId] = useState<number | null>(null);
   const [successConsultaMsg, setSuccessConsultaMsg] = useState<string | null>(null);
+  const [successHistoriaMsg, setSuccessHistoriaMsg] = useState<string | null>(null);
   const [editingConsultaId, setEditingConsultaId] = useState<number | null>(null);
   const [sucursales, setSucursales] = useState<Sucursal[]>([]);
   const [sucursalActivaId, setSucursalActivaId] = useState<number>(1);
@@ -1363,7 +1667,6 @@ export default function App() {
   const [loadingHistoria, setLoadingHistoria] = useState(false);
   const [deletingHistoria, setDeletingHistoria] = useState(false);
   const [deletingHistoriaRowId, setDeletingHistoriaRowId] = useState<number | null>(null);
-  const [historiaGuardada, setHistoriaGuardada] = useState(false);
   const [historiaMissingSummary, setHistoriaMissingSummary] = useState<string | null>(null);
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [deleteConfirmType, setDeleteConfirmType] = useState<"paciente" | "consulta" | "venta" | null>(null);
@@ -2300,26 +2603,54 @@ export default function App() {
     });
 
     (async () => {
-      const resultados = await Promise.all(
-        faltantes.map(async (p) => {
-          try {
-            const r = await apiFetch(`/pacientes/${p.paciente_id}/historia?sucursal_id=${sucursalActivaId}`);
-            if (r.status === 404) return { pacienteId: p.paciente_id, status: "missing" as const };
-            if (!r.ok) return { pacienteId: p.paciente_id, status: "missing" as const };
-            return { pacienteId: p.paciente_id, status: "exists" as const };
-          } catch {
-            return { pacienteId: p.paciente_id, status: "missing" as const };
+      const timeout = window.setTimeout(() => {
+        if (cancelled) return;
+        setHistoriaEstadoPaciente((prev) => {
+          const next = { ...prev };
+          for (const p of faltantes) {
+            if (next[p.paciente_id] === "loading") {
+              next[p.paciente_id] = "missing";
+            }
           }
-        })
-      );
-      if (cancelled) return;
-      setHistoriaEstadoPaciente((prev) => {
-        const next = { ...prev };
-        for (const item of resultados) {
-          next[item.pacienteId] = item.status;
+          return next;
+        });
+      }, 10000);
+      try {
+        const r = await apiFetch(`/historias/estado?sucursal_id=${sucursalActivaId}`, {
+          method: "POST",
+          body: JSON.stringify({
+            paciente_ids: faltantes.map((p) => p.paciente_id),
+          }),
+        });
+        if (!r.ok) throw new Error(await readErrorMessage(r));
+        const data = await r.json();
+        const estadoMap = new Map<number, "exists" | "missing">();
+        for (const item of Array.isArray(data?.items) ? data.items : []) {
+          const pid = Number(item?.paciente_id || 0);
+          if (!Number.isFinite(pid) || pid <= 0) continue;
+          const estado = String(item?.estado || "").toLowerCase() === "exists" ? "exists" : "missing";
+          estadoMap.set(pid, estado);
         }
-        return next;
-      });
+        if (cancelled) return;
+        setHistoriaEstadoPaciente((prev) => {
+          const next = { ...prev };
+          for (const p of faltantes) {
+            next[p.paciente_id] = estadoMap.get(p.paciente_id) ?? "missing";
+          }
+          return next;
+        });
+      } catch {
+        if (cancelled) return;
+        setHistoriaEstadoPaciente((prev) => {
+          const next = { ...prev };
+          for (const p of faltantes) {
+            next[p.paciente_id] = "missing";
+          }
+          return next;
+        });
+      } finally {
+        window.clearTimeout(timeout);
+      }
     })();
 
     return () => {
@@ -2616,8 +2947,8 @@ export default function App() {
     setHistoriaSucursalId(sucursalTarget);
     setLoadingHistoria(true);
     setHistoriaData(null);
-    setHistoriaGuardada(false);
     setHistoriaMissingSummary(null);
+    setSuccessHistoriaMsg(null);
     setError(null);
 
     try {
@@ -2650,7 +2981,6 @@ export default function App() {
     setHistoriaPacienteId(null);
     setHistoriaPacienteInfo(null);
     setHistoriaSucursalId(null);
-    setHistoriaGuardada(false);
     setHistoriaMissingSummary(null);
     setError(null);
   }
@@ -3163,6 +3493,30 @@ export default function App() {
         historiaData?.antecedentes_otro_general_cantidad,
         historiaData?.antecedentes_otro_general
       );
+      const antecedentesOcularesFamiliaresOtroPayload = composeCantidadYTexto(
+        historiaData?.antecedentes_oculares_familiares_otro_cantidad,
+        historiaData?.antecedentes_oculares_familiares_otro
+      );
+      const recomendacionTratamientoPayload = composeCantidadYTexto(
+        historiaData?.recomendacion_tratamiento_cantidad,
+        historiaData?.recomendacion_tratamiento
+      );
+      const diagnosticoPrincipalSeleccionados = splitPipeList(historiaData?.diagnostico_principal ?? "");
+      const diagnosticoPrincipalOtro = String(historiaData?.diagnostico_principal_otro ?? "").trim();
+      const diagnosticoSecundarioSeleccionados = splitPipeList(historiaData?.diagnosticos_secundarios ?? "");
+      const diagnosticoSecundarioOtro = String(historiaData?.diagnosticos_secundarios_otro ?? "").trim();
+      const diagnosticoPrincipalResumen = joinPipeList([
+        ...diagnosticoPrincipalSeleccionados,
+        ...(diagnosticoPrincipalOtro ? [`otro:${diagnosticoPrincipalOtro}`] : []),
+      ]);
+      const diagnosticoSecundarioResumen = joinPipeList([
+        ...diagnosticoSecundarioSeleccionados,
+        ...(diagnosticoSecundarioOtro ? [`otro_secundario:${diagnosticoSecundarioOtro}`] : []),
+      ]);
+      const diagnosticoGeneralPayload = joinHistoriaItems([
+        diagnosticoPrincipalResumen ? `principal: ${diagnosticoPrincipalResumen}` : "",
+        diagnosticoSecundarioResumen ? `secundarios: ${diagnosticoSecundarioResumen}` : "",
+      ]);
       const antecedentesOtro = composeAntecedentesOtro(
         antecedentesOtroGeneralPayload,
         ""
@@ -3182,6 +3536,11 @@ export default function App() {
       const usaLentes = historiaData?.usa_lentes === true;
       const tipoLentesActual = usaLentes ? String(historiaData?.tipo_lentes_actual ?? "").trim() : "";
       const tiempoUsoLentesPayload = composeTiempoUsoLentes(historiaData?.tiempo_uso_lentes_anios);
+      const seguimientoRequerido = historiaData?.seguimiento_requerido === true;
+      const seguimientoTipo = seguimientoRequerido ? "fecha" : "";
+      const seguimientoValor = seguimientoRequerido
+        ? String(historiaData?.seguimiento_valor ?? "").trim()
+        : "";
       const sintomasSeleccionados = splitPipeList(historiaData?.sintomas ?? "");
       const sintomasOtrosCount = clampHistoriaCantidad(historiaData?.sintomas_otros_cantidad) ?? 0;
       const sintomasOtrosItems = resizeHistoriaItems(
@@ -3229,6 +3588,8 @@ export default function App() {
         antecedentes_generales: historiaData.antecedentes_generales,
         antecedentes_familiares: null,
         antecedentes_otro: antecedentesOtro || null,
+        antecedentes_oculares_familiares: historiaData.antecedentes_oculares_familiares,
+        antecedentes_oculares_familiares_otro: antecedentesOcularesFamiliaresOtroPayload || null,
         alergias: composeCantidadYTexto(historiaData.alergias_cantidad, historiaData.alergias),
         enfermedades: composeCantidadYTexto(historiaData.enfermedades_cantidad, historiaData.enfermedades),
         cirugias: composeCantidadYTexto(historiaData.cirugias_cantidad, historiaData.cirugias),
@@ -3261,11 +3622,39 @@ export default function App() {
         diabetes_control: historiaData.diabetes_control,
         diabetes_anios: historiaData.diabetes_anios,
         diabetes_tratamiento: joinPipeList(splitPipeList(historiaData.diabetes_tratamiento)),
+        trabajo_cerca_horas_dia: historiaData.trabajo_cerca_horas_dia,
+        distancia_promedio_pantalla_cm: historiaData.distancia_promedio_pantalla_cm,
+        iluminacion_trabajo: historiaData.iluminacion_trabajo,
+        fotofobia_escala: historiaData.fotofobia_escala,
+        dolor_ocular_escala: historiaData.dolor_ocular_escala,
+        cefalea_frecuencia: historiaData.cefalea_frecuencia,
+        flotadores_destellos: historiaData.flotadores_destellos,
+        flotadores_inicio_reciente: historiaData.flotadores_inicio_reciente,
+        flotadores_lateralidad: historiaData.flotadores_lateralidad,
         usa_lentes: historiaData.usa_lentes,
         tipo_lentes_actual: usaLentes ? (tipoLentesActual || null) : null,
         tiempo_uso_lentes: usaLentes ? (tiempoUsoLentesPayload || null) : null,
         lentes_contacto_horas_dia: usaLentes ? historiaData.lentes_contacto_horas_dia : null,
         lentes_contacto_dias_semana: null,
+        uso_lentes_proteccion_uv: historiaData.uso_lentes_proteccion_uv,
+        uso_lentes_sol_frecuencia: historiaData.uso_lentes_sol_frecuencia,
+        horas_exterior_dia: historiaData.horas_exterior_dia,
+        nivel_educativo: historiaData.nivel_educativo,
+        horas_lectura_dia: historiaData.horas_lectura_dia,
+        horas_sueno_promedio: historiaData.horas_sueno_promedio,
+        estres_nivel: historiaData.estres_nivel,
+        peso_kg: historiaData.peso_kg === "" || historiaData.peso_kg == null ? null : Number(historiaData.peso_kg),
+        altura_cm: historiaData.altura_cm === "" || historiaData.altura_cm == null ? null : Number(historiaData.altura_cm),
+        sintomas_al_despertar: joinPipeList(splitPipeList(historiaData.sintomas_al_despertar)),
+        sintomas_al_despertar_otro: historiaData.sintomas_al_despertar_otro,
+        convive_mascotas: joinPipeList(splitPipeList(historiaData.convive_mascotas)),
+        convive_mascotas_otro: historiaData.convive_mascotas_otro,
+        uso_aire_acondicionado_frecuencia: historiaData.uso_aire_acondicionado_frecuencia,
+        uso_aire_acondicionado_horas_dia: historiaData.uso_aire_acondicionado_horas_dia,
+        uso_calefaccion_frecuencia: historiaData.uso_calefaccion_frecuencia,
+        uso_calefaccion_horas_dia: historiaData.uso_calefaccion_horas_dia,
+        uso_pantalla_en_oscuridad: historiaData.uso_pantalla_en_oscuridad,
+        cafeina_por_dia: historiaData.cafeina_por_dia,
         sintomas: sintomasPayload,
         ppc: historiaData.ppc,
         lejos: historiaData.lejos,
@@ -3289,10 +3678,15 @@ export default function App() {
         adicionoi: historiaData.adicionoi,
         papila: historiaData.papila,
         biomicroscopia: historiaData.biomicroscopia,
-        diagnostico_general: composeCantidadYTexto(
-          historiaData.diagnostico_general_cantidad,
-          historiaData.diagnostico_general
-        ),
+        diagnostico_general: diagnosticoGeneralPayload || null,
+        diagnostico_principal: joinPipeList(diagnosticoPrincipalSeleccionados),
+        diagnostico_principal_otro: diagnosticoPrincipalOtro || null,
+        diagnosticos_secundarios: joinPipeList(diagnosticoSecundarioSeleccionados),
+        diagnosticos_secundarios_otro: diagnosticoSecundarioOtro || null,
+        recomendacion_tratamiento: recomendacionTratamientoPayload || null,
+        seguimiento_requerido: historiaData.seguimiento_requerido,
+        seguimiento_tipo: seguimientoTipo || null,
+        seguimiento_valor: seguimientoValor || null,
         observaciones: historiaData.observaciones,
       };
       const isExistingHistoria = Number(historiaData?.historia_id) > 0;
@@ -3311,7 +3705,15 @@ export default function App() {
       if (!r.ok) throw new Error(await readErrorMessage(r));
       const data = await r.json();
       setHistoriaData(normalizeHistoriaForUi(data, ""));
-      setHistoriaGuardada(true);
+      if (historiaPacienteId) {
+        setHistoriaEstadoPaciente((prev) => ({
+          ...prev,
+          [historiaPacienteId]: "exists",
+        }));
+      }
+      closeHistoriaModal();
+      setSuccessHistoriaMsg("Historia clínica guardada con éxito.");
+      setTimeout(() => setSuccessHistoriaMsg(null), 3500);
     } catch (e: any) {
       setError(e?.message ?? String(e));
     }
@@ -3445,12 +3847,15 @@ export default function App() {
   const sessionUser = String(me.username || "").trim().toLowerCase();
   const hideVentasTabUsers = new Set(["edomex_doc", "playa_doc"]);
   const hideVentasMetodoPieUsers = new Set(["edomex_doc", "playa_doc"]);
+  const hideVentasPeriodoKpiUsers = new Set(["edomex_doc", "playa_doc"]);
   const hideMoneyMonthlyChartUsers = new Set(["edomex_doc", "playa_doc", "playa_recep", "edomex_recep"]);
   const hideTopPacientesUsers = new Set(["edomex_doc", "playa_doc"]);
   const canViewVentasTab = !hideVentasTabUsers.has(sessionUser);
   const canViewVentasMetodoPie = !hideVentasMetodoPieUsers.has(sessionUser);
+  const canViewVentasPeriodoKpi = !hideVentasPeriodoKpiUsers.has(sessionUser);
   const canViewMoneyMonthlyChart = !hideMoneyMonthlyChartUsers.has(sessionUser);
   const canViewTopPacientesMes = !hideTopPacientesUsers.has(sessionUser);
+  const canViewVentasCantidadMensualChart = isAdmin || isRecep;
   const canViewHistoriaTab = isAdmin || isDoctor;
 
   const canCreatePaciente = isAdmin || isRecep;
@@ -3462,7 +3867,7 @@ export default function App() {
   const canDeleteConsulta = isAdmin || isDoctor || isRecep;
   const canCreateVenta = canViewVentasTab && (isAdmin || isDoctor || isRecep);
   const canEditVenta = canViewVentasTab && (isAdmin || isDoctor || isRecep);
-  const canDeleteVenta = canViewVentasTab && (isAdmin || isDoctor || isRecep);
+  const canDeleteVenta = canViewVentasTab && isAdmin;
 
   const softCard = {
     border: "1px solid #e7d7c7",
@@ -3506,12 +3911,38 @@ export default function App() {
     .split("|")
     .map((x: string) => x.trim())
     .filter(Boolean);
+  const antecedentesOcularesFamiliaresSeleccionados = String(historiaData?.antecedentes_oculares_familiares ?? "")
+    .split("|")
+    .map((x: string) => x.trim())
+    .filter(Boolean);
+  const diagnosticoPrincipalSeleccionados = String(historiaData?.diagnostico_principal ?? "")
+    .split("|")
+    .map((x: string) => x.trim())
+    .filter(Boolean);
+  const diagnosticoSecundarioSeleccionados = String(historiaData?.diagnosticos_secundarios ?? "")
+    .split("|")
+    .map((x: string) => x.trim())
+    .filter(Boolean);
+  const sintomasAlDespertarSeleccionados = String(historiaData?.sintomas_al_despertar ?? "")
+    .split("|")
+    .map((x: string) => x.trim())
+    .filter(Boolean);
+  const conviveMascotasSeleccionados = String(historiaData?.convive_mascotas ?? "")
+    .split("|")
+    .map((x: string) => x.trim())
+    .filter(Boolean);
+  const horasPantallaRaw = String(historiaData?.horas_pantalla_dia ?? "").trim();
+  const trabajoCercaRaw = String(historiaData?.trabajo_cerca_horas_dia ?? "").trim();
+  const horasPantallaEsCero = horasPantallaRaw !== "" && Number(horasPantallaRaw) === 0;
+  const trabajoCercaEsCero = trabajoCercaRaw !== "" && Number(trabajoCercaRaw) === 0;
+  const mostrarDistanciaPantalla = !horasPantallaEsCero && !trabajoCercaEsCero;
 
   const statsTopPacientesMesActual = statsData?.top_pacientes_mes_actual?.rows ?? [];
   const statsTopPacientesConsultas = statsData?.top_pacientes_consultas?.rows ?? [];
   const statsPacientesCreadosSerie = statsData?.pacientes_creados?.serie ?? [];
   const statsIngresosPorMes = statsData?.anual_mensual?.ingresos_por_mes ?? [];
   const statsConsultasPorMes = statsData?.anual_mensual?.consultas_por_mes ?? [];
+  const statsVentasPorMes = statsData?.anual_mensual?.ventas_por_mes ?? [];
   const statsComparativo = statsData?.comparativo_sucursales ?? null;
   const statsConsultasComparativo = statsComparativo?.consultas_periodo_por_sucursal ?? [];
   const statsVentasComparativo = statsComparativo?.ventas_por_mes_por_sucursal ?? [];
@@ -4941,9 +5372,7 @@ export default function App() {
                         >
                           Eliminar
                         </button>
-                      ) : (
-                        <span style={{ opacity: 0.5 }}>Sin permisos</span>
-                      )}
+                      ) : null}
                       </td>
                     </tr>
                   ))}
@@ -5352,9 +5781,7 @@ export default function App() {
                         >
                           Eliminar
                         </button>
-                      ) : (
-                        <span style={{ opacity: 0.5 }}>Sin permisos</span>
-                      )}
+                      ) : null}
                     </td>
                   </tr>
                 ))}
@@ -5738,10 +6165,12 @@ export default function App() {
                   <div style={{ fontSize: 12, opacity: 0.75 }}>Consultas (periodo)</div>
                   <div style={{ fontSize: 28, fontWeight: 800 }}>{statsData.consultas.total}</div>
                 </div>
-                <div style={{ ...softCard, padding: 14 }}>
-                  <div style={{ fontSize: 12, opacity: 0.75 }}>Ventas (periodo)</div>
-                  <div style={{ fontSize: 28, fontWeight: 800 }}>{statsData.ventas.total}</div>
-                </div>
+                {canViewVentasPeriodoKpi && (
+                  <div style={{ ...softCard, padding: 14 }}>
+                    <div style={{ fontSize: 12, opacity: 0.75 }}>Ventas (periodo)</div>
+                    <div style={{ fontSize: 28, fontWeight: 800 }}>{statsData.ventas.total}</div>
+                  </div>
+                )}
                 {isAdmin && (
                   <div style={{ ...softCard, padding: 14 }}>
                     <div style={{ fontSize: 12, opacity: 0.75 }}>Monto ventas (periodo)</div>
@@ -6161,6 +6590,45 @@ export default function App() {
                       </div>
                     )}
                   </div>
+                </div>
+              )}
+
+              {canViewVentasCantidadMensualChart && (
+                <div style={{ ...softCard, padding: 14 }}>
+                  <div style={{ fontWeight: 800, marginBottom: 8 }}>
+                    Ventas mes con mes (número de ventas) ({statsData.anual_mensual?.anio ?? statsSeriesAnio})
+                  </div>
+                  {statsVentasPorMes.length === 0 ? (
+                    <div>Sin datos.</div>
+                  ) : (
+                    <div
+                      style={{
+                        display: "grid",
+                        gridTemplateColumns: "repeat(12, minmax(26px, 1fr))",
+                        gap: 8,
+                        alignItems: "end",
+                        minHeight: 220,
+                      }}
+                    >
+                      {(() => {
+                        const maxValue = Math.max(1, ...statsVentasPorMes.map((x) => Number(x.total || 0)));
+                        return statsVentasPorMes.map((item) => (
+                          <div key={`ventas-cantidad-mes-${item.mes}`} style={{ display: "grid", gap: 6, justifyItems: "center" }}>
+                            <div style={{ fontWeight: 700, fontSize: 11 }}>{Number(item.total || 0)}</div>
+                            <div
+                              style={{
+                                width: "100%",
+                                height: Math.max(6, Math.round((Number(item.total || 0) / maxValue) * 150)),
+                                borderRadius: 8,
+                                background: "#C9822B",
+                              }}
+                            />
+                            <div style={{ fontSize: 10, opacity: 0.85 }}>{item.etiqueta}</div>
+                          </div>
+                        ));
+                      })()}
+                    </div>
+                  )}
                 </div>
               )}
             </>
@@ -6690,6 +7158,18 @@ export default function App() {
                 </div>
               </div>
               <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                {canEditPaciente && historiaPacienteInfo && historiaData && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      startEditPaciente(historiaPacienteInfo);
+                      closeHistoriaModal();
+                    }}
+                    style={{ ...actionBtnStyle, padding: "10px 14px" }}
+                  >
+                    Editar paciente
+                  </button>
+                )}
                 {historiaData && (
                   <button
                     type="button"
@@ -6763,7 +7243,7 @@ export default function App() {
             </div>
             <style>{`
               .historia-layout { min-height: 0; height: 100%; padding: 14px 16px 16px; }
-              .historia-main-scroll { min-height: 0; height: 100%; overflow-y: auto; padding: 0 6px 24px 0; scroll-behavior: smooth; }
+              .historia-main-scroll { min-height: 0; height: 100%; overflow-y: auto; padding: 0 6px 96px 0; scroll-behavior: smooth; }
               .historia-main-scroll section[data-hist-section] { scroll-margin-top: 16px; }
               .historia-paciente-grid { display: grid; gap: 10px; grid-template-columns: repeat(6, minmax(0, 1fr)); }
               @media (max-width: 1700px) {
@@ -6817,19 +7297,6 @@ export default function App() {
                 >
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, marginBottom: 10, flexWrap: "wrap" }}>
                     <div style={{ fontWeight: 800, color: "#5f4a32" }}>Información del paciente</div>
-                    {canEditPaciente && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          if (!historiaPacienteInfo) return;
-                          startEditPaciente(historiaPacienteInfo);
-                          closeHistoriaModal();
-                        }}
-                        style={{ ...actionBtnStyle, padding: "6px 10px" }}
-                      >
-                        Editar paciente
-                      </button>
-                    )}
                   </div>
                   <div className="historia-paciente-grid">
                     <div><strong>ID:</strong> {historiaPacienteInfo.paciente_id}</div>
@@ -6884,106 +7351,91 @@ export default function App() {
                         />
                       </label>
                     </div>
-                    <label style={{ display: "grid", gap: 6, marginTop: 10 }}>
-                      <span>Diagnóstico General</span>
-                      <div style={{ display: "flex", alignItems: "center", gap: 8, maxWidth: 220 }}>
-                        <span style={{ fontSize: 12, color: "#6b4f37", fontWeight: 700 }}>Cantidad</span>
-                        <input
-                          type="number"
-                          min={0}
-                          max={15}
-                          style={{ ...historiaInputStyle, width: 96, padding: 8 }}
-                          value={historiaData?.diagnostico_general_cantidad ?? ""}
-                          onChange={(e) => {
-                            const current = historiaData ?? {};
-                            const nextCount = clampHistoriaCantidad(e.target.value);
-                            const nextItems = resizeHistoriaItems(
-                              splitHistoriaItems(current.diagnostico_general),
-                              nextCount ?? 0
-                            );
-                            setHistoriaData({
-                              ...current,
-                              diagnostico_general_cantidad: nextCount,
-                              diagnostico_general: joinHistoriaItems(nextItems),
-                            });
-                          }}
-                        />
-                      </div>
-                      <div style={historiaItemsGridStyle}>
-                        {(resizeHistoriaItems(
-                          splitHistoriaItems(historiaData?.diagnostico_general),
-                          clampHistoriaCantidad(historiaData?.diagnostico_general_cantidad) ?? 0
-                        )).map((item, idx) => (
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 12, marginTop: 10 }}>
+                      <div style={{ display: "grid", gap: 6 }}>
+                        <span style={{ fontWeight: 700 }}>Diagnóstico principal</span>
+                        <div style={{ display: "flex", flexWrap: "wrap", gap: 12 }}>
+                          {DIAGNOSTICO_PRINCIPAL_OPTIONS.map((opt) => (
+                            <label key={`diag-principal-${opt.value}`} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                              <input
+                                type="checkbox"
+                                checked={diagnosticoPrincipalSeleccionados.includes(opt.value)}
+                                onChange={(e) => {
+                                  const current = historiaData ?? {};
+                                  const next = togglePipeValue(current.diagnostico_principal, opt.value, e.target.checked);
+                                  const removeOtro = opt.value === "otro" && !e.target.checked;
+                                  setHistoriaData({
+                                    ...current,
+                                    diagnostico_principal: next,
+                                    diagnostico_principal_otro: removeOtro ? "" : (current.diagnostico_principal_otro ?? ""),
+                                  });
+                                }}
+                              />
+                              <span>{opt.label}</span>
+                            </label>
+                          ))}
+                        </div>
+                        {diagnosticoPrincipalSeleccionados.includes("otro") && (
                           <input
-                            key={`diagnostico-item-${idx + 1}`}
                             style={historiaItemInputStyle}
-                            placeholder={`Diagnóstico ${idx + 1}`}
-                            value={item}
-                            onChange={(e) => {
-                              const current = historiaData ?? {};
-                              const count = clampHistoriaCantidad(current.diagnostico_general_cantidad) ?? 0;
-                              const nextItems = resizeHistoriaItems(
-                                splitHistoriaItems(current.diagnostico_general),
-                                count
-                              );
-                              nextItems[idx] = e.target.value;
-                              setHistoriaData({
-                                ...current,
-                                diagnostico_general: joinHistoriaItems(nextItems),
-                              });
-                            }}
+                            placeholder="Otro diagnóstico principal"
+                            value={historiaData?.diagnostico_principal_otro ?? ""}
+                            onChange={(e) => setHistoriaData({ ...(historiaData ?? {}), diagnostico_principal_otro: e.target.value })}
                           />
-                        ))}
+                        )}
                       </div>
+
+                      <div style={{ display: "grid", gap: 6 }}>
+                        <span style={{ fontWeight: 700 }}>Diagnósticos secundarios</span>
+                        <div style={{ display: "flex", flexWrap: "wrap", gap: 12 }}>
+                          {DIAGNOSTICO_SECUNDARIO_OPTIONS.map((opt) => (
+                            <label key={`diag-sec-${opt.value}`} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                              <input
+                                type="checkbox"
+                                checked={diagnosticoSecundarioSeleccionados.includes(opt.value)}
+                                onChange={(e) => {
+                                  const current = historiaData ?? {};
+                                  const next = togglePipeValue(current.diagnosticos_secundarios, opt.value, e.target.checked);
+                                  const removeOtro = opt.value === "otro_secundario" && !e.target.checked;
+                                  setHistoriaData({
+                                    ...current,
+                                    diagnosticos_secundarios: next,
+                                    diagnosticos_secundarios_otro: removeOtro ? "" : (current.diagnosticos_secundarios_otro ?? ""),
+                                  });
+                                }}
+                              />
+                              <span>{opt.label}</span>
+                            </label>
+                          ))}
+                        </div>
+                        {diagnosticoSecundarioSeleccionados.includes("otro_secundario") && (
+                          <input
+                            style={historiaItemInputStyle}
+                            placeholder="Otro diagnóstico secundario"
+                            value={historiaData?.diagnosticos_secundarios_otro ?? ""}
+                            onChange={(e) => setHistoriaData({ ...(historiaData ?? {}), diagnosticos_secundarios_otro: e.target.value })}
+                          />
+                        )}
+                      </div>
+                    </div>
+                    <label style={{ display: "grid", gap: 6, marginTop: 8 }}>
+                      <span>Recomendación de tratamiento</span>
+                      <textarea
+                        style={{ ...historiaInputStyle, minHeight: 72, resize: "vertical" }}
+                        value={historiaData?.recomendacion_tratamiento ?? ""}
+                        onChange={(e) => {
+                          setHistoriaData({
+                            ...(historiaData ?? {}),
+                            recomendacion_tratamiento: e.target.value,
+                          });
+                        }}
+                      />
                     </label>
                   </div>
                 </div>
               </section>
             )}
         
-
-            {historiaGuardada && (
-              <div
-                style={{
-                  background: "#e8f8f2",
-                  border: "1px solid #2ecc71",
-                  padding: 14,
-                  borderRadius: 10,
-                  marginBottom: 18,
-                  fontWeight: 600,
-                  color: "#1e8449",
-                }}
-              >
-                <div style={{ fontWeight: 700, marginBottom: 8 }}>
-                  ✔ Historia clínica guardada correctamente
-                </div>
-              
-
-
-
-
-                <button
-                  type="button"
-                  onClick={() => {
-                    setHistoriaGuardada(false);
-                  }}
-                  style={{
-                    padding: "6px 12px",
-                    borderRadius: 8,
-                    border: "1px solid #2ecc71",
-                    background: "#2ecc71",
-                    color: "#fff",
-                    fontWeight: 600,
-                    cursor: "pointer",
-                  }}
-                >
-                  Ver historia clínica
-                </button>
-              </div>
-            )}
-
-
-
 
             {loadingHistoria ? (
               <div>Cargando...</div>
@@ -7177,6 +7629,88 @@ export default function App() {
                                   antecedentes_otro_general: general,
                                   antecedentes_otro_familiar: "",
                                   antecedentes_otro: composeAntecedentesOtro(generalPayload, ""),
+                                });
+                              }}
+                            />
+                          ))}
+                        </div>
+                      </label>
+                    )}
+                  </div>
+                  <div style={{ borderTop: "1px solid #f0e1cf", paddingTop: 10 }}>
+                    <div style={{ fontWeight: 700, marginBottom: 6 }}>Antecedentes oculares familiares</div>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 6 }}>
+                      {ANTECEDENTE_OPTIONS.map((opt) => (
+                        <label key={`aof-${opt}`} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                          <input
+                            type="checkbox"
+                            checked={antecedentesOcularesFamiliaresSeleccionados.includes(opt)}
+                            onChange={(e) => {
+                              const next = e.target.checked
+                                ? [...antecedentesOcularesFamiliaresSeleccionados, opt]
+                                : antecedentesOcularesFamiliaresSeleccionados.filter((x) => x !== opt);
+                              const removeOtro = opt === "otro" && !e.target.checked;
+                              setHistoriaData({
+                                ...historiaData,
+                                antecedentes_oculares_familiares: joinPipeList(next),
+                                antecedentes_oculares_familiares_otro: removeOtro
+                                  ? ""
+                                  : (historiaData.antecedentes_oculares_familiares_otro ?? ""),
+                                antecedentes_oculares_familiares_otro_cantidad: removeOtro
+                                  ? null
+                                  : clampHistoriaCantidad(historiaData.antecedentes_oculares_familiares_otro_cantidad),
+                              });
+                            }}
+                          />
+                          <span>{opt}</span>
+                        </label>
+                      ))}
+                    </div>
+                    {antecedentesOcularesFamiliaresSeleccionados.includes("otro") && (
+                      <label style={{ display: "grid", gap: 6, marginTop: 8 }}>
+                        <span>Otro (oculares familiares)</span>
+                        <div style={{ display: "flex", alignItems: "center", gap: 8, maxWidth: 220 }}>
+                          <span style={{ fontSize: 12, color: "#6b4f37", fontWeight: 700 }}>Cantidad</span>
+                          <input
+                            type="number"
+                            min={0}
+                            max={15}
+                            style={{ ...historiaInputStyle, width: 96, padding: 8 }}
+                            value={historiaData.antecedentes_oculares_familiares_otro_cantidad ?? ""}
+                            onChange={(e) => {
+                              const nextCount = clampHistoriaCantidad(e.target.value);
+                              const nextItems = resizeHistoriaItems(
+                                splitHistoriaItems(historiaData.antecedentes_oculares_familiares_otro),
+                                nextCount ?? 0
+                              );
+                              setHistoriaData({
+                                ...historiaData,
+                                antecedentes_oculares_familiares_otro_cantidad: nextCount,
+                                antecedentes_oculares_familiares_otro: joinHistoriaItems(nextItems),
+                              });
+                            }}
+                          />
+                        </div>
+                        <div style={historiaItemsGridStyle}>
+                          {(resizeHistoriaItems(
+                            splitHistoriaItems(historiaData.antecedentes_oculares_familiares_otro),
+                            clampHistoriaCantidad(historiaData.antecedentes_oculares_familiares_otro_cantidad) ?? 0
+                          )).map((item, idx) => (
+                            <input
+                              key={`aof-otro-item-${idx + 1}`}
+                              style={historiaItemInputStyle}
+                              placeholder={`Antecedente ocular familiar ${idx + 1}`}
+                              value={item}
+                              onChange={(e) => {
+                                const count = clampHistoriaCantidad(historiaData.antecedentes_oculares_familiares_otro_cantidad) ?? 0;
+                                const nextItems = resizeHistoriaItems(
+                                  splitHistoriaItems(historiaData.antecedentes_oculares_familiares_otro),
+                                  count
+                                );
+                                nextItems[idx] = e.target.value;
+                                setHistoriaData({
+                                  ...historiaData,
+                                  antecedentes_oculares_familiares_otro: joinHistoriaItems(nextItems),
                                 });
                               }}
                             />
@@ -7394,42 +7928,342 @@ export default function App() {
                   {/* Hábitos y riesgos */}
                   <h3 style={{ margin: 0, color: "#5f4a32" }}>Hábitos y riesgos</h3>
                   <div style={{ background: "#fff", border: "1px solid #ead9c8", padding: 12, borderRadius: 12, display: "grid", gap: 10 }}>
-                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 10 }}>
-                      <label style={{ display: "grid", gap: 4 }}>
-                        <span>Horas de pantalla/celular al día</span>
+                    <div style={{ border: "1px solid #f0e1cf", borderRadius: 10, padding: 10, display: "grid", gap: 10 }}>
+                      <div style={{ fontWeight: 700, color: "#5f4a32" }}>Pantallas / trabajo de cerca</div>
+                      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 10 }}>
+                        <label style={{ display: "grid", gap: 4 }}>
+                          <span>Horas de pantalla/celular al día</span>
+                          <input
+                            type="number"
+                            min={0}
+                            step="0.1"
+                            style={historiaInputStyle}
+                            value={historiaData.horas_pantalla_dia ?? ""}
+                            onChange={(e) => setHistoriaData({ ...historiaData, horas_pantalla_dia: e.target.value || null })}
+                          />
+                        </label>
+                        <label style={{ display: "grid", gap: 4 }}>
+                          <span>Trabajo de cerca horas/día (leer/compu/cel)</span>
+                          <input
+                            type="number"
+                            min={0}
+                            step="0.1"
+                            style={historiaInputStyle}
+                            value={historiaData.trabajo_cerca_horas_dia ?? ""}
+                            onChange={(e) => setHistoriaData({ ...historiaData, trabajo_cerca_horas_dia: e.target.value || null })}
+                          />
+                        </label>
+                        {mostrarDistanciaPantalla && (
+                          <label style={{ display: "grid", gap: 4 }}>
+                            <span>Distancia promedio pantalla (cm)</span>
+                            <input
+                              type="number"
+                              min={0}
+                              step="1"
+                              style={historiaInputStyle}
+                              value={historiaData.distancia_promedio_pantalla_cm ?? ""}
+                              onChange={(e) => setHistoriaData({ ...historiaData, distancia_promedio_pantalla_cm: e.target.value || null })}
+                            />
+                          </label>
+                        )}
+                        <label style={{ display: "grid", gap: 4 }}>
+                          <span>Uso de pantalla en oscuridad</span>
+                          <select
+                            style={historiaInputStyle}
+                            value={historiaData.uso_pantalla_en_oscuridad ?? ""}
+                            onChange={(e) => setHistoriaData({ ...historiaData, uso_pantalla_en_oscuridad: e.target.value })}
+                          >
+                            <option value="">Seleccionar</option>
+                            {USO_PANTALLA_OSCURIDAD_UNIDAD_OPTIONS.map((opt) => (
+                              <option key={`pantalla-osc-${opt.value}`} value={opt.value}>{opt.label}</option>
+                            ))}
+                          </select>
+                        </label>
+                        <label style={{ display: "grid", gap: 4 }}>
+                          <span>Iluminación de trabajo</span>
+                          <select
+                            style={historiaInputStyle}
+                            value={historiaData.iluminacion_trabajo ?? ""}
+                            onChange={(e) => setHistoriaData({ ...historiaData, iluminacion_trabajo: e.target.value })}
+                          >
+                            <option value="">Seleccionar</option>
+                            {ILUMINACION_TRABAJO_OPTIONS.map((opt) => (
+                              <option key={`iluminacion-${opt.value}`} value={opt.value}>{opt.label}</option>
+                            ))}
+                          </select>
+                        </label>
+                      </div>
+                    </div>
+
+                    <div style={{ border: "1px solid #f0e1cf", borderRadius: 10, padding: 10, display: "grid", gap: 10 }}>
+                      <div style={{ fontWeight: 700, color: "#5f4a32" }}>Exterior / UV</div>
+                      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 10 }}>
+                        <label style={{ display: "grid", gap: 4 }}>
+                          <span>Exposición al sol/UV</span>
+                          <select
+                            style={historiaInputStyle}
+                            value={historiaData.exposicion_uv ?? ""}
+                            onChange={(e) => setHistoriaData({ ...historiaData, exposicion_uv: e.target.value })}
+                          >
+                            <option value="">Seleccionar</option>
+                            <option value="baja">Baja</option>
+                            <option value="media">Media</option>
+                            <option value="alta">Alta</option>
+                          </select>
+                        </label>
+                        <label style={{ display: "grid", gap: 4 }}>
+                          <span>Horas al exterior por día</span>
+                          <select
+                            style={historiaInputStyle}
+                            value={historiaData.horas_exterior_dia ?? ""}
+                            onChange={(e) => setHistoriaData({ ...historiaData, horas_exterior_dia: e.target.value })}
+                          >
+                            <option value="">Seleccionar</option>
+                            {HORAS_EXTERIOR_DIA_OPTIONS.map((opt) => (
+                              <option key={`horas-ext-${opt.value}`} value={opt.value}>{opt.label}</option>
+                            ))}
+                          </select>
+                        </label>
+                        <label style={{ display: "grid", gap: 4 }}>
+                          <span>Uso de lentes de sol (días por semana)</span>
+                          <select
+                            style={historiaInputStyle}
+                            value={historiaData.uso_lentes_sol_frecuencia ?? ""}
+                            onChange={(e) => setHistoriaData({ ...historiaData, uso_lentes_sol_frecuencia: e.target.value })}
+                          >
+                            <option value="">Seleccionar</option>
+                            {USO_LENTES_SOL_DIAS_SEMANA_OPTIONS.map((opt) => (
+                              <option key={`sol-freq-${opt.value}`} value={opt.value}>{opt.label}</option>
+                            ))}
+                          </select>
+                        </label>
+                        <label style={{ display: "grid", gap: 4 }}>
+                          <span>Conducción nocturna</span>
+                          <select
+                            style={historiaInputStyle}
+                            value={historiaData.conduccion_nocturna_horas ?? ""}
+                            onChange={(e) => setHistoriaData({ ...historiaData, conduccion_nocturna_horas: e.target.value || null })}
+                          >
+                            <option value="">Seleccionar</option>
+                            {CONDUCCION_NOCTURNA_OPTIONS.map((opt) => (
+                              <option key={`conduccion-noc-${opt.value}`} value={opt.value}>{opt.label}</option>
+                            ))}
+                          </select>
+                        </label>
+                      </div>
+                    </div>
+
+                    <div style={{ border: "1px solid #f0e1cf", borderRadius: 10, padding: 10, display: "grid", gap: 10 }}>
+                      <div style={{ fontWeight: 700, color: "#5f4a32" }}>Sueño / estrés / hábitos</div>
+                      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 10 }}>
+                        <label style={{ display: "grid", gap: 4 }}>
+                          <span>Horas de sueño promedio</span>
+                          <input
+                            type="number"
+                            min={0}
+                            max={24}
+                            step="0.1"
+                            style={historiaInputStyle}
+                            value={historiaData.horas_sueno_promedio ?? ""}
+                            onChange={(e) => setHistoriaData({ ...historiaData, horas_sueno_promedio: e.target.value || null })}
+                          />
+                        </label>
+                        <label style={{ display: "grid", gap: 4 }}>
+                          <span>Estrés (0-10)</span>
+                          <input
+                            type="number"
+                            min={0}
+                            max={10}
+                            step="1"
+                            style={historiaInputStyle}
+                            value={historiaData.estres_nivel ?? ""}
+                            onChange={(e) => setHistoriaData({ ...historiaData, estres_nivel: e.target.value || null })}
+                          />
+                        </label>
+                        <label style={{ display: "grid", gap: 4 }}>
+                          <span>Peso (kg)</span>
+                          <input
+                            type="text"
+                            inputMode="decimal"
+                            placeholder="Ej. 68.5"
+                            style={historiaInputStyle}
+                            value={historiaData.peso_kg ?? ""}
+                            onChange={(e) => setHistoriaData({ ...historiaData, peso_kg: normalizeOneDecimalInput(e.target.value) })}
+                          />
+                        </label>
+                        <label style={{ display: "grid", gap: 4 }}>
+                          <span>Altura (cm)</span>
+                          <input
+                            type="text"
+                            inputMode="numeric"
+                            placeholder="Ej. 173"
+                            style={historiaInputStyle}
+                            value={historiaData.altura_cm ?? ""}
+                            onChange={(e) => setHistoriaData({ ...historiaData, altura_cm: normalizeIntegerInput(e.target.value) })}
+                          />
+                        </label>
+                        <label style={{ display: "grid", gap: 4 }}>
+                          <span>Cafeína (bebidas con cafeína al día)</span>
+                          <select
+                            style={historiaInputStyle}
+                            value={historiaData.cafeina_por_dia ?? ""}
+                            onChange={(e) => setHistoriaData({ ...historiaData, cafeina_por_dia: e.target.value })}
+                          >
+                            <option value="">Seleccionar</option>
+                            {CAFEINA_POR_DIA_OPTIONS.map((opt) => (
+                              <option key={`cafeina-${opt.value}`} value={opt.value}>{opt.label}</option>
+                            ))}
+                          </select>
+                        </label>
+                        <label style={{ display: "grid", gap: 4 }}>
+                          <span>Horas de lectura al día</span>
+                          <select
+                            style={historiaInputStyle}
+                            value={historiaData.horas_lectura_dia ?? ""}
+                            onChange={(e) => setHistoriaData({ ...historiaData, horas_lectura_dia: e.target.value })}
+                          >
+                            <option value="">Seleccionar</option>
+                            {TIEMPO_USO_DIARIO_RANGO_OPTIONS.map((opt) => (
+                              <option key={`lectura-${opt.value}`} value={opt.value}>{opt.label}</option>
+                            ))}
+                          </select>
+                        </label>
+                        <label style={{ display: "grid", gap: 4 }}>
+                          <span>Nivel educativo</span>
+                          <select
+                            style={historiaInputStyle}
+                            value={historiaData.nivel_educativo ?? ""}
+                            onChange={(e) => setHistoriaData({ ...historiaData, nivel_educativo: e.target.value })}
+                          >
+                            <option value="">Seleccionar</option>
+                            {NIVEL_EDUCATIVO_OPTIONS.map((opt) => (
+                              <option key={`nivel-ed-${opt.value}`} value={opt.value}>{opt.label}</option>
+                            ))}
+                          </select>
+                        </label>
+                      </div>
+                    </div>
+
+                    <div style={{ border: "1px solid #f0e1cf", borderRadius: 10, padding: 10, display: "grid", gap: 10 }}>
+                      <div style={{ fontWeight: 700, color: "#5f4a32" }}>Ambiente / exposición</div>
+                      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 10 }}>
+                        <label style={{ display: "grid", gap: 4 }}>
+                          <span>Aire acondicionado: frecuencia</span>
+                          <select
+                            style={historiaInputStyle}
+                            value={historiaData.uso_aire_acondicionado_frecuencia ?? ""}
+                            onChange={(e) => setHistoriaData({ ...historiaData, uso_aire_acondicionado_frecuencia: e.target.value })}
+                          >
+                            <option value="">Seleccionar</option>
+                            {FRECUENCIA_AMBIENTE_OPTIONS.map((opt) => (
+                              <option key={`aire-frec-${opt.value}`} value={opt.value}>{opt.label}</option>
+                            ))}
+                          </select>
+                        </label>
+                        <label style={{ display: "grid", gap: 4 }}>
+                          <span>Aire acondicionado: horas al día</span>
+                          <input
+                            type="number"
+                            min={0}
+                            max={24}
+                            step="0.1"
+                            style={historiaInputStyle}
+                            value={historiaData.uso_aire_acondicionado_horas_dia ?? ""}
+                            onChange={(e) => setHistoriaData({ ...historiaData, uso_aire_acondicionado_horas_dia: e.target.value || null })}
+                          />
+                        </label>
+                        <label style={{ display: "grid", gap: 4 }}>
+                          <span>Calefacción: frecuencia</span>
+                          <select
+                            style={historiaInputStyle}
+                            value={historiaData.uso_calefaccion_frecuencia ?? ""}
+                            onChange={(e) => setHistoriaData({ ...historiaData, uso_calefaccion_frecuencia: e.target.value })}
+                          >
+                            <option value="">Seleccionar</option>
+                            {FRECUENCIA_AMBIENTE_OPTIONS.map((opt) => (
+                              <option key={`calef-frec-${opt.value}`} value={opt.value}>{opt.label}</option>
+                            ))}
+                          </select>
+                        </label>
+                        <label style={{ display: "grid", gap: 4 }}>
+                          <span>Calefacción: horas al día</span>
+                          <input
+                            type="number"
+                            min={0}
+                            max={24}
+                            step="0.1"
+                            style={historiaInputStyle}
+                            value={historiaData.uso_calefaccion_horas_dia ?? ""}
+                            onChange={(e) => setHistoriaData({ ...historiaData, uso_calefaccion_horas_dia: e.target.value || null })}
+                          />
+                        </label>
+                      </div>
+                    </div>
+
+                    <div style={{ borderTop: "1px solid #f0e1cf", paddingTop: 10, display: "grid", gap: 8 }}>
+                      <div style={{ fontWeight: 700 }}>Síntomas al despertar</div>
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 12 }}>
+                        {SINTOMAS_AL_DESPERTAR_OPTIONS.map((opt) => (
+                          <label key={`sint-despertar-${opt.value}`} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                            <input
+                              type="checkbox"
+                              checked={sintomasAlDespertarSeleccionados.includes(opt.value)}
+                              onChange={(e) => {
+                                const current = historiaData ?? {};
+                                const next = togglePipeValue(current.sintomas_al_despertar, opt.value, e.target.checked);
+                                const removeOtro = opt.value === "otro" && !e.target.checked;
+                                setHistoriaData({
+                                  ...current,
+                                  sintomas_al_despertar: next,
+                                  sintomas_al_despertar_otro: removeOtro ? "" : (current.sintomas_al_despertar_otro ?? ""),
+                                });
+                              }}
+                            />
+                            <span>{opt.label}</span>
+                          </label>
+                        ))}
+                      </div>
+                      {sintomasAlDespertarSeleccionados.includes("otro") && (
                         <input
-                          type="number"
-                          min={0}
-                          step="0.1"
-                          style={historiaInputStyle}
-                          value={historiaData.horas_pantalla_dia ?? ""}
-                          onChange={(e) => setHistoriaData({ ...historiaData, horas_pantalla_dia: e.target.value || null })}
+                          style={historiaItemInputStyle}
+                          placeholder="Otro síntoma al despertar"
+                          value={historiaData.sintomas_al_despertar_otro ?? ""}
+                          onChange={(e) => setHistoriaData({ ...historiaData, sintomas_al_despertar_otro: e.target.value })}
                         />
-                      </label>
-                      <label style={{ display: "grid", gap: 4 }}>
-                        <span>Conducción nocturna (horas)</span>
+                      )}
+                    </div>
+
+                    <div style={{ borderTop: "1px solid #f0e1cf", paddingTop: 10, display: "grid", gap: 8 }}>
+                      <div style={{ fontWeight: 700 }}>Convive con mascotas</div>
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 12 }}>
+                        {CONVIVE_MASCOTAS_OPTIONS.map((opt) => (
+                          <label key={`mascota-${opt.value}`} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                            <input
+                              type="checkbox"
+                              checked={conviveMascotasSeleccionados.includes(opt.value)}
+                              onChange={(e) => {
+                                const current = historiaData ?? {};
+                                const next = togglePipeValue(current.convive_mascotas, opt.value, e.target.checked);
+                                const removeOtro = opt.value === "otro" && !e.target.checked;
+                                setHistoriaData({
+                                  ...current,
+                                  convive_mascotas: next,
+                                  convive_mascotas_otro: removeOtro ? "" : (current.convive_mascotas_otro ?? ""),
+                                });
+                              }}
+                            />
+                            <span>{opt.label}</span>
+                          </label>
+                        ))}
+                      </div>
+                      {conviveMascotasSeleccionados.includes("otro") && (
                         <input
-                          type="number"
-                          min={0}
-                          step="0.1"
-                          style={historiaInputStyle}
-                          value={historiaData.conduccion_nocturna_horas ?? ""}
-                          onChange={(e) => setHistoriaData({ ...historiaData, conduccion_nocturna_horas: e.target.value || null })}
+                          style={historiaItemInputStyle}
+                          placeholder="Otra mascota"
+                          value={historiaData.convive_mascotas_otro ?? ""}
+                          onChange={(e) => setHistoriaData({ ...historiaData, convive_mascotas_otro: e.target.value })}
                         />
-                      </label>
-                      <label style={{ display: "grid", gap: 4 }}>
-                        <span>Exposición al sol/UV</span>
-                        <select
-                          style={historiaInputStyle}
-                          value={historiaData.exposicion_uv ?? ""}
-                          onChange={(e) => setHistoriaData({ ...historiaData, exposicion_uv: e.target.value })}
-                        >
-                          <option value="">Seleccionar</option>
-                          <option value="baja">Baja</option>
-                          <option value="media">Media</option>
-                          <option value="alta">Alta</option>
-                        </select>
-                      </label>
+                      )}
                     </div>
 
                     <div style={{ borderTop: "1px solid #f0e1cf", paddingTop: 10 }}>
@@ -7721,7 +8555,7 @@ export default function App() {
                     </div>
 
                     <div style={{ borderTop: "1px solid #f0e1cf", paddingTop: 10 }}>
-                      <div style={{ fontWeight: 700, marginBottom: 8 }}>Lentes y síntomas</div>
+                      <div style={{ fontWeight: 700, marginBottom: 8 }}>Lentes</div>
                       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 10 }}>
                         <label style={{ display: "grid", gap: 4 }}>
                           <span>Usa lentes actualmente</span>
@@ -7797,9 +8631,115 @@ export default function App() {
                             </label>
                           </>
                         )}
+                        <label style={{ display: "grid", gap: 4 }}>
+                          <span>Uso de lentes con micas antiblueray al día</span>
+                          <select
+                            style={historiaInputStyle}
+                            value={historiaData.uso_lentes_proteccion_uv ?? ""}
+                            onChange={(e) => setHistoriaData({ ...historiaData, uso_lentes_proteccion_uv: e.target.value })}
+                          >
+                            <option value="">Seleccionar</option>
+                            {TIEMPO_USO_ANTIBLUERAY_DIA_OPTIONS.map((opt) => (
+                              <option key={`antiblueray-dia-${opt.value}`} value={opt.value}>{opt.label}</option>
+                            ))}
+                          </select>
+                        </label>
+                      </div>
+                    </div>
+
+                    <div style={{ borderTop: "1px solid #f0e1cf", paddingTop: 10 }}>
+                      <div style={{ fontWeight: 700, marginBottom: 8 }}>Síntomas</div>
+                      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 10 }}>
+                        <label style={{ display: "grid", gap: 4 }}>
+                          <span>Fotofobia (0-10)</span>
+                          <input
+                            type="number"
+                            min={0}
+                            max={10}
+                            step="1"
+                            style={historiaInputStyle}
+                            value={historiaData.fotofobia_escala ?? ""}
+                            onChange={(e) => setHistoriaData({ ...historiaData, fotofobia_escala: e.target.value || null })}
+                          />
+                        </label>
+                        <label style={{ display: "grid", gap: 4 }}>
+                          <span>Dolor ocular (0-10)</span>
+                          <input
+                            type="number"
+                            min={0}
+                            max={10}
+                            step="1"
+                            style={historiaInputStyle}
+                            value={historiaData.dolor_ocular_escala ?? ""}
+                            onChange={(e) => setHistoriaData({ ...historiaData, dolor_ocular_escala: e.target.value || null })}
+                          />
+                        </label>
+                        <label style={{ display: "grid", gap: 4 }}>
+                          <span>Cefalea: frecuencia</span>
+                          <select
+                            style={historiaInputStyle}
+                            value={historiaData.cefalea_frecuencia ?? ""}
+                            onChange={(e) => setHistoriaData({ ...historiaData, cefalea_frecuencia: e.target.value })}
+                          >
+                            <option value="">Seleccionar</option>
+                            {CEFALEA_FRECUENCIA_OPTIONS.map((opt) => (
+                              <option key={`cefalea-freq-${opt.value}`} value={opt.value}>{opt.label}</option>
+                            ))}
+                          </select>
+                        </label>
+                        <label style={{ display: "grid", gap: 4 }}>
+                          <span>Flotadores / destellos</span>
+                          <select
+                            style={historiaInputStyle}
+                            value={historiaData.flotadores_destellos ?? ""}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              setHistoriaData({
+                                ...historiaData,
+                                flotadores_destellos: val,
+                                flotadores_inicio_reciente: val ? (historiaData.flotadores_inicio_reciente ?? null) : null,
+                                flotadores_lateralidad: val ? (historiaData.flotadores_lateralidad ?? "") : "",
+                              });
+                            }}
+                          >
+                            <option value="">Seleccionar</option>
+                            {FLOTADORES_DESTELLOS_OPTIONS.map((opt) => (
+                              <option key={`flotadores-${opt.value}`} value={opt.value}>{opt.label}</option>
+                            ))}
+                          </select>
+                        </label>
+                        {Boolean(historiaData.flotadores_destellos) && historiaData.flotadores_destellos !== "ninguno" && (
+                          <>
+                            <label style={{ display: "grid", gap: 4 }}>
+                              <span>Inicio reciente</span>
+                              <select
+                                style={historiaInputStyle}
+                                value={String(historiaData.flotadores_inicio_reciente ?? "")}
+                                onChange={(e) => setHistoriaData({ ...historiaData, flotadores_inicio_reciente: parseBoolSelect(e.target.value) })}
+                              >
+                                <option value="">Seleccionar</option>
+                                <option value="true">Si</option>
+                                <option value="false">No</option>
+                              </select>
+                            </label>
+                            <label style={{ display: "grid", gap: 4 }}>
+                              <span>Lateralidad</span>
+                              <select
+                                style={historiaInputStyle}
+                                value={historiaData.flotadores_lateralidad ?? ""}
+                                onChange={(e) => setHistoriaData({ ...historiaData, flotadores_lateralidad: e.target.value })}
+                              >
+                                <option value="">Seleccionar</option>
+                                {FLOTADORES_LATERALIDAD_OPTIONS.map((opt) => (
+                                  <option key={`lateralidad-${opt.value}`} value={opt.value}>{opt.label}</option>
+                                ))}
+                              </select>
+                            </label>
+                          </>
+                        )}
                       </div>
                       <div style={{ marginTop: 8 }}>
-                        <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 4 }}>Síntomas</div>
+                        <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 4 }}>Síntomas adicionales</div>
                         <div style={{ display: "flex", flexWrap: "wrap", gap: 12 }}>
                           {SINTOMAS_OPTIONS.map((opt) => (
                             <label key={`sint-${opt.value}`} style={{ display: "flex", alignItems: "center", gap: 6 }}>
@@ -7916,6 +8856,53 @@ export default function App() {
                   </label>
                 </section>
 
+                <section data-hist-section="seguimiento" style={{ display: "grid", gap: 12, order: 8 }}>
+                  <h3 style={{ margin: 0, color: "#5f4a32" }}>Seguimiento</h3>
+                  <div style={{ background: "#fff", border: "1px solid #ead9c8", padding: 12, borderRadius: 12, display: "grid", gap: 10 }}>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 10 }}>
+                      <label style={{ display: "grid", gap: 4 }}>
+                        <span>Seguimiento requerido</span>
+                        <select
+                          style={historiaInputStyle}
+                          value={String(historiaData.seguimiento_requerido ?? "")}
+                          onChange={(e) => {
+                            const requerido = parseBoolSelect(e.target.value);
+                            if (requerido !== true) {
+                              setHistoriaData({
+                                ...historiaData,
+                                seguimiento_requerido: requerido,
+                                seguimiento_tipo: "",
+                                seguimiento_valor: "",
+                              });
+                              return;
+                            }
+                            setHistoriaData({
+                              ...historiaData,
+                              seguimiento_requerido: requerido,
+                              seguimiento_tipo: "fecha",
+                            });
+                          }}
+                        >
+                          <option value="">Seleccionar</option>
+                          <option value="true">Si</option>
+                          <option value="false">No</option>
+                        </select>
+                      </label>
+                      {historiaData.seguimiento_requerido === true && (
+                        <label style={{ display: "grid", gap: 4 }}>
+                          <span>Fecha de seguimiento</span>
+                          <input
+                            type="date"
+                            style={historiaInputStyle}
+                            value={historiaData.seguimiento_valor ?? ""}
+                            onChange={(e) => setHistoriaData({ ...historiaData, seguimiento_tipo: "fecha", seguimiento_valor: e.target.value })}
+                          />
+                        </label>
+                      )}
+                    </div>
+                  </div>
+                </section>
+
               </form>
 
             ) : (
@@ -7967,6 +8954,22 @@ export default function App() {
           </div>
         </div>
         )}
+
+      {successHistoriaMsg && (
+        <div
+          style={{
+            marginTop: 14,
+            padding: 12,
+            borderRadius: 10,
+            border: "1px solid #2ecc71",
+            background: "#e8f8f2",
+            color: "#1e8449",
+            fontWeight: 700,
+          }}
+        >
+          ✔ {successHistoriaMsg}
+        </div>
+      )}
 
       {error && (
         <div style={{ marginTop: 14, padding: 12, border: "1px solid #f00", borderRadius: 10 }}>

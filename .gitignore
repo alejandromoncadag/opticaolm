@@ -31,6 +31,7 @@ backend/*.json
 
 # Datos sensibles y exports
 exports/
+backups/
 *.dump
 *.sql
 backend/.env
