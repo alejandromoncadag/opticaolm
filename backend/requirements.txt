@@ -1,5 +1,6 @@
 fastapi
 uvicorn[standard]
 python-jose[cryptography]
+passlib[argon2]
 psycopg[binary]
 python-dotenv
