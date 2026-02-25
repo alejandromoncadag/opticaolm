@@ -507,15 +507,10 @@ def ensure_auth_schema():
                 """
                 ALTER TABLE core.usuarios
                 ADD COLUMN IF NOT EXISTS sucursal_id integer NULL;
-                """
-            )
-
-            cur.execute(
-                """
-                ALTER TABLE core.usuarios
                 ADD COLUMN IF NOT EXISTS pwd_changed_at timestamptz NULL;
                 """
             )
+
 
             admin_user = os.getenv("ADMIN_USER", "admin")
             admin_pass = os.getenv("ADMIN_PASS", "admin1234")
@@ -2632,9 +2627,44 @@ def _validate_in_business_hours(sucursal_id: int, start_dt: datetime, end_dt: da
 
 
 
-@app.get("/me", summary="Usuario actual (debug)")
-def me(user=Depends(get_current_user)):
-    return user
+@app.get("/me", summary="Info del usuario autenticado")
+def me(token: str = Depends(oauth2_scheme)):
+    # 1) Decode JWT
+    try:
+        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALG])
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Token inválido o expirado.")
+
+    username = payload.get("sub")
+    if not username:
+        raise HTTPException(status_code=401, detail="Token inválido (sub faltante).")
+
+    # 2) Leer usuario en DB (usa role, NO rol)
+    sql = """
+    SELECT username, role, sucursal_id, activo, pwd_changed_at
+    FROM core.usuarios
+    WHERE username = %s
+    LIMIT 1;
+    """
+
+    with psycopg.connect(DB_CONNINFO) as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, (username,))
+            row = cur.fetchone()
+
+    if row is None:
+        raise HTTPException(status_code=401, detail="Usuario no existe.")
+    username_db, role_db, sucursal_id_db, activo_db, pwd_changed_at_db = row
+
+    if not activo_db:
+        raise HTTPException(status_code=401, detail="Usuario inactivo.")
+
+    return {
+        "username": username_db,
+        "rol": role_db,               # la API sigue devolviendo "rol" para tu frontend
+        "sucursal_id": sucursal_id_db,
+        "pwd_changed_at": pwd_changed_at_db.isoformat() if pwd_changed_at_db else None,
+    }
 
 
 
