@@ -2834,9 +2834,14 @@ def buscar_pacientes(
 
 @app.get("/sucursales", summary="Listar sucursales")
 def listar_sucursales():
-    sql =
-    """
-    SELECT sucursal_id, nombre
+    sql = """
+    SELECT
+      sucursal_id,
+      nombre,
+      NULL::text  AS codigo,
+      NULL::text  AS ciudad,
+      NULL::text  AS estado,
+      true        AS activa
     FROM core.sucursales
     ORDER BY sucursal_id;
     """
