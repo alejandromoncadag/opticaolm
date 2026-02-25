@@ -410,7 +410,6 @@ def ensure_pacientes_schema():
 def ensure_reporting_views():
     with psycopg.connect(DB_CONNINFO) as conn:
         with conn.cursor() as cur:
-            # Normalización defensiva: si estas columnas derivadas existen en tablas base, se eliminan.
             cur.execute(
                 """
                 ALTER TABLE core.ventas
@@ -430,8 +429,8 @@ def ensure_reporting_views():
                 """
                 CREATE OR REPLACE VIEW core.pacientes_detalle AS
                 SELECT
-                  p.*,
-                  CONCAT_WS(' ', p.primer_nombre, p.segundo_nombre, p.apellido_paterno, p.apellido_materno) AS nombre_completo
+                    p.*,
+                    p.nombre AS nombre_completo
                 FROM core.pacientes p;
                 """
             )
@@ -440,13 +439,9 @@ def ensure_reporting_views():
                 """
                 CREATE OR REPLACE VIEW core.consultas_detalle AS
                 SELECT
-                  c.*,
-                  p.primer_nombre,
-                  p.segundo_nombre,
-                  p.apellido_paterno,
-                  p.apellido_materno,
-                  CONCAT_WS(' ', p.primer_nombre, p.segundo_nombre, p.apellido_paterno, p.apellido_materno) AS paciente_nombre,
-                  s.nombre AS sucursal_nombre
+                    c.*,
+                    p.nombre AS paciente_nombre,
+                    s.nombre AS sucursal_nombre
                 FROM core.consultas c
                 LEFT JOIN core.pacientes p ON p.paciente_id = c.paciente_id
                 LEFT JOIN core.sucursales s ON s.sucursal_id = c.sucursal_id;
@@ -457,76 +452,15 @@ def ensure_reporting_views():
                 """
                 CREATE OR REPLACE VIEW core.ventas_detalle AS
                 SELECT
-                  v.*,
-                  p.primer_nombre,
-                  p.segundo_nombre,
-                  p.apellido_paterno,
-                  p.apellido_materno,
-                  CONCAT_WS(' ', p.primer_nombre, p.segundo_nombre, p.apellido_paterno, p.apellido_materno) AS paciente_nombre,
-                  s.nombre AS sucursal_nombre
+                    v.*,
+                    p.nombre AS paciente_nombre,
+                    s.nombre AS sucursal_nombre
                 FROM core.ventas v
                 LEFT JOIN core.pacientes p ON p.paciente_id = v.paciente_id
                 LEFT JOIN core.sucursales s ON s.sucursal_id = v.sucursal_id;
                 """
             )
 
-            # Compatibilidad temporal con vistas legacy en uso.
-            cur.execute(
-                """
-                CREATE OR REPLACE VIEW core.v_consultas_forma AS
-                SELECT
-                  consulta_id,
-                  fecha_hora,
-                  tipo_consulta,
-                  doctor_primer_nombre,
-                  doctor_apellido_paterno,
-                  motivo,
-                  diagnostico,
-                  plan,
-                  notas,
-                  activo,
-                  paciente_id,
-                  primer_nombre,
-                  segundo_nombre,
-                  apellido_paterno,
-                  apellido_materno,
-                  sucursal_id,
-                  sucursal_nombre
-                FROM core.consultas_detalle;
-                """
-            )
-
-            cur.execute(
-                """
-                CREATE OR REPLACE VIEW core.v_pacientes_forma AS
-                SELECT
-                  paciente_id,
-                  primer_nombre,
-                  segundo_nombre,
-                  apellido_paterno,
-                  apellido_materno,
-                  fecha_nacimiento,
-                  sexo,
-                  telefono,
-                  correo,
-                  calle,
-                  numero,
-                  colonia,
-                  cp,
-                  municipio,
-                  estado,
-                  pais,
-                  ocupacion,
-                  estado_civil,
-                  alergias,
-                  CASE WHEN fumador_cigarro IS TRUE THEN 'si' WHEN fumador_cigarro IS FALSE THEN 'no' ELSE NULL END AS fumador_cigarro,
-                  CASE WHEN consumidor_alcohol IS TRUE THEN 'si' WHEN consumidor_alcohol IS FALSE THEN 'no' ELSE NULL END AS consumidor_alcohol,
-                  CASE WHEN consumidor_marihuana IS TRUE THEN 'si' WHEN consumidor_marihuana IS FALSE THEN 'no' ELSE NULL END AS consumidor_marihuana,
-                  creado_en,
-                  actualizado_en
-                FROM core.pacientes_detalle;
-                """
-            )
         conn.commit()
 
 
