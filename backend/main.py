@@ -357,6 +357,25 @@ def ensure_ventas_schema():
 def ensure_consultas_schema():
     with psycopg.connect(DB_CONNINFO) as conn:
         with conn.cursor() as cur:
+
+            cur.execute("CREATE SCHEMA IF NOT EXISTS core;")
+
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS core.consultas (
+                    consulta_id bigserial PRIMARY KEY,
+                    sucursal_id integer NOT NULL REFERENCES core.sucursales(sucursal_id),
+                    paciente_id integer NOT NULL REFERENCES core.pacientes(paciente_id),
+                    fecha_hora timestamptz NOT NULL DEFAULT NOW(),
+                    tipo_consulta text NOT NULL DEFAULT 'revision_general',
+                    notas text NULL,
+                    created_by text NULL,
+                    updated_at timestamptz NULL,
+                    activo boolean NOT NULL DEFAULT true
+                );
+                """
+            )
+
             cur.execute(
                 """
                 ALTER TABLE core.consultas
@@ -367,6 +386,7 @@ def ensure_consultas_schema():
                 ADD COLUMN IF NOT EXISTS motivo_consulta text NULL;
                 """
             )
+
         conn.commit()
 
 
