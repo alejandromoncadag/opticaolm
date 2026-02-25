@@ -26,11 +26,16 @@ import psycopg
 import os
 from dotenv import load_dotenv
 
+import re
+from starlette.middleware.cors import CORSMiddleware
+
+
 
 
 
 load_dotenv()
 
+from fastapi.middleware.cors import CORSMiddleware
 
 def _resolve_cors_origins() -> list[str]:
     configured = os.getenv("FRONTEND_ORIGIN", "").strip()
@@ -39,42 +44,16 @@ def _resolve_cors_origins() -> list[str]:
         if origins:
             return origins
 
-    # Defaults: local + Cloudflare Pages
     return [
         "http://localhost:5173",
         "http://127.0.0.1:5173",
         "http://localhost:4173",
         "http://127.0.0.1:4173",
-        "https://opticaolm.pages.dev",
     ]
-
-
-DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
-
-DB_CONNINFO = (
-    DATABASE_URL
-    if DATABASE_URL
-    else os.getenv(
-        "DB_CONNINFO",
-        "host=localhost port=5432 dbname=eyecare user=alejandromoncadag",
-    )
-)
-
-app = FastAPI(
-    title="Óptica OLM API",
-    description="API para gestionar pacientes y consultas (México).",
-    version="0.1.0",
-)
 
 CORS_ORIGINS = _resolve_cors_origins()
 
-
-
-
-CORS_ALLOW_CREDENTIALS = True
-
-
-# permite: https://opticaolm.pages.dev y cualquier preview https://<hash>.opticaolm.pages.dev
+# permite https://opticaolm.pages.dev y cualquier preview https://<hash>.opticaolm.pages.dev
 CORS_ORIGIN_REGEX = r"^https://([a-z0-9-]+\.)?opticaolm\.pages\.dev$"
 
 app.add_middleware(
@@ -85,8 +64,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-
 
 
 
