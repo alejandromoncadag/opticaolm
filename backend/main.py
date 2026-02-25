@@ -46,8 +46,6 @@ def _resolve_cors_origins() -> list[str]:
         "http://localhost:4173",
         "http://127.0.0.1:4173",
         "https://opticaolm.pages.dev",
-        "https://d49b5b9a.opticaolm.pages.dev",
-        "https://fc017723.opticaolm.pages.dev",
     ]
 
 
@@ -78,7 +76,8 @@ CORS_ALLOW_CREDENTIALS = True
 app.add_middleware(
     CORSMiddleware,
     allow_origins=CORS_ORIGINS,
-    allow_credentials=CORS_ALLOW_CREDENTIALS,
+    allow_origin_regex=r"^https://[a-z0-9]+\.opticaolm\.pages\.dev$",
+    allow_credentials=True
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -477,6 +476,46 @@ def ensure_reporting_views():
             )
 
         conn.commit()
+
+
+
+def ensure_auth_schema():
+    with psycopg.connect(DB_CONNINFO) as conn:
+        with conn.cursor() as cur:
+            cur.execute("CREATE SCHEMA IF NOT EXISTS core;")
+
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS core.usuarios (
+                    usuario_id bigserial PRIMARY KEY,
+                    username text UNIQUE NOT NULL,
+                    password_hash text NOT NULL,
+                    role text NOT NULL DEFAULT 'admin',
+                    activo boolean NOT NULL DEFAULT true,
+                    created_at timestamptz NOT NULL DEFAULT NOW()
+                );
+                """
+            )
+
+            # Crear admin por default si no existe
+            # Usa env vars si existen; si no, admin/admin1234
+            admin_user = os.getenv("ADMIN_USER", "admin")
+            admin_pass = os.getenv("ADMIN_PASS", "admin1234")
+
+            # argon2 está importado en tu archivo
+            admin_hash = argon2.hash(admin_pass)
+
+            cur.execute(
+                """
+                INSERT INTO core.usuarios (username, password_hash, role, activo)
+                VALUES (%s, %s, 'admin', true)
+                ON CONFLICT (username) DO NOTHING;
+                """,
+                (admin_user, admin_hash),
+            )
+
+        conn.commit()
+
 
 
 class PacienteCreate(BaseModel):
@@ -1052,12 +1091,15 @@ def normalize_altura_cm(value: Any) -> int | None:
 
 @app.on_event("startup")
 def startup_migrations():
-    ensure_historia_schema()
+    ensure_auth_schema()
     ensure_ventas_schema()
     ensure_consultas_schema()
     ensure_pacientes_schema()
+    ensure_historia_schema()
     ensure_reporting_views()
     _load_google_calendar_env_cache()
+    
+   
 
 
 @app.get("/health", summary="Salud del sistema")
