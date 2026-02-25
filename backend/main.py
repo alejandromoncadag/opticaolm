@@ -26,35 +26,37 @@ import psycopg
 import os
 from dotenv import load_dotenv
 
-import re
-from starlette.middleware.cors import CORSMiddleware
-
-
-
-
-
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+load_dotenv(os.path.join(BASE_DIR, ".env"))
 load_dotenv()
 
-from fastapi.middleware.cors import CORSMiddleware
+app = FastAPI(title="Optica OLM API")
 
 def _resolve_cors_origins() -> list[str]:
     configured = os.getenv("FRONTEND_ORIGIN", "").strip()
+    origins: list[str] = []
     if configured:
-        origins = [x.strip() for x in configured.split(",") if x.strip()]
-        if origins:
-            return origins
+        origins.extend([x.strip() for x in configured.split(",") if x.strip()])
 
-    return [
+    defaults = [
         "http://localhost:5173",
         "http://127.0.0.1:5173",
         "http://localhost:4173",
         "http://127.0.0.1:4173",
+        "https://opticaolm.pages.dev",
     ]
+    for origin in defaults:
+        if origin not in origins:
+            origins.append(origin)
+    return origins
 
 CORS_ORIGINS = _resolve_cors_origins()
 
 # permite https://opticaolm.pages.dev y cualquier preview https://<hash>.opticaolm.pages.dev
-CORS_ORIGIN_REGEX = r"^https://([a-z0-9-]+\.)?opticaolm\.pages\.dev$"
+CORS_ORIGIN_REGEX = os.getenv(
+    "FRONTEND_ORIGIN_REGEX",
+    r"^https://([a-z0-9-]+\.)?opticaolm\.pages\.dev$",
+).strip()
 
 app.add_middleware(
     CORSMiddleware,
@@ -64,6 +66,35 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+def _resolve_db_conninfo() -> str:
+    direct = os.getenv("DB_CONNINFO", "").strip()
+    if direct:
+        return direct
+
+    database_url = os.getenv("DATABASE_URL", "").strip()
+    if database_url:
+        return database_url
+
+    db_name = os.getenv("DB_NAME", "eyecare").strip() or "eyecare"
+    db_host = os.getenv("DB_HOST", "localhost").strip() or "localhost"
+    db_port = os.getenv("DB_PORT", "5432").strip() or "5432"
+    db_user = os.getenv("DB_USER", "postgres").strip() or "postgres"
+    db_password = os.getenv("DB_PASSWORD", "").strip()
+
+    parts = [
+        f"host={db_host}",
+        f"port={db_port}",
+        f"dbname={db_name}",
+        f"user={db_user}",
+    ]
+    if db_password:
+        parts.append(f"password={db_password}")
+    return " ".join(parts)
+
+
+DB_CONNINFO = _resolve_db_conninfo()
 
 
 
@@ -407,16 +438,49 @@ def ensure_reporting_views():
         with conn.cursor() as cur:
             cur.execute(
                 """
-                ALTER TABLE core.ventas
-                  DROP COLUMN IF EXISTS paciente_nombre,
-                  DROP COLUMN IF EXISTS sucursal_nombre;
+                DO $$
+                BEGIN
+                  IF EXISTS (
+                    SELECT 1
+                    FROM pg_class c
+                    JOIN pg_namespace n ON n.oid = c.relnamespace
+                    WHERE n.nspname = 'core' AND c.relname = 'ventas' AND c.relkind = 'r'
+                  ) THEN
+                    ALTER TABLE core.ventas
+                      DROP COLUMN IF EXISTS paciente_nombre,
+                      DROP COLUMN IF EXISTS sucursal_nombre;
+                  END IF;
 
-                ALTER TABLE core.consultas
-                  DROP COLUMN IF EXISTS paciente_nombre,
-                  DROP COLUMN IF EXISTS sucursal_nombre;
+                  IF EXISTS (
+                    SELECT 1
+                    FROM pg_class c
+                    JOIN pg_namespace n ON n.oid = c.relnamespace
+                    WHERE n.nspname = 'core' AND c.relname = 'consultas' AND c.relkind = 'r'
+                  ) THEN
+                    ALTER TABLE core.consultas
+                      DROP COLUMN IF EXISTS paciente_nombre,
+                      DROP COLUMN IF EXISTS sucursal_nombre;
+                  END IF;
 
-                ALTER TABLE core.pacientes
-                  DROP COLUMN IF EXISTS nombre_completo;
+                  IF EXISTS (
+                    SELECT 1
+                    FROM pg_class c
+                    JOIN pg_namespace n ON n.oid = c.relnamespace
+                    WHERE n.nspname = 'core' AND c.relname = 'pacientes' AND c.relkind = 'r'
+                  ) THEN
+                    ALTER TABLE core.pacientes
+                      DROP COLUMN IF EXISTS nombre_completo;
+                  END IF;
+                END
+                $$;
+                """
+            )
+
+            cur.execute(
+                """
+                DROP VIEW IF EXISTS core.consultas_detalle;
+                DROP VIEW IF EXISTS core.ventas_detalle;
+                DROP VIEW IF EXISTS core.pacientes_detalle;
                 """
             )
 
@@ -425,7 +489,15 @@ def ensure_reporting_views():
                 CREATE OR REPLACE VIEW core.pacientes_detalle AS
                 SELECT
                     p.*,
-                    p.nombre AS nombre_completo
+                    TRIM(
+                      CONCAT_WS(
+                        ' ',
+                        NULLIF(TRIM(p.primer_nombre), ''),
+                        NULLIF(TRIM(p.segundo_nombre), ''),
+                        NULLIF(TRIM(p.apellido_paterno), ''),
+                        NULLIF(TRIM(p.apellido_materno), '')
+                      )
+                    ) AS nombre_completo
                 FROM core.pacientes p;
                 """
             )
@@ -435,7 +507,15 @@ def ensure_reporting_views():
                 CREATE OR REPLACE VIEW core.consultas_detalle AS
                 SELECT
                     c.*,
-                    p.nombre AS paciente_nombre,
+                    TRIM(
+                      CONCAT_WS(
+                        ' ',
+                        NULLIF(TRIM(p.primer_nombre), ''),
+                        NULLIF(TRIM(p.segundo_nombre), ''),
+                        NULLIF(TRIM(p.apellido_paterno), ''),
+                        NULLIF(TRIM(p.apellido_materno), '')
+                      )
+                    ) AS paciente_nombre,
                     s.nombre AS sucursal_nombre
                 FROM core.consultas c
                 LEFT JOIN core.pacientes p ON p.paciente_id = c.paciente_id
@@ -448,7 +528,15 @@ def ensure_reporting_views():
                 CREATE OR REPLACE VIEW core.ventas_detalle AS
                 SELECT
                     v.*,
-                    p.nombre AS paciente_nombre,
+                    TRIM(
+                      CONCAT_WS(
+                        ' ',
+                        NULLIF(TRIM(p.primer_nombre), ''),
+                        NULLIF(TRIM(p.segundo_nombre), ''),
+                        NULLIF(TRIM(p.apellido_paterno), ''),
+                        NULLIF(TRIM(p.apellido_materno), '')
+                      )
+                    ) AS paciente_nombre,
                     s.nombre AS sucursal_nombre
                 FROM core.ventas v
                 LEFT JOIN core.pacientes p ON p.paciente_id = v.paciente_id
@@ -471,10 +559,12 @@ def ensure_auth_schema():
                     usuario_id bigserial PRIMARY KEY,
                     username text UNIQUE NOT NULL,
                     password_hash text NOT NULL,
-                    role text NOT NULL DEFAULT 'admin',
+                    rol text NOT NULL DEFAULT 'admin',
+                    role text NULL,
                     sucursal_id integer NULL,
                     activo boolean NOT NULL DEFAULT true,
                     created_at timestamptz NOT NULL DEFAULT NOW(),
+                    password_changed_at timestamptz NULL,
                     pwd_changed_at timestamptz NULL
                 );
                 """
@@ -484,39 +574,103 @@ def ensure_auth_schema():
             cur.execute(
                 """
                 ALTER TABLE core.usuarios
-                  ADD COLUMN IF NOT EXISTS role text NOT NULL DEFAULT 'admin',
+                  ADD COLUMN IF NOT EXISTS rol text,
+                  ADD COLUMN IF NOT EXISTS role text,
                   ADD COLUMN IF NOT EXISTS sucursal_id integer NULL,
                   ADD COLUMN IF NOT EXISTS activo boolean NOT NULL DEFAULT true,
                   ADD COLUMN IF NOT EXISTS created_at timestamptz NOT NULL DEFAULT NOW(),
+                  ADD COLUMN IF NOT EXISTS password_changed_at timestamptz NULL,
                   ADD COLUMN IF NOT EXISTS pwd_changed_at timestamptz NULL;
                 """
             )
 
-
-            admin_user = os.getenv("ADMIN_USER", "admin")
-            admin_pass = os.getenv("ADMIN_PASS", "admin1234")
-            admin_hash = argon2.hash(admin_pass)
-
-            cur.execute(
-                """
-                INSERT INTO core.usuarios (username, password_hash, role, sucursal_id, activo, pwd_changed_at)
-                VALUES (%s, %s, 'admin', NULL, true, NOW())
-                ON CONFLICT (username) DO UPDATE
-                SET password_hash = EXCLUDED.password_hash,
-                    role = EXCLUDED.role,
-                    activo = true;
-                """,
-                (admin_user, admin_hash),
-            )
-
-            # asegurar pwd_changed_at siempre tenga valor
             cur.execute(
                 """
                 UPDATE core.usuarios
-                SET pwd_changed_at = NOW()
-                WHERE pwd_changed_at IS NULL;
+                SET
+                  rol = COALESCE(NULLIF(TRIM(rol), ''), NULLIF(TRIM(role), ''), 'admin'),
+                  role = COALESCE(NULLIF(TRIM(role), ''), NULLIF(TRIM(rol), ''), 'admin'),
+                  password_changed_at = COALESCE(password_changed_at, pwd_changed_at, NOW()),
+                  pwd_changed_at = COALESCE(pwd_changed_at, password_changed_at, NOW())
+                WHERE
+                  rol IS NULL OR TRIM(rol) = ''
+                  OR role IS NULL OR TRIM(role) = ''
+                  OR password_changed_at IS NULL
+                  OR pwd_changed_at IS NULL;
                 """
             )
+
+            cur.execute(
+                """
+                ALTER TABLE core.usuarios
+                  ALTER COLUMN rol SET DEFAULT 'admin';
+                """
+            )
+            cur.execute(
+                """
+                ALTER TABLE core.usuarios
+                  ALTER COLUMN rol SET NOT NULL;
+                """
+            )
+
+            admin_user = (
+                os.getenv("ADMIN_USER")
+                or os.getenv("SEED_ADMIN_USERNAME")
+                or "admin"
+            )
+            admin_pass = (
+                os.getenv("ADMIN_PASS")
+                or os.getenv("SEED_ADMIN_PASSWORD")
+                or "admin1234"
+            )
+            reset_admin_password = (
+                (os.getenv("SEED_ADMIN_RESET_PASSWORD", "false").strip().lower())
+                in {"1", "true", "yes", "on"}
+            )
+            admin_hash = argon2.hash(admin_pass)
+
+            if reset_admin_password:
+                cur.execute(
+                    """
+                    INSERT INTO core.usuarios (
+                      username, password_hash, rol, role, sucursal_id, activo, password_changed_at, pwd_changed_at
+                    )
+                    VALUES (%s, %s, 'admin', 'admin', NULL, true, NOW(), NOW())
+                    ON CONFLICT (username) DO UPDATE
+                    SET
+                      password_hash = EXCLUDED.password_hash,
+                      rol = 'admin',
+                      role = 'admin',
+                      activo = true,
+                      password_changed_at = NOW(),
+                      pwd_changed_at = NOW();
+                    """,
+                    (admin_user, admin_hash),
+                )
+            else:
+                cur.execute(
+                    """
+                    INSERT INTO core.usuarios (
+                      username, password_hash, rol, role, sucursal_id, activo, password_changed_at, pwd_changed_at
+                    )
+                    VALUES (%s, %s, 'admin', 'admin', NULL, true, NOW(), NOW())
+                    ON CONFLICT (username) DO NOTHING;
+                    """,
+                    (admin_user, admin_hash),
+                )
+                cur.execute(
+                    """
+                    UPDATE core.usuarios
+                    SET
+                      rol = COALESCE(NULLIF(TRIM(rol), ''), 'admin'),
+                      role = COALESCE(NULLIF(TRIM(role), ''), rol, 'admin'),
+                      activo = true,
+                      password_changed_at = COALESCE(password_changed_at, pwd_changed_at, NOW()),
+                      pwd_changed_at = COALESCE(pwd_changed_at, password_changed_at, NOW())
+                    WHERE username = %s;
+                    """,
+                    (admin_user,),
+                )
 
 
 
@@ -1102,7 +1256,11 @@ def startup_migrations():
     ensure_ventas_schema()
     ensure_consultas_schema()
     ensure_pacientes_schema()
-    ensure_reporting_views()
+    try:
+        ensure_reporting_views()
+    except Exception as e:
+        # Evita tumbar el arranque por diferencias de objetos legacy en entornos productivos.
+        print(f"[startup] ensure_reporting_views omitido temporalmente: {e}")
     _load_google_calendar_env_cache()
 
    
