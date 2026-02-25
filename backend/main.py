@@ -522,16 +522,26 @@ def ensure_auth_schema():
 
             cur.execute(
                 """
-                INSERT INTO core.usuarios (username, password_hash, role, sucursal_id, activo)
-                VALUES (%s, %s, 'admin', NULL, true)
+                INSERT INTO core.usuarios (username, password_hash, role, sucursal_id, activo, pwd_changed_at)
+                VALUES (%s, %s, 'admin', NULL, true, NOW())
                 ON CONFLICT (username) DO UPDATE
                 SET password_hash = EXCLUDED.password_hash,
                     role = EXCLUDED.role,
                     activo = true;
-                    pwd_changed_at = NOW();
                 """,
                 (admin_user, admin_hash),
             )
+
+            # asegurar pwd_changed_at siempre tenga valor
+            cur.execute(
+                """
+                UPDATE core.usuarios
+                SET pwd_changed_at = NOW()
+                WHERE pwd_changed_at IS NULL;
+                """
+            )
+
+
 
         conn.commit()
 
