@@ -86,9 +86,49 @@ def ensure_historia_schema():
     # Migra columnas nuevas de forma idempotente al iniciar API.
     with psycopg.connect(DB_CONNINFO) as conn:
         with conn.cursor() as cur:
+            cur.execute("CREATE SCHEMA IF NOT EXISTS core;")
+
             cur.execute(
                 """
-                CREATE SCHEMA IF NOT EXISTS core;
+                CREATE TABLE IF NOT EXISTS core.historias_clinicas (
+                    historia_clinica_id bigserial PRIMARY KEY,
+                    sucursal_id integer NOT NULL,
+                    paciente_id integer NOT NULL,
+                    created_at timestamptz NOT NULL DEFAULT NOW(),
+
+                    -- columnas base que YA usas en ALTERs/updates
+                    created_at_tz timestamptz NULL,
+
+                    -- columnas de graduación base (para que no fallen los ALTER TYPE)
+                    od_esfera text NULL,
+                    od_cilindro text NULL,
+                    od_eje text NULL,
+                    od_add text NULL,
+                    oi_esfera text NULL,
+                    oi_cilindro text NULL,
+                    oi_eje text NULL,
+                    oi_add text NULL,
+                    dp text NULL,
+                    queratometria_od text NULL,
+                    queratometria_oi text NULL,
+                    presion_od text NULL,
+                    presion_oi text NULL,
+                    ppc text NULL,
+                    lejos text NULL,
+                    cerca text NULL,
+                    tension text NULL,
+                    mmhg text NULL,
+                    di text NULL,
+                    adicionod text NULL,
+                    adicionoi text NULL
+                );
+                """
+            )
+
+
+
+            cur.execute(
+                """
                 ALTER TABLE core.historias_clinicas
                 ADD COLUMN IF NOT EXISTS puesto_laboral text,
                 ADD COLUMN IF NOT EXISTS antecedentes_generales text,
@@ -125,7 +165,6 @@ def ensure_historia_schema():
                 ADD COLUMN IF NOT EXISTS tiempo_uso_lentes text,
                 ADD COLUMN IF NOT EXISTS lentes_contacto_horas_dia text,
                 ADD COLUMN IF NOT EXISTS sintomas text,
-                ADD COLUMN IF NOT EXISTS created_at_tz timestamptz,
                 ADD COLUMN IF NOT EXISTS doctor_atencion text,
                 ADD COLUMN IF NOT EXISTS antecedentes_oculares_familiares text,
                 ADD COLUMN IF NOT EXISTS antecedentes_oculares_familiares_otro text,
