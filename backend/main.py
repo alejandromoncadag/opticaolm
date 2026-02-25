@@ -1092,13 +1092,13 @@ def normalize_altura_cm(value: Any) -> int | None:
 @app.on_event("startup")
 def startup_migrations():
     ensure_auth_schema()
+    ensure_historia_schema()
     ensure_ventas_schema()
     ensure_consultas_schema()
     ensure_pacientes_schema()
-    ensure_historia_schema()
     ensure_reporting_views()
     _load_google_calendar_env_cache()
-    
+
    
 
 
