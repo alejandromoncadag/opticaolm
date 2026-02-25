@@ -254,8 +254,11 @@ type ExportCsvTipo =
 
 
 
-const API = (import.meta.env.VITE_API_URL as string | undefined)?.trim() || "http://127.0.0.1:8000";
+const API =
+  (import.meta.env.VITE_API_BASE_URL as string | undefined)?.trim()
+  || "https://opticaolm-production.up.railway.app";
 
+  
 const EXPORT_TIPOS_POR_FECHA: ExportCsvTipo[] = [
   "consultas",
   "ventas",
