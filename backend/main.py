@@ -214,35 +214,7 @@ def ensure_historia_schema():
                   DROP COLUMN IF EXISTS observaciones;
                 """
             )
-            cur.execute(
-                """
-                ALTER TABLE core.historias_clinicas
-                  ALTER COLUMN od_esfera TYPE text USING od_esfera::text,
-                  ALTER COLUMN od_cilindro TYPE text USING od_cilindro::text,
-                  ALTER COLUMN od_eje TYPE text USING od_eje::text,
-                  ALTER COLUMN od_add TYPE text USING od_add::text,
-                  ALTER COLUMN oi_esfera TYPE text USING oi_esfera::text,
-                  ALTER COLUMN oi_cilindro TYPE text USING oi_cilindro::text,
-                  ALTER COLUMN oi_eje TYPE text USING oi_eje::text,
-                  ALTER COLUMN oi_add TYPE text USING oi_add::text,
-                  ALTER COLUMN dp TYPE text USING dp::text,
-                  ALTER COLUMN queratometria_od TYPE text USING queratometria_od::text,
-                  ALTER COLUMN queratometria_oi TYPE text USING queratometria_oi::text,
-                  ALTER COLUMN presion_od TYPE text USING presion_od::text,
-                  ALTER COLUMN presion_oi TYPE text USING presion_oi::text,
-                  ALTER COLUMN ppc TYPE text USING ppc::text,
-                  ALTER COLUMN lejos TYPE text USING lejos::text,
-                  ALTER COLUMN cerca TYPE text USING cerca::text,
-                  ALTER COLUMN tension TYPE text USING tension::text,
-                  ALTER COLUMN mmhg TYPE text USING mmhg::text,
-                  ALTER COLUMN di TYPE text USING di::text,
-                  ALTER COLUMN adicionod TYPE text USING adicionod::text,
-                  ALTER COLUMN adicionoi TYPE text USING adicionoi::text,
-                  ALTER COLUMN horas_pantalla_dia TYPE text USING horas_pantalla_dia::text,
-                  ALTER COLUMN conduccion_nocturna_horas TYPE text USING conduccion_nocturna_horas::text,
-                  ALTER COLUMN lentes_contacto_horas_dia TYPE text USING lentes_contacto_horas_dia::text;
-                """
-            )
+            
             cur.execute(
                 """
                 UPDATE core.historias_clinicas
@@ -279,6 +251,41 @@ def ensure_historia_schema():
 def ensure_ventas_schema():
     with psycopg.connect(DB_CONNINFO) as conn:
         with conn.cursor() as cur:
+            # 0) Asegurar schema
+            cur.execute("CREATE SCHEMA IF NOT EXISTS core;")
+
+            # 1) Asegurar sucursales (para que los FOREIGN KEY no fallen)
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS core.sucursales (
+                    sucursal_id integer PRIMARY KEY,
+                    nombre text NOT NULL
+                );
+                """
+            )
+            cur.execute(
+                """
+                INSERT INTO core.sucursales (sucursal_id, nombre)
+                VALUES
+                    (1, 'Edomex'),
+                    (2, 'Playa')
+                ON CONFLICT (sucursal_id) DO NOTHING;
+                """
+            )
+
+            # 2) Asegurar pacientes (mínimo) para que ventas pueda referenciar
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS core.pacientes (
+                    paciente_id bigserial PRIMARY KEY,
+                    sucursal_id integer NOT NULL REFERENCES core.sucursales(sucursal_id),
+                    nombre text NULL,
+                    created_at timestamptz NOT NULL DEFAULT NOW()
+                );
+                """
+            )
+
+            # 3) Crear ventas
             cur.execute(
                 """
                 CREATE TABLE IF NOT EXISTS core.ventas (
@@ -299,6 +306,8 @@ def ensure_ventas_schema():
                 );
                 """
             )
+
+            # 4) Migraciones idempotentes de columnas (por si ya existía tabla)
             cur.execute(
                 """
                 ALTER TABLE core.ventas
@@ -308,13 +317,16 @@ def ensure_ventas_schema():
                 ADD COLUMN IF NOT EXISTS adelanto_metodo text NULL;
                 """
             )
+
+            # 5) Índices
             cur.execute(
                 "CREATE INDEX IF NOT EXISTS idx_ventas_sucursal_fecha ON core.ventas (sucursal_id, fecha_hora DESC);"
             )
             cur.execute(
                 "CREATE INDEX IF NOT EXISTS idx_ventas_paciente ON core.ventas (paciente_id);"
             )
-            # Normalización histórica de opciones de compra.
+
+            # 6) Normalización histórica de opciones de compra (no rompe si tabla vacía)
             cur.execute(
                 r"""
                 UPDATE core.ventas
@@ -336,7 +348,10 @@ def ensure_ventas_schema():
                 WHERE compra ~ '(^|\|)lentes_contacto(\||$)';
                 """
             )
+
         conn.commit()
+
+
 
 
 def ensure_consultas_schema():
