@@ -73,10 +73,14 @@ CORS_ORIGINS = _resolve_cors_origins()
 
 CORS_ALLOW_CREDENTIALS = True
 
+
+# permite: https://opticaolm.pages.dev y cualquier preview https://<hash>.opticaolm.pages.dev
+CORS_ORIGIN_REGEX = r"^https://([a-z0-9-]+\.)?opticaolm\.pages\.dev$"
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=CORS_ORIGINS,
-    allow_origin_regex=r"^https://[a-z0-9]+\.opticaolm\.pages\.dev$",
+    allow_origin_regex=CORS_ORIGIN_REGEX,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
