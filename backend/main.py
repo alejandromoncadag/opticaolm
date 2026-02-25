@@ -413,21 +413,122 @@ def ensure_consultas_schema():
                 """
             )
 
+            cur.execute(
+                """
+                ALTER TABLE core.consultas
+                ADD COLUMN IF NOT EXISTS doctor_primer_nombre text NULL,
+                ADD COLUMN IF NOT EXISTS doctor_apellido_paterno text NULL;
+                """
+            )
+
+            cur.execute(
+                """
+                UPDATE core.consultas
+                SET
+                  doctor_primer_nombre = COALESCE(
+                    NULLIF(TRIM(doctor_primer_nombre), ''),
+                    NULLIF(TRIM(created_by), '')
+                  ),
+                  doctor_apellido_paterno = NULLIF(TRIM(doctor_apellido_paterno), '')
+                WHERE
+                  doctor_primer_nombre IS NULL OR TRIM(doctor_primer_nombre) = ''
+                  OR doctor_apellido_paterno IS NULL OR TRIM(doctor_apellido_paterno) = '';
+                """
+            )
+
         conn.commit()
 
 
 def ensure_pacientes_schema():
     with psycopg.connect(DB_CONNINFO) as conn:
         with conn.cursor() as cur:
+            cur.execute("CREATE SCHEMA IF NOT EXISTS core;")
+
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS core.pacientes (
+                    paciente_id bigserial PRIMARY KEY,
+                    sucursal_id integer NOT NULL,
+                    nombre text NULL,
+                    created_at timestamptz NOT NULL DEFAULT NOW(),
+                    activo boolean NOT NULL DEFAULT true
+                );
+                """
+            )
+
             cur.execute(
                 """
                 ALTER TABLE core.pacientes
+                ADD COLUMN IF NOT EXISTS nombre text NULL,
+                ADD COLUMN IF NOT EXISTS created_at timestamptz NOT NULL DEFAULT NOW(),
+                ADD COLUMN IF NOT EXISTS activo boolean NOT NULL DEFAULT true,
+                ADD COLUMN IF NOT EXISTS primer_nombre text NULL,
+                ADD COLUMN IF NOT EXISTS segundo_nombre text NULL,
+                ADD COLUMN IF NOT EXISTS apellido_paterno text NULL,
+                ADD COLUMN IF NOT EXISTS apellido_materno text NULL,
+                ADD COLUMN IF NOT EXISTS fecha_nacimiento date NULL,
+                ADD COLUMN IF NOT EXISTS sexo text NULL,
+                ADD COLUMN IF NOT EXISTS telefono text NULL,
+                ADD COLUMN IF NOT EXISTS correo text NULL,
+                ADD COLUMN IF NOT EXISTS creado_en timestamptz NULL,
+                ADD COLUMN IF NOT EXISTS actualizado_en timestamptz NULL,
                 ADD COLUMN IF NOT EXISTS como_nos_conocio text NULL,
                 ADD COLUMN IF NOT EXISTS calle text NULL,
                 ADD COLUMN IF NOT EXISTS numero text NULL,
                 ADD COLUMN IF NOT EXISTS colonia text NULL,
+                ADD COLUMN IF NOT EXISTS codigo_postal text NULL,
+                ADD COLUMN IF NOT EXISTS cp text NULL,
                 ADD COLUMN IF NOT EXISTS municipio text NULL,
+                ADD COLUMN IF NOT EXISTS estado text NULL,
+                ADD COLUMN IF NOT EXISTS estado_direccion text NULL,
                 ADD COLUMN IF NOT EXISTS pais text NULL;
+                """
+            )
+
+            cur.execute(
+                """
+                UPDATE core.pacientes
+                SET
+                  created_at = COALESCE(created_at, NOW()),
+                  creado_en = COALESCE(creado_en, created_at, NOW()),
+                  actualizado_en = COALESCE(actualizado_en, created_at, NOW()),
+                  activo = COALESCE(activo, true),
+                  primer_nombre = COALESCE(
+                    NULLIF(TRIM(primer_nombre), ''),
+                    NULLIF(TRIM(SPLIT_PART(COALESCE(nombre, ''), ' ', 1)), ''),
+                    CONCAT('Paciente ', paciente_id::text)
+                  ),
+                  segundo_nombre = NULLIF(TRIM(segundo_nombre), ''),
+                  apellido_paterno = COALESCE(
+                    NULLIF(TRIM(apellido_paterno), ''),
+                    NULLIF(TRIM(REGEXP_REPLACE(COALESCE(nombre, ''), '^\\s*\\S+\\s*', '')), '')
+                  ),
+                  apellido_materno = NULLIF(TRIM(apellido_materno), ''),
+                  codigo_postal = COALESCE(NULLIF(TRIM(codigo_postal), ''), NULLIF(TRIM(cp), '')),
+                  cp = COALESCE(NULLIF(TRIM(cp), ''), NULLIF(TRIM(codigo_postal), '')),
+                  estado_direccion = COALESCE(NULLIF(TRIM(estado_direccion), ''), NULLIF(TRIM(estado), ''))
+                WHERE
+                  created_at IS NULL
+                  OR creado_en IS NULL
+                  OR actualizado_en IS NULL
+                  OR activo IS NULL
+                  OR primer_nombre IS NULL OR TRIM(primer_nombre) = ''
+                  OR (apellido_paterno IS NULL AND nombre IS NOT NULL)
+                  OR (codigo_postal IS NULL AND cp IS NOT NULL)
+                  OR (cp IS NULL AND codigo_postal IS NOT NULL)
+                  OR (estado_direccion IS NULL AND estado IS NOT NULL);
+                """
+            )
+
+            cur.execute(
+                """
+                ALTER TABLE core.pacientes
+                  ALTER COLUMN created_at SET DEFAULT NOW(),
+                  ALTER COLUMN created_at SET NOT NULL,
+                  ALTER COLUMN creado_en SET DEFAULT NOW(),
+                  ALTER COLUMN creado_en SET NOT NULL,
+                  ALTER COLUMN activo SET DEFAULT true,
+                  ALTER COLUMN activo SET NOT NULL;
                 """
             )
         conn.commit()
@@ -489,14 +590,21 @@ def ensure_reporting_views():
                 CREATE OR REPLACE VIEW core.pacientes_detalle AS
                 SELECT
                     p.*,
-                    TRIM(
-                      CONCAT_WS(
-                        ' ',
-                        NULLIF(TRIM(p.primer_nombre), ''),
-                        NULLIF(TRIM(p.segundo_nombre), ''),
-                        NULLIF(TRIM(p.apellido_paterno), ''),
-                        NULLIF(TRIM(p.apellido_materno), '')
-                      )
+                    COALESCE(
+                      NULLIF(
+                        TRIM(
+                          CONCAT_WS(
+                            ' ',
+                            NULLIF(TRIM(p.primer_nombre), ''),
+                            NULLIF(TRIM(p.segundo_nombre), ''),
+                            NULLIF(TRIM(p.apellido_paterno), ''),
+                            NULLIF(TRIM(p.apellido_materno), '')
+                          )
+                        ),
+                        ''
+                      ),
+                      NULLIF(TRIM(p.nombre), ''),
+                      CONCAT('Paciente #', p.paciente_id::text)
                     ) AS nombre_completo
                 FROM core.pacientes p;
                 """
@@ -507,14 +615,21 @@ def ensure_reporting_views():
                 CREATE OR REPLACE VIEW core.consultas_detalle AS
                 SELECT
                     c.*,
-                    TRIM(
-                      CONCAT_WS(
-                        ' ',
-                        NULLIF(TRIM(p.primer_nombre), ''),
-                        NULLIF(TRIM(p.segundo_nombre), ''),
-                        NULLIF(TRIM(p.apellido_paterno), ''),
-                        NULLIF(TRIM(p.apellido_materno), '')
-                      )
+                    COALESCE(
+                      NULLIF(
+                        TRIM(
+                          CONCAT_WS(
+                            ' ',
+                            NULLIF(TRIM(p.primer_nombre), ''),
+                            NULLIF(TRIM(p.segundo_nombre), ''),
+                            NULLIF(TRIM(p.apellido_paterno), ''),
+                            NULLIF(TRIM(p.apellido_materno), '')
+                          )
+                        ),
+                        ''
+                      ),
+                      NULLIF(TRIM(p.nombre), ''),
+                      CONCAT('Paciente #', c.paciente_id::text)
                     ) AS paciente_nombre,
                     s.nombre AS sucursal_nombre
                 FROM core.consultas c
@@ -528,14 +643,21 @@ def ensure_reporting_views():
                 CREATE OR REPLACE VIEW core.ventas_detalle AS
                 SELECT
                     v.*,
-                    TRIM(
-                      CONCAT_WS(
-                        ' ',
-                        NULLIF(TRIM(p.primer_nombre), ''),
-                        NULLIF(TRIM(p.segundo_nombre), ''),
-                        NULLIF(TRIM(p.apellido_paterno), ''),
-                        NULLIF(TRIM(p.apellido_materno), '')
-                      )
+                    COALESCE(
+                      NULLIF(
+                        TRIM(
+                          CONCAT_WS(
+                            ' ',
+                            NULLIF(TRIM(p.primer_nombre), ''),
+                            NULLIF(TRIM(p.segundo_nombre), ''),
+                            NULLIF(TRIM(p.apellido_paterno), ''),
+                            NULLIF(TRIM(p.apellido_materno), '')
+                          )
+                        ),
+                        ''
+                      ),
+                      NULLIF(TRIM(p.nombre), ''),
+                      CONCAT('Paciente #', v.paciente_id::text)
                     ) AS paciente_nombre,
                     s.nombre AS sucursal_nombre
                 FROM core.ventas v
