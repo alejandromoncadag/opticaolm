@@ -491,36 +491,36 @@ def ensure_auth_schema():
                     username text UNIQUE NOT NULL,
                     password_hash text NOT NULL,
                     role text NOT NULL DEFAULT 'admin',
+                    sucursal_id integer NULL,
                     activo boolean NOT NULL DEFAULT true,
                     created_at timestamptz NOT NULL DEFAULT NOW()
                 );
                 """
             )
 
-            # Crear admin por default si no existe
-            # Usa env vars si existen; si no, admin/admin1234
+            # Por si la tabla ya existía antes sin sucursal_id
+            cur.execute(
+                """
+                ALTER TABLE core.usuarios
+                ADD COLUMN IF NOT EXISTS sucursal_id integer NULL;
+                """
+            )
+
             admin_user = os.getenv("ADMIN_USER", "admin")
             admin_pass = os.getenv("ADMIN_PASS", "admin1234")
-
-            # argon2 está importado en tu archivo
             admin_hash = argon2.hash(admin_pass)
 
             cur.execute(
                 """
-                INSERT INTO core.usuarios (username, password_hash, role, activo)
-                VALUES (%s, %s, 'admin', true)
-                ON CONFLICT (username) DO NOTHING;
+                INSERT INTO core.usuarios (username, password_hash, role, sucursal_id, activo)
+                VALUES (%s, %s, 'admin', NULL, true)
+                ON CONFLICT (username) DO UPDATE
+                SET password_hash = EXCLUDED.password_hash,
+                    role = EXCLUDED.role,
+                    activo = true;
                 """,
                 (admin_user, admin_hash),
-        
             )
-
-            cur.execute("""
-            ALTER TABLE core.usuarios
-            ADD COLUMN IF NOT EXISTS sucursal_id integer NULL;
-            """)
-
-
 
         conn.commit()
 
