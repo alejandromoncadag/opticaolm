@@ -497,7 +497,8 @@ def ensure_auth_schema():
                     role text NOT NULL DEFAULT 'admin',
                     sucursal_id integer NULL,
                     activo boolean NOT NULL DEFAULT true,
-                    created_at timestamptz NOT NULL DEFAULT NOW()
+                    created_at timestamptz NOT NULL DEFAULT NOW(),
+                    pwd_changed_at timestamptz NULL
                 );
                 """
             )
@@ -506,8 +507,11 @@ def ensure_auth_schema():
             cur.execute(
                 """
                 ALTER TABLE core.usuarios
-                ADD COLUMN IF NOT EXISTS sucursal_id integer NULL;
-                ADD COLUMN IF NOT EXISTS pwd_changed_at timestamptz NULL;
+                  ADD COLUMN IF NOT EXISTS role text NOT NULL DEFAULT 'admin',
+                  ADD COLUMN IF NOT EXISTS sucursal_id integer NULL,
+                  ADD COLUMN IF NOT EXISTS activo boolean NOT NULL DEFAULT true,
+                  ADD COLUMN IF NOT EXISTS created_at timestamptz NOT NULL DEFAULT NOW(),
+                  ADD COLUMN IF NOT EXISTS pwd_changed_at timestamptz NULL;
                 """
             )
 
@@ -524,6 +528,7 @@ def ensure_auth_schema():
                 SET password_hash = EXCLUDED.password_hash,
                     role = EXCLUDED.role,
                     activo = true;
+                    pwd_changed_at = NOW();
                 """,
                 (admin_user, admin_hash),
             )
