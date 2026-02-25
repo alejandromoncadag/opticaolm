@@ -27,6 +27,8 @@ import os
 from dotenv import load_dotenv
 
 
+
+
 load_dotenv()
 
 
@@ -36,11 +38,16 @@ def _resolve_cors_origins() -> list[str]:
         origins = [x.strip() for x in configured.split(",") if x.strip()]
         if origins:
             return origins
+
+    # Defaults: local + Cloudflare Pages
     return [
         "http://localhost:5173",
         "http://127.0.0.1:5173",
         "http://localhost:4173",
         "http://127.0.0.1:4173",
+        "https://opticaolm.pages.dev",
+        "https://d49b5b9a.opticaolm.pages.dev",
+        "https://fc017723.opticaolm.pages.dev",
     ]
 
 
@@ -55,16 +62,18 @@ DB_CONNINFO = (
     )
 )
 
-
-CORS_ORIGINS = _resolve_cors_origins()
-CORS_ALLOW_CREDENTIALS = "*" not in CORS_ORIGINS
-
-
 app = FastAPI(
     title="Óptica OLM API",
     description="API para gestionar pacientes y consultas (México).",
     version="0.1.0",
 )
+
+CORS_ORIGINS = _resolve_cors_origins()
+
+
+
+
+CORS_ALLOW_CREDENTIALS = True
 
 app.add_middleware(
     CORSMiddleware,
@@ -73,6 +82,12 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+
+
+
+
 
 # ===== Auth config =====
 JWT_SECRET = os.getenv("JWT_SECRET", "CAMBIA_ESTE_SECRET_EN_PROD")
