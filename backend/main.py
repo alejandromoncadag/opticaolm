@@ -506,6 +506,13 @@ def ensure_auth_schema():
                 """
             )
 
+            cur.execute(
+                """
+                ALTER TABLE core.usuarios
+                ADD COLUMN IF NOT EXISTS pwd_changed_at timestamptz NULL;
+                """
+            )
+
             admin_user = os.getenv("ADMIN_USER", "admin")
             admin_pass = os.getenv("ADMIN_PASS", "admin1234")
             admin_hash = argon2.hash(admin_pass)
@@ -1655,7 +1662,7 @@ def export_diccionario_columnas_fisico_csv(
 def login(data: LoginIn):
     # 1) buscar usuario activo
     sql = """
-    SELECT username, password_hash, role, sucursal_id, activo
+    SELECT username, password_hash, role, sucursal_id, activo, pwd_changed_at
     FROM core.usuarios
     WHERE username = %s
     LIMIT 1;
@@ -1668,7 +1675,7 @@ def login(data: LoginIn):
     if row is None:
         raise HTTPException(status_code=401, detail="Credenciales inválidas.")
 
-    username, password_hash, rol, sucursal_id, activo, pwd_changed_at = row
+    username, password_hash, role, sucursal_id, activo, pwd_changed_at = row
 
     if not activo:
         raise HTTPException(status_code=401, detail="Usuario inactivo.")
@@ -1683,9 +1690,9 @@ def login(data: LoginIn):
 
     payload = {
         "sub": username,
-        "rol": rol,
+        "rol": role,
         "sucursal_id": sucursal_id,  # None para admin
-        "pwd_at": int(pwd_changed_at.timestamp()),
+        "pwd_at": int(pwd_changed_at.timestamp()) if pwd_changed_at else None,
         "iat": int(now.timestamp()),
         "exp": int(exp.timestamp()),
     }
