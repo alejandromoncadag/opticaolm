@@ -512,7 +512,15 @@ def ensure_auth_schema():
                 ON CONFLICT (username) DO NOTHING;
                 """,
                 (admin_user, admin_hash),
+        
             )
+
+            cur.execute("""
+            ALTER TABLE core.usuarios
+            ADD COLUMN IF NOT EXISTS sucursal_id integer NULL;
+            """)
+
+
 
         conn.commit()
 
@@ -1647,9 +1655,9 @@ def export_diccionario_columnas_fisico_csv(
 def login(data: LoginIn):
     # 1) buscar usuario activo
     sql = """
-    SELECT username, password_hash, rol, sucursal_id, activo, password_changed_at
+    SELECT username, password_hash, role, sucursal_id, activo
     FROM core.usuarios
-    WHERE username = %s;
+    WHERE username = %s
     """
     with psycopg.connect(DB_CONNINFO) as conn:
         with conn.cursor() as cur:
