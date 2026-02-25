@@ -1658,6 +1658,7 @@ def login(data: LoginIn):
     SELECT username, password_hash, role, sucursal_id, activo
     FROM core.usuarios
     WHERE username = %s
+    LIMIT 1;
     """
     with psycopg.connect(DB_CONNINFO) as conn:
         with conn.cursor() as cur:
