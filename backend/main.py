@@ -2834,10 +2834,10 @@ def buscar_pacientes(
 
 @app.get("/sucursales", summary="Listar sucursales")
 def listar_sucursales():
-    sql = """
-    SELECT sucursal_id, nombre, codigo, ciudad, estado, activa
+    sql =
+    """
+    SELECT sucursal_id, nombre
     FROM core.sucursales
-    WHERE activa = true
     ORDER BY sucursal_id;
     """
     with psycopg.connect(DB_CONNINFO) as conn:
