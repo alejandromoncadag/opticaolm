@@ -269,6 +269,22 @@ function parseUiScale(raw: string | undefined): number {
 
 const APP_UI_SCALE = parseUiScale((import.meta.env.VITE_UI_SCALE as string | undefined)?.trim());
 
+const LOGIN_SCALE_STYLE: CSSProperties = APP_UI_SCALE === 1
+  ? {}
+  : {
+      zoom: APP_UI_SCALE,
+      width: `calc(100vw / ${APP_UI_SCALE})`,
+      minHeight: `calc(100vh / ${APP_UI_SCALE})`,
+    };
+
+const MAIN_SCALE_STYLE: CSSProperties = APP_UI_SCALE === 1
+  ? {}
+  : {
+      zoom: APP_UI_SCALE,
+      width: `calc((100vw - 24px) / ${APP_UI_SCALE})`,
+      minHeight: `calc((100vh - 24px) / ${APP_UI_SCALE})`,
+    };
+
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -1677,17 +1693,6 @@ export default function App() {
   const [loginUser, setLoginUser] = useState("");
   const [loginPass, setLoginPass] = useState("");
   const [loggingIn, setLoggingIn] = useState(false);
-
-  useEffect(() => {
-    if (typeof document === "undefined") return;
-    if (APP_UI_SCALE === 1) return;
-    const html = document.documentElement;
-    const previousZoom = html.style.zoom;
-    html.style.zoom = String(APP_UI_SCALE);
-    return () => {
-      html.style.zoom = previousZoom;
-    };
-  }, []);
 
 
 
@@ -3824,6 +3829,7 @@ export default function App() {
           justifyContent: "center",
           padding: 20,
           background: "linear-gradient(180deg, #f7efe4 0%, #efe3d4 100%)",
+          ...LOGIN_SCALE_STYLE,
         }}
       >
         <div style={{ width: "100%", maxWidth: 460, fontFamily: "system-ui" }}>
@@ -4031,6 +4037,7 @@ export default function App() {
         background: "linear-gradient(180deg, #fff8ef 0%, #fff4e8 100%)",
         border: "1px solid #e6d5c3",
         borderRadius: 20,
+        ...MAIN_SCALE_STYLE,
       }}
     >
       <style>{`
