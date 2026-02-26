@@ -811,6 +811,87 @@ def ensure_auth_schema():
                     (admin_user,),
                 )
 
+            seed_staff_reset_password = (
+                (os.getenv("SEED_STAFF_RESET_PASSWORD", "true").strip().lower())
+                in {"1", "true", "yes", "on"}
+            )
+            seed_staff_users = [
+                (
+                    "edomex_recep",
+                    os.getenv("SEED_EDOMEX_RECEP_PASSWORD", "EdomexRecep2026!"),
+                    "recepcion",
+                    1,
+                ),
+                (
+                    "edomex_doc",
+                    os.getenv("SEED_EDOMEX_DOC_PASSWORD", "EdomexDoc2026!"),
+                    "doctor",
+                    1,
+                ),
+                (
+                    "playa_recep",
+                    os.getenv("SEED_PLAYA_RECEP_PASSWORD", "PlayaRecep2026!"),
+                    "recepcion",
+                    2,
+                ),
+                (
+                    "playa_doc",
+                    os.getenv("SEED_PLAYA_DOC_PASSWORD", "PlayaDoc2026!"),
+                    "doctor",
+                    2,
+                ),
+            ]
+
+            for username, raw_password, user_role, sucursal_id in seed_staff_users:
+                password_value = str(raw_password or "").strip()
+                if not password_value:
+                    continue
+                password_hash = argon2.hash(password_value)
+                if seed_staff_reset_password:
+                    cur.execute(
+                        """
+                        INSERT INTO core.usuarios (
+                          username, password_hash, rol, role, sucursal_id, activo, password_changed_at, pwd_changed_at
+                        )
+                        VALUES (%s, %s, %s, %s, %s, true, NOW(), NOW())
+                        ON CONFLICT (username) DO UPDATE
+                        SET
+                          password_hash = EXCLUDED.password_hash,
+                          rol = EXCLUDED.rol,
+                          role = EXCLUDED.role,
+                          sucursal_id = EXCLUDED.sucursal_id,
+                          activo = true,
+                          password_changed_at = NOW(),
+                          pwd_changed_at = NOW();
+                        """,
+                        (username, password_hash, user_role, user_role, sucursal_id),
+                    )
+                else:
+                    cur.execute(
+                        """
+                        INSERT INTO core.usuarios (
+                          username, password_hash, rol, role, sucursal_id, activo, password_changed_at, pwd_changed_at
+                        )
+                        VALUES (%s, %s, %s, %s, %s, true, NOW(), NOW())
+                        ON CONFLICT (username) DO NOTHING;
+                        """,
+                        (username, password_hash, user_role, user_role, sucursal_id),
+                    )
+                    cur.execute(
+                        """
+                        UPDATE core.usuarios
+                        SET
+                          rol = %s,
+                          role = %s,
+                          sucursal_id = %s,
+                          activo = true,
+                          password_changed_at = COALESCE(password_changed_at, pwd_changed_at, NOW()),
+                          pwd_changed_at = COALESCE(pwd_changed_at, password_changed_at, NOW())
+                        WHERE username = %s;
+                        """,
+                        (user_role, user_role, sucursal_id, username),
+                    )
+
 
 
         conn.commit()
