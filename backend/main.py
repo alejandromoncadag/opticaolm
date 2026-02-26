@@ -299,6 +299,23 @@ def ensure_ventas_schema():
                 """
             )
 
+            cur.execute(
+                """
+                ALTER TABLE core.sucursales
+                ADD COLUMN IF NOT EXISTS codigo text NULL,
+                ADD COLUMN IF NOT EXISTS ciudad text NULL,
+                ADD COLUMN IF NOT EXISTS estado text NULL,
+                ADD COLUMN IF NOT EXISTS activa boolean NOT NULL DEFAULT true;
+                """
+            )
+            cur.execute(
+                """
+                UPDATE core.sucursales
+                SET activa = COALESCE(activa, true)
+                WHERE activa IS NULL;
+                """
+            )
+
             # 2) Asegurar pacientes (mínimo) para que ventas pueda referenciar
             cur.execute(
                 """
