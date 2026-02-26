@@ -268,6 +268,10 @@ function parseUiScale(raw: string | undefined): number {
 }
 
 const APP_UI_SCALE = parseUiScale((import.meta.env.VITE_UI_SCALE as string | undefined)?.trim());
+const FIXED_SUCURSAL_LABELS: Record<number, string> = {
+  1: "EdoMex",
+  2: "Playa",
+};
 
 const LOGIN_SCALE_STYLE: CSSProperties = APP_UI_SCALE === 1
   ? {}
@@ -1641,12 +1645,12 @@ export default function App() {
   const [historiaEstadoPaciente, setHistoriaEstadoPaciente] = useState<Record<number, "loading" | "exists" | "missing">>({});
   const [qConsulta, setQConsulta] = useState("");
   const [pacienteFiltroOpen, setPacienteFiltroOpen] = useState(false);
-  const [pacienteFiltroModo, setPacienteFiltroModo] = useState<"hoy" | "rango" | "mes" | "anio">("hoy");
+  const [pacienteFiltroModo, setPacienteFiltroModo] = useState<"hoy" | "rango" | "mes" | "anio">("mes");
   const [pacienteFechaDesde, setPacienteFechaDesde] = useState("");
   const [pacienteFechaHasta, setPacienteFechaHasta] = useState("");
-  const [pacienteMes, setPacienteMes] = useState("");
+  const [pacienteMes, setPacienteMes] = useState(String(new Date().getMonth() + 1));
   const [pacienteAnio, setPacienteAnio] = useState(String(new Date().getFullYear()));
-  const [pacienteFiltroLabel, setPacienteFiltroLabel] = useState("Hoy");
+  const [pacienteFiltroLabel, setPacienteFiltroLabel] = useState("Mes actual");
   const [consultaFiltroOpen, setConsultaFiltroOpen] = useState(false);
   const [consultaFiltroModo, setConsultaFiltroModo] = useState<"hoy" | "rango" | "mes" | "anio">("hoy");
   const [consultaFechaDesde, setConsultaFechaDesde] = useState("");
@@ -2812,9 +2816,23 @@ export default function App() {
         return r.json();
       })
       .then((data: Sucursal[]) => {
-        setSucursales(data);
-        if (data.length > 0 && !data.find((s) => s.sucursal_id === sucursalActivaId)) {
-          setSucursalActivaId(data[0].sucursal_id);
+        const allowedOrder = [1, 2];
+        const normalized = allowedOrder
+          .map((id) => {
+            const row = data.find((s) => s.sucursal_id === id);
+            if (!row) return null;
+            return {
+              ...row,
+              nombre: FIXED_SUCURSAL_LABELS[id] ?? row.nombre,
+              ciudad: null,
+              estado: null,
+            } as Sucursal;
+          })
+          .filter((x): x is Sucursal => x !== null);
+        const effective = normalized.length > 0 ? normalized : data;
+        setSucursales(effective);
+        if (effective.length > 0 && !effective.find((s) => s.sucursal_id === sucursalActivaId)) {
+          setSucursalActivaId(effective[0].sucursal_id);
         }
       })
       .catch((e) => setError(e?.message ?? String(e)));
@@ -4153,7 +4171,7 @@ export default function App() {
           ) : (
             sucursales.map((s) => (
               <option key={s.sucursal_id} value={s.sucursal_id}>
-                {s.nombre} — {s.ciudad}, {s.estado}
+                {s.nombre}
               </option>
             ))
           )}
