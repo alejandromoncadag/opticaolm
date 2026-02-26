@@ -253,7 +253,6 @@ type ExportCsvTipo =
   | "diccionario_columnas_fisico";
 
 
-
 const API =
   (import.meta.env.VITE_API_BASE_URL as string | undefined)?.trim()
   || (import.meta.env.VITE_API_URL as string | undefined)?.trim()
