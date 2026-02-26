@@ -259,6 +259,44 @@ const API =
   || (import.meta.env.VITE_API_URL as string | undefined)?.trim()
   || "https://opticaolm-production.up.railway.app";
 
+function parseUiScale(raw: string | undefined): number {
+  const fallback = 0.67;
+  if (!raw) return fallback;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+  return Math.max(0.5, Math.min(1.25, parsed));
+}
+
+const APP_UI_SCALE = parseUiScale((import.meta.env.VITE_UI_SCALE as string | undefined)?.trim());
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function toReadableNetworkError(path: string, original: unknown): Error {
+  const msg = String((original as any)?.message ?? original ?? "").trim();
+  const lower = msg.toLowerCase();
+  if (lower.includes("failed to fetch") || lower.includes("networkerror") || lower.includes("load failed")) {
+    return new Error(
+      `No se pudo conectar con el backend (${API}${path}). Verifica deploy de Railway y recarga la página.`
+    );
+  }
+  return original instanceof Error ? original : new Error(msg || "Error de red inesperado.");
+}
+
+async function fetchWithRetry(url: string, init: RequestInit, pathForError: string) {
+  let lastError: unknown = null;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      return await fetch(url, init);
+    } catch (e) {
+      lastError = e;
+      if (attempt === 0) await sleep(250);
+    }
+  }
+  throw toReadableNetworkError(pathForError, lastError);
+}
+
   
 const EXPORT_TIPOS_POR_FECHA: ExportCsvTipo[] = [
   "consultas",
@@ -325,7 +363,7 @@ async function apiFetch(path: string, init: RequestInit = {}) {
   if (token) headers.set("Authorization", `Bearer ${token}`);
   if (!headers.has("Content-Type") && init.body) headers.set("Content-Type", "application/json");
 
-  const r = await fetch(`${API}${path}`, { ...init, headers });
+  const r = await fetchWithRetry(`${API}${path}`, { ...init, headers }, path);
 
   // si se venció o no hay login
   if (r.status === 401) {
@@ -1639,6 +1677,17 @@ export default function App() {
   const [loginUser, setLoginUser] = useState("");
   const [loginPass, setLoginPass] = useState("");
   const [loggingIn, setLoggingIn] = useState(false);
+
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    if (APP_UI_SCALE === 1) return;
+    const html = document.documentElement;
+    const previousZoom = html.style.zoom;
+    html.style.zoom = String(APP_UI_SCALE);
+    return () => {
+      html.style.zoom = previousZoom;
+    };
+  }, []);
 
 
 
@@ -3732,11 +3781,11 @@ export default function App() {
     setError(null);
 
     try {
-      const r = await fetch(`${API}/login`, {
+      const r = await fetchWithRetry(`${API}/login`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ username: loginUser, password: loginPass }),
-      });
+      }, "/login");
       if (!r.ok) throw new Error(await readErrorMessage(r));
 
       const data = (await r.json()) as LoginResponse;
@@ -3748,7 +3797,7 @@ export default function App() {
       loadSucursales();
 
     } catch (e: any) {
-      setError(String(e));
+      setError(e?.message ?? String(e));
     } finally {
       setLoggingIn(false);
     }
