@@ -7204,12 +7204,12 @@ export default function App() {
           <div
             style={{
               background: "linear-gradient(180deg, #fffdf9 0%, #fff7ed 100%)",
-              borderRadius: 0,
+              borderRadius: 16,
               border: "1px solid #e2cfba",
-              width: "100vw",
-              height: "100vh",
-              maxWidth: "100vw",
-              maxHeight: "100vh",
+              width: "min(96vw, 1560px)",
+              height: "min(94vh, 980px)",
+              maxWidth: "96vw",
+              maxHeight: "94vh",
               overflow: "hidden",
               boxShadow: "0 30px 70px rgba(35, 24, 15, 0.38)",
               display: "grid",
