@@ -3965,8 +3965,8 @@ export default function App() {
 
   const historiaInputStyle = {
     width: "100%",
-    padding: 10,
-    borderRadius: 10,
+    padding: 8,
+    borderRadius: 8,
     border: "1px solid #d9c7b3",
     background: "#fff",
   } as const;
@@ -7204,12 +7204,12 @@ export default function App() {
           <div
             style={{
               background: "linear-gradient(180deg, #fffdf9 0%, #fff7ed 100%)",
-              borderRadius: 16,
-              border: "1px solid #e2cfba",
-              width: "min(80vw, 1180px)",
-              height: "min(80vh, 760px)",
-              maxWidth: "80vw",
-              maxHeight: "80vh",
+              borderRadius: 0,
+              border: "none",
+              width: "100vw",
+              height: "100vh",
+              maxWidth: "100vw",
+              maxHeight: "100vh",
               overflow: "hidden",
               boxShadow: "0 30px 70px rgba(35, 24, 15, 0.38)",
               display: "grid",
@@ -7218,7 +7218,7 @@ export default function App() {
           >
             <div
               style={{
-                padding: "16px 18px 14px",
+                padding: "10px 12px",
                 background: "linear-gradient(180deg, #fffdf9 0%, #fff7ed 100%)",
                 display: "flex",
                 justifyContent: "space-between",
@@ -7228,10 +7228,10 @@ export default function App() {
               }}
             >
               <div>
-                <h2 style={{ margin: 0, fontSize: 34, lineHeight: 1.06, color: "#3f2d1d", letterSpacing: 0.2 }}>
+                <h2 style={{ margin: 0, fontSize: 26, lineHeight: 1.05, color: "#3f2d1d", letterSpacing: 0.2 }}>
                   Historia clínica paciente {historiaPacienteNombreCompleto || `#${historiaPacienteId}`}
                 </h2>
-                <div style={{ marginTop: 4, fontSize: 13, color: "#6b4f37", fontWeight: 700 }}>
+                <div style={{ marginTop: 2, fontSize: 11, color: "#6b4f37", fontWeight: 700 }}>
                   Registro clínico integral
                 </div>
               </div>
@@ -7243,7 +7243,7 @@ export default function App() {
                       startEditPaciente(historiaPacienteInfo);
                       closeHistoriaModal();
                     }}
-                    style={{ ...actionBtnStyle, padding: "10px 14px" }}
+                    style={{ ...actionBtnStyle, padding: "7px 10px" }}
                   >
                     Editar paciente
                   </button>
@@ -7253,8 +7253,8 @@ export default function App() {
                     type="button"
                     onClick={requestSubmitHistoriaForm}
                     style={{
-                      padding: "10px 14px",
-                      borderRadius: 12,
+                      padding: "7px 10px",
+                      borderRadius: 10,
                       border: "1px solid #5f4a32",
                       background: "#5f4a32",
                       color: "#fff",
@@ -7271,8 +7271,8 @@ export default function App() {
                     onClick={deleteHistoriaClinica}
                     disabled={deletingHistoria}
                     style={{
-                      padding: "10px 14px",
-                      borderRadius: 12,
+                      padding: "7px 10px",
+                      borderRadius: 10,
                       border: "1px solid #a93226",
                       background: deletingHistoria ? "#f4d7d3" : "#c0392b",
                       color: deletingHistoria ? "#6d1f17" : "#fff",
@@ -7287,8 +7287,8 @@ export default function App() {
                   type="button"
                   onClick={closeHistoriaModal}
                   style={{
-                    padding: "10px 14px",
-                    borderRadius: 12,
+                    padding: "7px 10px",
+                    borderRadius: 10,
                     border: "1px solid #d8c5b0",
                     background: "#fff",
                     color: "#5f4a32",
@@ -7303,8 +7303,8 @@ export default function App() {
                   onClick={closeHistoriaModal}
                   aria-label="Cerrar historia clínica"
                   style={{
-                    width: 38,
-                    height: 38,
+                    width: 32,
+                    height: 32,
                     borderRadius: 999,
                     border: "1px solid #d8c5b0",
                     background: "#fff",
@@ -7312,7 +7312,7 @@ export default function App() {
                     fontWeight: 900,
                     cursor: "pointer",
                     lineHeight: 1,
-                    fontSize: 18,
+                    fontSize: 16,
                   }}
                 >
                   ×
@@ -7320,9 +7320,15 @@ export default function App() {
               </div>
             </div>
             <style>{`
-              .historia-layout { min-height: 0; height: 100%; padding: 14px 16px 16px; }
-              .historia-main-scroll { min-height: 0; height: 100%; overflow-y: auto; padding: 0 6px 96px 0; scroll-behavior: smooth; }
+              .historia-layout { min-height: 0; height: 100%; padding: 8px 10px 10px; font-size: 13px; }
+              .historia-main-scroll { min-height: 0; height: 100%; overflow-y: auto; padding: 0 4px 22px 0; scroll-behavior: smooth; }
               .historia-main-scroll section[data-hist-section] { scroll-margin-top: 16px; }
+              .historia-main-scroll h3 { font-size: 19px; }
+              .historia-main-scroll label > span { font-size: 12px; }
+              .historia-main-scroll input,
+              .historia-main-scroll select,
+              .historia-main-scroll textarea,
+              .historia-main-scroll button { font-size: 12px; }
               .historia-paciente-grid { display: grid; gap: 10px; grid-template-columns: repeat(6, minmax(0, 1fr)); }
               @media (max-width: 1700px) {
                 .historia-paciente-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
@@ -7525,7 +7531,7 @@ export default function App() {
                   e.preventDefault();
                   await saveHistoriaClinica();
                 }}
-                style={{ display: "grid", gap: 16, paddingBottom: 40 }}
+                style={{ display: "grid", gap: 10, paddingBottom: 12 }}
               >
                 <section data-hist-section="refraccion" style={{ display: "grid", gap: 12, order: 4 }}>
                   {/* Refracción */}
