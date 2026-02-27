@@ -295,7 +295,6 @@ const HISTORIA_LAYOUT_SCALE_STYLE: CSSProperties = HISTORIA_MODAL_SCALE === 1
   : {
       zoom: HISTORIA_MODAL_SCALE,
       width: `calc(100% / ${HISTORIA_MODAL_SCALE})`,
-      height: `calc(100% / ${HISTORIA_MODAL_SCALE})`,
     };
 
 function sleep(ms: number) {
@@ -7330,7 +7329,7 @@ export default function App() {
             </div>
             <style>{`
               .historia-layout { min-height: 0; height: 100%; padding: 8px 10px 10px; font-size: 13px; }
-              .historia-main-scroll { min-height: 0; height: 100%; overflow-y: auto; padding: 0 4px 22px 0; scroll-behavior: smooth; }
+              .historia-main-scroll { min-height: 0; height: 100%; overflow-y: auto; padding: 0 4px calc(84px + env(safe-area-inset-bottom, 0px)) 0; scroll-behavior: smooth; }
               .historia-main-scroll section[data-hist-section] { scroll-margin-top: 16px; }
               .historia-main-scroll h3 { font-size: 19px; }
               .historia-main-scroll label > span { font-size: 12px; }
@@ -7540,7 +7539,7 @@ export default function App() {
                   e.preventDefault();
                   await saveHistoriaClinica();
                 }}
-                style={{ display: "grid", gap: 10, paddingBottom: 12 }}
+                style={{ display: "grid", gap: 10, paddingBottom: 48 }}
               >
                 <section data-hist-section="refraccion" style={{ display: "grid", gap: 12, order: 4 }}>
                   {/* Refracción */}
