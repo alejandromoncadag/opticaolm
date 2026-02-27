@@ -268,6 +268,7 @@ function parseUiScale(raw: string | undefined): number {
 }
 
 const APP_UI_SCALE = parseUiScale((import.meta.env.VITE_UI_SCALE as string | undefined)?.trim());
+const HISTORIA_MODAL_SCALE: number = 0.84;
 const FIXED_SUCURSAL_LABELS: Record<number, string> = {
   1: "EdoMex",
   2: "Playa",
@@ -287,6 +288,14 @@ const MAIN_SCALE_STYLE: CSSProperties = APP_UI_SCALE === 1
       zoom: APP_UI_SCALE,
       width: `calc((100vw - 24px) / ${APP_UI_SCALE})`,
       minHeight: `calc((100vh - 24px) / ${APP_UI_SCALE})`,
+    };
+
+const HISTORIA_LAYOUT_SCALE_STYLE: CSSProperties = HISTORIA_MODAL_SCALE === 1
+  ? {}
+  : {
+      zoom: HISTORIA_MODAL_SCALE,
+      width: `calc(100% / ${HISTORIA_MODAL_SCALE})`,
+      height: `calc(100% / ${HISTORIA_MODAL_SCALE})`,
     };
 
 function sleep(ms: number) {
@@ -7343,7 +7352,7 @@ export default function App() {
                 .historia-paciente-grid { grid-template-columns: 1fr; }
               }
             `}</style>
-            <div className="historia-layout">
+            <div className="historia-layout" style={HISTORIA_LAYOUT_SCALE_STYLE}>
               <div className="historia-main-scroll">
             <div
               style={{
