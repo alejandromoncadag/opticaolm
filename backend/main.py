@@ -157,21 +157,54 @@ def ensure_historia_schema():
                 """
                 ALTER TABLE core.historias_clinicas
                 ADD COLUMN IF NOT EXISTS puesto_laboral text,
+                ADD COLUMN IF NOT EXISTS paciente_fecha_nacimiento text,
+                ADD COLUMN IF NOT EXISTS paciente_edad integer,
+                ADD COLUMN IF NOT EXISTS paciente_primer_nombre text,
+                ADD COLUMN IF NOT EXISTS paciente_segundo_nombre text,
+                ADD COLUMN IF NOT EXISTS paciente_apellido_paterno text,
+                ADD COLUMN IF NOT EXISTS paciente_apellido_materno text,
+                ADD COLUMN IF NOT EXISTS paciente_telefono text,
+                ADD COLUMN IF NOT EXISTS paciente_correo text,
+                ADD COLUMN IF NOT EXISTS paciente_calle text,
+                ADD COLUMN IF NOT EXISTS paciente_numero text,
+                ADD COLUMN IF NOT EXISTS paciente_colonia text,
+                ADD COLUMN IF NOT EXISTS paciente_codigo_postal text,
+                ADD COLUMN IF NOT EXISTS paciente_municipio text,
+                ADD COLUMN IF NOT EXISTS paciente_estado text,
+                ADD COLUMN IF NOT EXISTS paciente_pais text,
                 ADD COLUMN IF NOT EXISTS antecedentes_generales text,
+                ADD COLUMN IF NOT EXISTS antecedentes text,
                 ADD COLUMN IF NOT EXISTS antecedentes_otro text,
                 ADD COLUMN IF NOT EXISTS alergias text,
                 ADD COLUMN IF NOT EXISTS enfermedades text,
                 ADD COLUMN IF NOT EXISTS cirugias text,
                 ADD COLUMN IF NOT EXISTS avsinrixoi text,
+                ADD COLUMN IF NOT EXISTS avsinrxod text,
+                ADD COLUMN IF NOT EXISTS capvisualod text,
+                ADD COLUMN IF NOT EXISTS capvisualoi text,
+                ADD COLUMN IF NOT EXISTS avrxantod text,
+                ADD COLUMN IF NOT EXISTS avrxantoi text,
+                ADD COLUMN IF NOT EXISTS queraod text,
+                ADD COLUMN IF NOT EXISTS queraoi text,
+                ADD COLUMN IF NOT EXISTS retinosod text,
+                ADD COLUMN IF NOT EXISTS retinosoi text,
                 ADD COLUMN IF NOT EXISTS subjeod text,
+                ADD COLUMN IF NOT EXISTS subjeoi text,
                 ADD COLUMN IF NOT EXISTS horas_pantalla_dia text,
                 ADD COLUMN IF NOT EXISTS conduccion_nocturna_horas text,
                 ADD COLUMN IF NOT EXISTS exposicion_uv text,
+                ADD COLUMN IF NOT EXISTS fumador_tabaco boolean,
+                ADD COLUMN IF NOT EXISTS fumador_marihuana boolean,
+                ADD COLUMN IF NOT EXISTS consumidor_alcohol boolean,
+                ADD COLUMN IF NOT EXISTS diabetes boolean,
+                ADD COLUMN IF NOT EXISTS tipo_diabetes text,
+                ADD COLUMN IF NOT EXISTS deportista boolean,
                 ADD COLUMN IF NOT EXISTS tabaquismo_estado text,
                 ADD COLUMN IF NOT EXISTS tabaquismo_intensidad text,
                 ADD COLUMN IF NOT EXISTS tabaquismo_anios text,
                 ADD COLUMN IF NOT EXISTS tabaquismo_anios_desde_dejo text,
                 ADD COLUMN IF NOT EXISTS alcohol_frecuencia text,
+                ADD COLUMN IF NOT EXISTS alcohol_copas text,
                 ADD COLUMN IF NOT EXISTS marihuana_frecuencia text,
                 ADD COLUMN IF NOT EXISTS marihuana_forma text,
                 ADD COLUMN IF NOT EXISTS drogas_consumo text,
@@ -190,6 +223,7 @@ def ensure_historia_schema():
                 ADD COLUMN IF NOT EXISTS tipo_lentes_actual text,
                 ADD COLUMN IF NOT EXISTS tiempo_uso_lentes text,
                 ADD COLUMN IF NOT EXISTS lentes_contacto_horas_dia text,
+                ADD COLUMN IF NOT EXISTS lentes_contacto_dias_semana text,
                 ADD COLUMN IF NOT EXISTS sintomas text,
                 ADD COLUMN IF NOT EXISTS doctor_atencion text,
                 ADD COLUMN IF NOT EXISTS antecedentes_oculares_familiares text,
@@ -223,13 +257,51 @@ def ensure_historia_schema():
                 ADD COLUMN IF NOT EXISTS uso_calefaccion_horas_dia text,
                 ADD COLUMN IF NOT EXISTS uso_pantalla_en_oscuridad text,
                 ADD COLUMN IF NOT EXISTS cafeina_por_dia text,
+                ADD COLUMN IF NOT EXISTS papila text,
+                ADD COLUMN IF NOT EXISTS biomicroscopia text,
+                ADD COLUMN IF NOT EXISTS diagnostico_general text,
                 ADD COLUMN IF NOT EXISTS diagnostico_principal text,
                 ADD COLUMN IF NOT EXISTS diagnostico_principal_otro text,
                 ADD COLUMN IF NOT EXISTS diagnosticos_secundarios text,
                 ADD COLUMN IF NOT EXISTS diagnosticos_secundarios_otro text,
+                ADD COLUMN IF NOT EXISTS created_by text,
+                ADD COLUMN IF NOT EXISTS updated_at timestamptz NULL,
+                ADD COLUMN IF NOT EXISTS activo boolean NOT NULL DEFAULT true,
                 ADD COLUMN IF NOT EXISTS seguimiento_requerido boolean,
                 ADD COLUMN IF NOT EXISTS seguimiento_tipo text,
                 ADD COLUMN IF NOT EXISTS seguimiento_valor text;
+                """
+            )
+
+            cur.execute(
+                """
+                DO $$
+                BEGIN
+                    IF EXISTS (
+                        SELECT 1
+                        FROM information_schema.columns
+                        WHERE table_schema = 'core'
+                          AND table_name = 'historias_clinicas'
+                          AND column_name = 'historia_clinica_id'
+                    ) AND NOT EXISTS (
+                        SELECT 1
+                        FROM information_schema.columns
+                        WHERE table_schema = 'core'
+                          AND table_name = 'historias_clinicas'
+                          AND column_name = 'historia_id'
+                    ) THEN
+                        EXECUTE 'ALTER TABLE core.historias_clinicas RENAME COLUMN historia_clinica_id TO historia_id';
+                    END IF;
+                END
+                $$;
+                """
+            )
+
+            cur.execute(
+                """
+                UPDATE core.historias_clinicas
+                SET activo = true
+                WHERE activo IS NULL;
                 """
             )
             cur.execute(
