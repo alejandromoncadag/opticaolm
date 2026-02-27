@@ -1,5 +1,6 @@
 
 import { useEffect, useMemo, useRef, useState, type ReactNode, type FormEvent, type CSSProperties } from "react";
+import { createPortal } from "react-dom";
 import DatePicker from "react-datepicker";
 import "react-datepicker/dist/react-datepicker.css";
 import "./datepicker.css";
@@ -7187,7 +7188,7 @@ export default function App() {
 
 
       {/* ================= MODAL HISTORIA CLINICA ================= */}
-      {historiaPacienteId && (
+      {historiaPacienteId && createPortal((
         <div
           style={{
             position: "fixed",
@@ -9030,7 +9031,7 @@ export default function App() {
             </div>
           </div>
         </div>
-        )}
+        ), document.body)}
 
       {successHistoriaMsg && (
         <div

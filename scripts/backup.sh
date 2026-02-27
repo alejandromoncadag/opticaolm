@@ -4,11 +4,19 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
 ENV_FILE="${ENV_FILE:-$REPO_ROOT/backend/.env}"
+BACKUP_ENV_FILE="${BACKUP_ENV_FILE:-$REPO_ROOT/scripts/.env.backup}"
 
 if [[ -f "$ENV_FILE" ]]; then
   set -a
   # shellcheck disable=SC1090
   source "$ENV_FILE"
+  set +a
+fi
+
+if [[ -f "$BACKUP_ENV_FILE" ]]; then
+  set -a
+  # shellcheck disable=SC1090
+  source "$BACKUP_ENV_FILE"
   set +a
 fi
 

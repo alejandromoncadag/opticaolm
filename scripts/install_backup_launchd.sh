@@ -6,6 +6,7 @@ REPO_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
 BACKUP_SCRIPT="$REPO_ROOT/scripts/backup.sh"
 BACKUP_DIR="${BACKUP_DIR:-$REPO_ROOT/backups}"
 LOG_DIR="$BACKUP_DIR/logs"
+BACKUP_ENV_FILE="${BACKUP_ENV_FILE:-$REPO_ROOT/scripts/.env.backup}"
 OFFSITE_ENABLED="${OFFSITE_ENABLED:-true}"
 OFFSITE_TARGETS="${OFFSITE_TARGETS:-icloud}"
 ICLOUD_DIR="${ICLOUD_DIR:-$HOME/Library/Mobile Documents/com~apple~CloudDocs/OpticaOLM/backups}"
@@ -19,8 +20,8 @@ LABEL="${LABEL:-com.opticaolm.backup}"
 PLIST_PATH="$HOME/Library/LaunchAgents/${LABEL}.plist"
 RUN_AT_LOAD="${RUN_AT_LOAD:-false}"
 
-# Defaults: domingo 03:00
-WEEKDAY="${1:-0}" # 0=domingo ... 6=sabado
+# Defaults: diario 03:00 (sin weekday). Si pasas weekday 0..6, queda semanal.
+WEEKDAY="${1:-*}" # *=diario, 0=domingo ... 6=sabado
 HOUR="${2:-3}"
 MINUTE="${3:-0}"
 
@@ -29,6 +30,15 @@ mkdir -p "$LOG_DIR"
 RUN_AT_LOAD_TAG="<false/>"
 if [[ "$RUN_AT_LOAD" == "true" ]]; then
   RUN_AT_LOAD_TAG="<true/>"
+fi
+
+WEEKDAY_TAG=""
+if [[ "$WEEKDAY" != "*" ]]; then
+  WEEKDAY_TAG=$(cat <<EOW
+      <key>Weekday</key>
+      <integer>${WEEKDAY}</integer>
+EOW
+)
 fi
 
 cat > "$PLIST_PATH" <<EOF
@@ -49,6 +59,8 @@ cat > "$PLIST_PATH" <<EOF
     <dict>
       <key>BACKUP_DIR</key>
       <string>${BACKUP_DIR}</string>
+      <key>BACKUP_ENV_FILE</key>
+      <string>${BACKUP_ENV_FILE}</string>
       <key>OFFSITE_ENABLED</key>
       <string>${OFFSITE_ENABLED}</string>
       <key>OFFSITE_TARGETS</key>
@@ -69,8 +81,7 @@ cat > "$PLIST_PATH" <<EOF
 
     <key>StartCalendarInterval</key>
     <dict>
-      <key>Weekday</key>
-      <integer>${WEEKDAY}</integer>
+${WEEKDAY_TAG}
       <key>Hour</key>
       <integer>${HOUR}</integer>
       <key>Minute</key>
@@ -95,6 +106,7 @@ echo "Plist: $PLIST_PATH"
 echo "Horario: weekday=$WEEKDAY hour=$HOUR minute=$MINUTE"
 echo "RunAtLoad: $RUN_AT_LOAD"
 echo "Offsite: enabled=$OFFSITE_ENABLED targets=$OFFSITE_TARGETS"
+echo "Backup env file: $BACKUP_ENV_FILE"
 echo "Retention: recent=$KEEP_RECENT weekly=$KEEP_WEEKLY monthly=$KEEP_MONTHLY"
 echo "Restore test post-backup: $RUN_RESTORE_TEST"
 echo "Ver estado: launchctl list | grep ${LABEL}"
