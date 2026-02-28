@@ -268,8 +268,8 @@ function parseUiScale(raw: string | undefined): number {
 }
 
 const APP_UI_SCALE = parseUiScale((import.meta.env.VITE_UI_SCALE as string | undefined)?.trim());
-const HISTORIA_MODAL_SCALE: number = 0.84;
-const HISTORIA_LAYOUT_SAFE_SIDE_PX = 8;
+const HISTORIA_MODAL_SCALE: number = 0.8;
+const HISTORIA_LAYOUT_SAFE_SIDE_PX = 24;
 const FIXED_SUCURSAL_LABELS: Record<number, string> = {
   1: "EdoMex",
   2: "Playa",
@@ -7331,8 +7331,10 @@ export default function App() {
               </div>
             </div>
             <style>{`
-              .historia-layout { min-height: 0; height: 100%; padding: 8px 10px 10px; font-size: 13px; box-sizing: border-box; }
-              .historia-main-scroll { min-height: 0; height: 100%; overflow-y: auto; padding: 0 4px calc(84px + env(safe-area-inset-bottom, 0px)) 0; scroll-behavior: smooth; }
+              .historia-layout { min-height: 0; height: 100%; padding: 8px 8px 10px; font-size: 13px; box-sizing: border-box; }
+              .historia-main-scroll { min-height: 0; height: 100%; overflow-y: auto; overflow-x: auto; padding: 0 16px calc(84px + env(safe-area-inset-bottom, 0px)) 8px; scroll-behavior: smooth; scrollbar-gutter: stable both-edges; }
+              .historia-main-scroll,
+              .historia-main-scroll * { box-sizing: border-box; min-width: 0; }
               .historia-main-scroll section[data-hist-section] { scroll-margin-top: 16px; }
               .historia-main-scroll h3 { font-size: 19px; }
               .historia-main-scroll label > span { font-size: 12px; }
