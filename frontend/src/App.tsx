@@ -3759,19 +3759,22 @@ export default function App() {
         String(historiaData?.tabaquismo_tiempo_consumo_unidad ?? "").trim().toLowerCase() === "meses"
           ? "meses"
           : "anios";
+      const tabaquismoUnidadDesdeDejo =
+        String(historiaData?.tabaquismo_tiempo_desde_dejo_unidad ?? "").trim().toLowerCase() === "meses"
+          ? "meses"
+          : "anios";
       const tabaquismoTiempoConsumoPayload = composeDurationWithUnit(
         historiaData?.tabaquismo_tiempo_consumo_valor,
         tabaquismoUnidadTiempo,
       );
       const tabaquismoTiempoDesdeDejoPayload = composeDurationWithUnit(
         tabaquismoEstado === "ex_fumador" ? historiaData?.tabaquismo_tiempo_desde_dejo_valor : "",
-        tabaquismoUnidadTiempo,
+        tabaquismoUnidadDesdeDejo,
       );
       const alcoholEstado = String(historiaData?.alcohol_estado ?? "nunca").trim() || "nunca";
       const alcoholBebidasDia = normalizeDurationValue(historiaData?.alcohol_bebidas_dia ?? "");
       const alcoholTiempoValor = normalizeDurationValue(historiaData?.alcohol_tiempo_valor ?? "");
       const alcoholTiempoUnidad = String(historiaData?.alcohol_tiempo_unidad ?? "").trim().toLowerCase() === "meses" ? "meses" : "anios";
-      const alcoholQueTomaba = String(historiaData?.alcohol_que_tomaba ?? "").trim();
       const alcoholFrecuenciaPayload = JSON.stringify({
         estado: alcoholEstado,
         bebidas_dia: alcoholBebidasDia || null,
@@ -3890,7 +3893,7 @@ export default function App() {
         tabaquismo_anios: tabaquismoTiempoConsumoPayload || null,
         tabaquismo_anios_desde_dejo: tabaquismoTiempoDesdeDejoPayload || null,
         alcohol_frecuencia: alcoholFrecuenciaPayload,
-        alcohol_copas: alcoholQueTomaba || null,
+        alcohol_copas: null,
         marihuana_frecuencia: marihuanaFrecuenciaPayload,
         marihuana_forma: historiaData.marihuana_forma,
         drogas_consumo: drogasEstadoDb,
@@ -8577,6 +8580,7 @@ export default function App() {
                                   tabaquismo_tiempo_consumo_valor: "",
                                   tabaquismo_tiempo_consumo_unidad: "anios",
                                   tabaquismo_tiempo_desde_dejo_valor: "",
+                                  tabaquismo_tiempo_desde_dejo_unidad: "anios",
                                 });
                                 return;
                               }
@@ -8584,6 +8588,7 @@ export default function App() {
                                 ...historiaData,
                                 tabaquismo_estado: estado,
                                 tabaquismo_tiempo_desde_dejo_valor: estado === "ex_fumador" ? (historiaData?.tabaquismo_tiempo_desde_dejo_valor ?? "") : "",
+                                tabaquismo_tiempo_desde_dejo_unidad: estado === "ex_fumador" ? (historiaData?.tabaquismo_tiempo_desde_dejo_unidad ?? "anios") : "anios",
                               });
                             }}
                           >
@@ -8634,7 +8639,7 @@ export default function App() {
                         {String(historiaData.tabaquismo_estado ?? "") === "ex_fumador" && (
                           <>
                             <label style={{ display: "grid", gap: 4 }}>
-                              <span>Tiempo desde que lo dejó ({(historiaData.tabaquismo_tiempo_consumo_unidad ?? "anios") === "meses" ? "meses" : "años"})</span>
+                              <span>Tiempo desde que lo dejó</span>
                               <input
                                 type="number"
                                 min={0}
@@ -8643,6 +8648,18 @@ export default function App() {
                                 value={historiaData.tabaquismo_tiempo_desde_dejo_valor ?? ""}
                                 onChange={(e) => setHistoriaData({ ...historiaData, tabaquismo_tiempo_desde_dejo_valor: e.target.value })}
                               />
+                            </label>
+                            <label style={{ display: "grid", gap: 4 }}>
+                              <span>Unidad desde que lo dejó</span>
+                              <select
+                                style={historiaInputStyle}
+                                value={historiaData.tabaquismo_tiempo_desde_dejo_unidad ?? "anios"}
+                                onChange={(e) => setHistoriaData({ ...historiaData, tabaquismo_tiempo_desde_dejo_unidad: e.target.value })}
+                              >
+                                {DURACION_CONSUMO_UNIDAD_OPTIONS.map((opt) => (
+                                  <option key={`tabaco-dejo-unidad-${opt.value}`} value={opt.value}>{opt.label}</option>
+                                ))}
+                              </select>
                             </label>
                           </>
                         )}
@@ -8666,7 +8683,6 @@ export default function App() {
                                     ...historiaData,
                                     alcohol_estado: estado,
                                     alcohol_bebidas_dia: "",
-                                    alcohol_que_tomaba: "",
                                     alcohol_tiempo_valor: "",
                                     alcohol_tiempo_unidad: "anios",
                                   });
@@ -8691,15 +8707,6 @@ export default function App() {
                                   style={historiaInputStyle}
                                   value={historiaData.alcohol_bebidas_dia ?? ""}
                                   onChange={(e) => setHistoriaData({ ...historiaData, alcohol_bebidas_dia: e.target.value })}
-                                />
-                              </label>
-                              <label style={{ display: "grid", gap: 4 }}>
-                                <span>Qué tomaba</span>
-                                <input
-                                  type="text"
-                                  style={historiaInputStyle}
-                                  value={historiaData.alcohol_que_tomaba ?? ""}
-                                  onChange={(e) => setHistoriaData({ ...historiaData, alcohol_que_tomaba: e.target.value })}
                                 />
                               </label>
                               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
