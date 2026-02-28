@@ -268,8 +268,7 @@ function parseUiScale(raw: string | undefined): number {
 }
 
 const APP_UI_SCALE = parseUiScale((import.meta.env.VITE_UI_SCALE as string | undefined)?.trim());
-const HISTORIA_MODAL_SCALE: number = 0.76;
-const HISTORIA_LAYOUT_SAFE_SIDE_PX = 120;
+const HISTORIA_MODAL_SCALE: number = 1;
 const FIXED_SUCURSAL_LABELS: Record<number, string> = {
   1: "EdoMex",
   2: "Playa",
@@ -294,9 +293,10 @@ const MAIN_SCALE_STYLE: CSSProperties = APP_UI_SCALE === 1
 const HISTORIA_LAYOUT_SCALE_STYLE: CSSProperties = HISTORIA_MODAL_SCALE === 1
   ? {}
   : {
-      zoom: HISTORIA_MODAL_SCALE,
+      transform: `scale(${HISTORIA_MODAL_SCALE})`,
+      transformOrigin: "top center",
       boxSizing: "border-box",
-      width: `calc((100% - ${HISTORIA_LAYOUT_SAFE_SIDE_PX}px) / ${HISTORIA_MODAL_SCALE})`,
+      width: `calc(100% / ${HISTORIA_MODAL_SCALE})`,
       margin: "0 auto",
     };
 
@@ -7217,10 +7217,10 @@ export default function App() {
               background: "linear-gradient(180deg, #fffdf9 0%, #fff7ed 100%)",
               borderRadius: 0,
               border: "none",
-              width: "100vw",
-              height: "100vh",
-              maxWidth: "100vw",
-              maxHeight: "100vh",
+              width: "100%",
+              height: "100%",
+              maxWidth: "100%",
+              maxHeight: "100%",
               overflow: "hidden",
               boxShadow: "0 30px 70px rgba(35, 24, 15, 0.38)",
               display: "grid",
@@ -7239,7 +7239,7 @@ export default function App() {
               }}
             >
               <div>
-                <h2 style={{ margin: 0, fontSize: 26, lineHeight: 1.05, color: "#3f2d1d", letterSpacing: 0.2 }}>
+                <h2 style={{ margin: 0, fontSize: 23, lineHeight: 1.05, color: "#3f2d1d", letterSpacing: 0.2 }}>
                   Historia clínica paciente {historiaPacienteNombreCompleto || `#${historiaPacienteId}`}
                 </h2>
                 <div style={{ marginTop: 2, fontSize: 11, color: "#6b4f37", fontWeight: 700 }}>
@@ -7331,17 +7331,17 @@ export default function App() {
               </div>
             </div>
             <style>{`
-              .historia-layout { min-height: 0; height: 100%; padding: 8px 8px 10px; font-size: 13px; box-sizing: border-box; }
+              .historia-layout { min-height: 0; height: 100%; width: min(100%, 1680px); margin: 0 auto; padding: 8px 8px 10px; font-size: 12px; box-sizing: border-box; }
               .historia-main-scroll { min-height: 0; height: 100%; overflow-y: auto; overflow-x: auto; padding: 0 32px calc(84px + env(safe-area-inset-bottom, 0px)) 12px; scroll-behavior: smooth; scrollbar-gutter: stable both-edges; }
               .historia-main-scroll,
               .historia-main-scroll * { box-sizing: border-box; min-width: 0; }
               .historia-main-scroll section[data-hist-section] { scroll-margin-top: 16px; }
-              .historia-main-scroll h3 { font-size: 19px; }
-              .historia-main-scroll label > span { font-size: 12px; }
+              .historia-main-scroll h3 { font-size: 18px; }
+              .historia-main-scroll label > span { font-size: 11px; }
               .historia-main-scroll input,
               .historia-main-scroll select,
               .historia-main-scroll textarea,
-              .historia-main-scroll button { font-size: 12px; }
+              .historia-main-scroll button { font-size: 11px; }
               .historia-paciente-grid { display: grid; gap: 10px; grid-template-columns: repeat(6, minmax(0, 1fr)); }
               @media (max-width: 1700px) {
                 .historia-paciente-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
