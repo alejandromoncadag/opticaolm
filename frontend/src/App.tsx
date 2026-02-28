@@ -3755,13 +3755,17 @@ export default function App() {
         ""
       );
       const tabaquismoEstado = String(historiaData?.tabaquismo_estado ?? "").trim();
+      const tabaquismoUnidadTiempo =
+        String(historiaData?.tabaquismo_tiempo_consumo_unidad ?? "").trim().toLowerCase() === "meses"
+          ? "meses"
+          : "anios";
       const tabaquismoTiempoConsumoPayload = composeDurationWithUnit(
         historiaData?.tabaquismo_tiempo_consumo_valor,
-        historiaData?.tabaquismo_tiempo_consumo_unidad,
+        tabaquismoUnidadTiempo,
       );
       const tabaquismoTiempoDesdeDejoPayload = composeDurationWithUnit(
-        historiaData?.tabaquismo_tiempo_desde_dejo_valor,
-        historiaData?.tabaquismo_tiempo_desde_dejo_unidad,
+        tabaquismoEstado === "ex_fumador" ? historiaData?.tabaquismo_tiempo_desde_dejo_valor : "",
+        tabaquismoUnidadTiempo,
       );
       const alcoholEstado = String(historiaData?.alcohol_estado ?? "nunca").trim() || "nunca";
       const alcoholBebidasDia = normalizeDurationValue(historiaData?.alcohol_bebidas_dia ?? "");
@@ -8573,13 +8577,13 @@ export default function App() {
                                   tabaquismo_tiempo_consumo_valor: "",
                                   tabaquismo_tiempo_consumo_unidad: "anios",
                                   tabaquismo_tiempo_desde_dejo_valor: "",
-                                  tabaquismo_tiempo_desde_dejo_unidad: "anios",
                                 });
                                 return;
                               }
                               setHistoriaData({
                                 ...historiaData,
                                 tabaquismo_estado: estado,
+                                tabaquismo_tiempo_desde_dejo_valor: estado === "ex_fumador" ? (historiaData?.tabaquismo_tiempo_desde_dejo_valor ?? "") : "",
                               });
                             }}
                           >
@@ -8630,7 +8634,7 @@ export default function App() {
                         {String(historiaData.tabaquismo_estado ?? "") === "ex_fumador" && (
                           <>
                             <label style={{ display: "grid", gap: 4 }}>
-                              <span>Tiempo desde que lo dejó</span>
+                              <span>Tiempo desde que lo dejó ({(historiaData.tabaquismo_tiempo_consumo_unidad ?? "anios") === "meses" ? "meses" : "años"})</span>
                               <input
                                 type="number"
                                 min={0}
@@ -8639,18 +8643,6 @@ export default function App() {
                                 value={historiaData.tabaquismo_tiempo_desde_dejo_valor ?? ""}
                                 onChange={(e) => setHistoriaData({ ...historiaData, tabaquismo_tiempo_desde_dejo_valor: e.target.value })}
                               />
-                            </label>
-                            <label style={{ display: "grid", gap: 4 }}>
-                              <span>Unidad desde que lo dejó</span>
-                              <select
-                                style={historiaInputStyle}
-                                value={historiaData.tabaquismo_tiempo_desde_dejo_unidad ?? "anios"}
-                                onChange={(e) => setHistoriaData({ ...historiaData, tabaquismo_tiempo_desde_dejo_unidad: e.target.value })}
-                              >
-                                {DURACION_CONSUMO_UNIDAD_OPTIONS.map((opt) => (
-                                  <option key={`tabaco-dejo-unidad-${opt.value}`} value={opt.value}>{opt.label}</option>
-                                ))}
-                              </select>
                             </label>
                           </>
                         )}
