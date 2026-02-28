@@ -377,6 +377,12 @@ def ensure_ventas_schema():
                 ADD COLUMN IF NOT EXISTS codigo text NULL,
                 ADD COLUMN IF NOT EXISTS ciudad text NULL,
                 ADD COLUMN IF NOT EXISTS estado text NULL,
+                ADD COLUMN IF NOT EXISTS calle text NULL,
+                ADD COLUMN IF NOT EXISTS numero text NULL,
+                ADD COLUMN IF NOT EXISTS colonia text NULL,
+                ADD COLUMN IF NOT EXISTS cp text NULL,
+                ADD COLUMN IF NOT EXISTS municipio text NULL,
+                ADD COLUMN IF NOT EXISTS pais text NULL,
                 ADD COLUMN IF NOT EXISTS activa boolean NOT NULL DEFAULT true;
                 """
             )
@@ -385,6 +391,38 @@ def ensure_ventas_schema():
                 UPDATE core.sucursales
                 SET activa = COALESCE(activa, true)
                 WHERE activa IS NULL;
+                """
+            )
+            cur.execute(
+                """
+                UPDATE core.sucursales
+                SET
+                  ciudad = CASE
+                    WHEN sucursal_id = 1 THEN 'Estado de México'
+                    WHEN sucursal_id = 2 THEN 'Playa del Carmen'
+                    ELSE ciudad
+                  END,
+                  estado = CASE
+                    WHEN sucursal_id = 1 THEN 'Estado de México'
+                    WHEN sucursal_id = 2 THEN 'Quintana Roo'
+                    ELSE estado
+                  END,
+                  municipio = CASE
+                    WHEN sucursal_id = 1 THEN 'Estado de México'
+                    WHEN sucursal_id = 2 THEN 'Playa del Carmen'
+                    ELSE municipio
+                  END,
+                  pais = CASE
+                    WHEN sucursal_id IN (1, 2) THEN 'México'
+                    ELSE pais
+                  END
+                WHERE sucursal_id IN (1, 2)
+                  AND (
+                    ciudad IS NULL OR btrim(ciudad) = ''
+                    OR estado IS NULL OR btrim(estado) = ''
+                    OR municipio IS NULL OR btrim(municipio) = ''
+                    OR pais IS NULL OR btrim(pais) = ''
+                  );
                 """
             )
 
@@ -1659,6 +1697,16 @@ def _export_filename(prefix: str, desde_date: date, hasta_date: date, sucursal_i
     return f"{prefix}_{sid}_{desde_date.isoformat()}_{hasta_date.isoformat()}.csv"
 
 
+def _sql_humanize_anios_expr(sql_col_ref: str) -> str:
+    return (
+        f"CASE "
+        f"WHEN {sql_col_ref} IS NULL THEN NULL "
+        f"WHEN {sql_col_ref} IN ('1|anios', '1.0|anios') THEN '1|año' "
+        f"ELSE replace({sql_col_ref}, '|anios', '|años') "
+        f"END"
+    )
+
+
 def _current_user_dep(token: str = Depends(oauth2_scheme)):
     return get_current_user(token)
 
@@ -2021,7 +2069,36 @@ def export_historias_clinicas_csv(
         "biomicroscopia",
         "created_by", "created_at_tz", "updated_at", "activo",
     ]
-    select_cols = ",\n      ".join([f"h.{col}" for col in headers])
+    select_expr_overrides = {
+        "tabaquismo_anios": f"{_sql_humanize_anios_expr('h.tabaquismo_anios')} AS tabaquismo_anios",
+        "tabaquismo_anios_desde_dejo": f"{_sql_humanize_anios_expr('h.tabaquismo_anios_desde_dejo')} AS tabaquismo_anios_desde_dejo",
+        "alcohol_frecuencia": (
+            "replace("
+            "replace(h.alcohol_frecuencia, '\"tiempo_unidad\":\"anios\"', '\"tiempo_unidad\":\"años\"'), "
+            "'|anios', '|años'"
+            ") AS alcohol_frecuencia"
+        ),
+        "marihuana_frecuencia": (
+            "replace("
+            "replace(h.marihuana_frecuencia, '\"tiempo_unidad\":\"anios\"', '\"tiempo_unidad\":\"años\"'), "
+            "'|anios', '|años'"
+            ") AS marihuana_frecuencia"
+        ),
+        "drogas_frecuencia": (
+            "replace("
+            "replace(h.drogas_frecuencia, '\"tiempo_unidad\":\"anios\"', '\"tiempo_unidad\":\"años\"'), "
+            "'|anios', '|años'"
+            ") AS drogas_frecuencia"
+        ),
+        "tiempo_uso_lentes": (
+            "CASE "
+            "WHEN h.tiempo_uso_lentes IS NULL THEN NULL "
+            "WHEN h.tiempo_uso_lentes IN ('1 años', '1 anios', '1 año', '1 ano') THEN '1 año' "
+            "ELSE replace(h.tiempo_uso_lentes, ' anios', ' años') "
+            "END AS tiempo_uso_lentes"
+        ),
+    }
+    select_cols = ",\n      ".join([select_expr_overrides.get(col, f"h.{col}") for col in headers])
     sql = f"""
     SELECT
       {select_cols}
@@ -2044,7 +2121,20 @@ def export_sucursales_csv(
 ):
     require_roles(user, ("admin",))
     delimiter_char = _parse_export_delimiter(delimiter)
-    headers = ["sucursal_id", "nombre", "codigo", "ciudad", "estado", "activa"]
+    headers = [
+        "sucursal_id",
+        "nombre",
+        "codigo",
+        "ciudad",
+        "estado",
+        "calle",
+        "numero",
+        "colonia",
+        "cp",
+        "municipio",
+        "pais",
+        "activa",
+    ]
     sql = """
     SELECT
       s.sucursal_id,
@@ -2052,6 +2142,12 @@ def export_sucursales_csv(
       s.codigo,
       s.ciudad,
       s.estado,
+      s.calle,
+      s.numero,
+      s.colonia,
+      s.cp,
+      s.municipio,
+      s.pais,
       s.activa
     FROM core.sucursales s
     ORDER BY s.sucursal_id ASC;
@@ -2869,6 +2965,42 @@ def _has_overlap(start_dt: datetime, end_dt: datetime, busy: list[tuple[datetime
     return False
 
 
+def _fetch_busy_intervals_consultas(
+    sucursal_id: int,
+    start_dt: datetime,
+    end_dt: datetime,
+    exclude_consulta_id: int | None = None,
+) -> list[tuple[datetime, datetime]]:
+    sql = """
+    SELECT agenda_inicio, agenda_fin
+    FROM core.consultas
+    WHERE sucursal_id = %s
+      AND activo = true
+      AND agenda_inicio IS NOT NULL
+      AND agenda_fin IS NOT NULL
+      AND agenda_inicio < %s
+      AND agenda_fin > %s
+    """
+    params: list[Any] = [sucursal_id, end_dt, start_dt]
+    if exclude_consulta_id is not None:
+        sql += " AND consulta_id <> %s"
+        params.append(exclude_consulta_id)
+    sql += " ORDER BY agenda_inicio ASC"
+
+    busy: list[tuple[datetime, datetime]] = []
+    with psycopg.connect(DB_CONNINFO) as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, tuple(params))
+            rows = cur.fetchall()
+            for row in rows:
+                if not row or row[0] is None or row[1] is None:
+                    continue
+                start, end = row[0], row[1]
+                if isinstance(start, datetime) and isinstance(end, datetime) and end > start:
+                    busy.append((start, end))
+    return busy
+
+
 def _build_slots_for_day(sucursal_id: int, fecha: date, duracion_min: int = 30) -> dict[str, Any]:
     tz_name = _timezone_for_sucursal(sucursal_id)
     tz = ZoneInfo(tz_name)
@@ -2897,11 +3029,15 @@ def _build_slots_for_day(sucursal_id: int, fecha: date, duracion_min: int = 30) 
     now_local = datetime.now(tz)
     is_today = fecha == now_local.date()
 
-    busy: list[tuple[datetime, datetime]] = []
+    busy: list[tuple[datetime, datetime]] = _fetch_busy_intervals_consultas(
+        sucursal_id=sucursal_id,
+        start_dt=day_start,
+        end_dt=day_end,
+    )
     calendar_sync = False
     if _calendar_feature_enabled():
         cal_id = _calendar_id_for_sucursal(sucursal_id)
-        busy = _fetch_busy_intervals(cal_id, tz_name, day_start, day_end, sucursal_id=sucursal_id)
+        busy.extend(_fetch_busy_intervals(cal_id, tz_name, day_start, day_end, sucursal_id=sucursal_id))
         calendar_sync = True
 
     slots = []
@@ -3314,10 +3450,16 @@ def listar_sucursales():
     SELECT
       sucursal_id,
       nombre,
-      NULL::text  AS codigo,
-      NULL::text  AS ciudad,
-      NULL::text  AS estado,
-      true        AS activa
+      codigo,
+      ciudad,
+      estado,
+      calle,
+      numero,
+      colonia,
+      cp,
+      municipio,
+      pais,
+      activa
     FROM core.sucursales
     ORDER BY sucursal_id;
     """
@@ -3333,7 +3475,13 @@ def listar_sucursales():
             "codigo": r[2],
             "ciudad": r[3],
             "estado": r[4],
-            "activa": r[5],
+            "calle": r[5],
+            "numero": r[6],
+            "colonia": r[7],
+            "cp": r[8],
+            "municipio": r[9],
+            "pais": r[10],
+            "activa": r[11],
         }
         for r in rows
     ]
@@ -5393,11 +5541,6 @@ def crear_consulta(c: ConsultaCreate, user=Depends(get_current_user)):
                 agenda_start: datetime | None = None
                 agenda_end: datetime | None = None
                 calendar_enabled = _calendar_feature_enabled()
-                if not calendar_enabled:
-                    raise HTTPException(
-                        status_code=400,
-                        detail="Google Calendar es obligatorio para crear consultas. Verifica configuración OAuth y calendario por sucursal.",
-                    )
                 if not c.agenda_inicio or not c.agenda_fin:
                     raise HTTPException(
                         status_code=400,
@@ -5411,19 +5554,30 @@ def crear_consulta(c: ConsultaCreate, user=Depends(get_current_user)):
                     raise HTTPException(status_code=400, detail="agenda_fin debe ser mayor que agenda_inicio.")
                 _validate_in_business_hours(c.sucursal_id, agenda_start, agenda_end)
 
-                cal_id = _calendar_id_for_sucursal(c.sucursal_id)
-                busy = _fetch_busy_intervals(
-                    cal_id,
-                    tz_name,
-                    agenda_start,
-                    agenda_end,
+                busy_consultas = _fetch_busy_intervals_consultas(
                     sucursal_id=c.sucursal_id,
+                    start_dt=agenda_start,
+                    end_dt=agenda_end,
                 )
-                if _has_overlap(agenda_start, agenda_end, busy):
+                if _has_overlap(agenda_start, agenda_end, busy_consultas):
                     raise HTTPException(
                         status_code=409,
-                        detail="El horario seleccionado ya no está disponible en Google Calendar.",
+                        detail="El horario seleccionado ya no está disponible (consulta ya registrada).",
                     )
+                if calendar_enabled:
+                    cal_id = _calendar_id_for_sucursal(c.sucursal_id)
+                    busy = _fetch_busy_intervals(
+                        cal_id,
+                        tz_name,
+                        agenda_start,
+                        agenda_end,
+                        sucursal_id=c.sucursal_id,
+                    )
+                    if _has_overlap(agenda_start, agenda_end, busy):
+                        raise HTTPException(
+                            status_code=409,
+                            detail="El horario seleccionado ya no está disponible en Google Calendar.",
+                        )
 
                 sql = """
                 INSERT INTO core.consultas (
@@ -5451,7 +5605,7 @@ def crear_consulta(c: ConsultaCreate, user=Depends(get_current_user)):
                 )
                 new_id = cur.fetchone()[0]
 
-                if agenda_start and agenda_end:
+                if calendar_enabled and agenda_start and agenda_end:
                     doctor_nombre = " ".join(
                         [
                             x

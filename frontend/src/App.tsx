@@ -1107,7 +1107,7 @@ function composeTiempoUsoLentes(anios: unknown): string {
   if (years === null || !Number.isFinite(years)) {
     return "";
   }
-  return `${years} años`;
+  return years === 1 ? "1 año" : `${years} años`;
 }
 
 function normalizeDurationValue(value: unknown): string {
