@@ -784,12 +784,22 @@ const USO_LENTES_SOL_DIAS_SEMANA_OPTIONS = [
   { value: "7_dias", label: "7 días" },
 ] as const;
 const TIEMPO_USO_ANTIBLUERAY_DIA_OPTIONS = [
+  { value: "0", label: "0" },
   { value: "lt_30min", label: "<30 minutos" },
   { value: "30min_1h", label: "30 minutos - 1 hora" },
   { value: "2h_4h", label: "2 horas - 4 horas" },
   { value: "4h_6h", label: "4 horas - 6 horas" },
   { value: "6h_8h", label: "6 horas - 8 horas" },
   { value: "8h_plus", label: "+8 horas" },
+] as const;
+const DURACION_CONSUMO_UNIDAD_OPTIONS = [
+  { value: "anios", label: "Años" },
+  { value: "meses", label: "Meses" },
+] as const;
+const ESTADO_CONSUMO_OPTIONS = [
+  { value: "nunca", label: "Nunca" },
+  { value: "exconsumidor", label: "Ex consumidor" },
+  { value: "consumidor_actual", label: "Consumidor actual" },
 ] as const;
 const HORAS_EXTERIOR_DIA_OPTIONS = [
   { value: "0_30min", label: "0-30 min" },
@@ -1100,6 +1110,64 @@ function composeTiempoUsoLentes(anios: unknown): string {
   return `${years} años`;
 }
 
+function normalizeDurationValue(value: unknown): string {
+  const raw = String(value ?? "").trim().replace(",", ".");
+  if (!raw) return "";
+  if (!/^\d+(\.\d+)?$/.test(raw)) return "";
+  return raw;
+}
+
+function splitDurationWithUnit(
+  value: unknown,
+  defaultUnit: "anios" | "meses" = "anios",
+): { valor: string; unidad: "anios" | "meses" } {
+  const raw = String(value ?? "").trim();
+  if (!raw) return { valor: "", unidad: defaultUnit };
+
+  const pipeMatch = raw.match(/^(\d+(?:\.\d+)?)\s*\|\s*(anios|meses)$/i);
+  if (pipeMatch) {
+    return {
+      valor: normalizeDurationValue(pipeMatch[1]),
+      unidad: pipeMatch[2].toLowerCase() === "meses" ? "meses" : "anios",
+    };
+  }
+
+  const wordMatch = raw.match(/^(\d+(?:\.\d+)?)\s*(?:a(?:n|ñ)o?s?|mes(?:es)?)$/i);
+  if (wordMatch) {
+    const lower = raw.toLowerCase();
+    return {
+      valor: normalizeDurationValue(wordMatch[1]),
+      unidad: lower.includes("mes") ? "meses" : "anios",
+    };
+  }
+
+  return { valor: normalizeDurationValue(raw), unidad: defaultUnit };
+}
+
+function composeDurationWithUnit(
+  valor: unknown,
+  unidad: unknown,
+): string {
+  const normalizedValue = normalizeDurationValue(valor);
+  if (!normalizedValue) return "";
+  const normalizedUnit = String(unidad ?? "").trim().toLowerCase() === "meses" ? "meses" : "anios";
+  return `${normalizedValue}|${normalizedUnit}`;
+}
+
+function tryParseJsonObject(value: unknown): Record<string, any> | null {
+  const raw = String(value ?? "").trim();
+  if (!raw || !raw.startsWith("{")) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return parsed as Record<string, any>;
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
 function normalizeLegacyNumericValue(
   value: unknown,
   mapping: Record<string, string>,
@@ -1179,6 +1247,7 @@ function normalizeTiempoRango6(value: unknown): string {
   if (allowed.has(normalized)) return normalized;
   const num = Number(raw.replace(",", "."));
   if (!Number.isFinite(num)) return "";
+  if (num <= 0) return "0";
   if (num < 0.5) return "lt_30min";
   if (num <= 1) return "30min_1h";
   if (num <= 4) return "2h_4h";
@@ -1472,7 +1541,35 @@ function normalizeHistoriaForUi(data: any, fallbackDoctor: string) {
     if (data?.fumador_tabaco === true) tabaquismoEstado = "fumador_actual";
     if (data?.fumador_tabaco === false) tabaquismoEstado = "nunca";
   }
-  let marihuanaFrecuencia = normalizeLegacyNumericValue(data?.marihuana_frecuencia ?? "", {
+  const tabaquismoAniosLegacy = normalizeLegacyNumericValue(data?.tabaquismo_anios ?? "", {
+    lt_1: "0.5",
+    "1_5": "3",
+    "6_10": "8",
+    "11_20": "15",
+    "21_plus": "21",
+  });
+  const tabaquismoDesdeDejoLegacy = normalizeLegacyNumericValue(data?.tabaquismo_anios_desde_dejo ?? "", {
+    lt_1: "0.5",
+    "1_3": "2",
+    "4_10": "7",
+    "10_plus": "10",
+  });
+  const tabaquismoTiempoConsumo = splitDurationWithUnit(
+    (tabaquismoAniosLegacy || data?.tabaquismo_anios) ?? "",
+    "anios",
+  );
+  const tabaquismoTiempoDesdeDejo = splitDurationWithUnit(
+    (tabaquismoDesdeDejoLegacy || data?.tabaquismo_anios_desde_dejo) ?? "",
+    "anios",
+  );
+
+  const alcoholMeta = tryParseJsonObject(data?.alcohol_frecuencia ?? "");
+  let alcoholEstado = String(alcoholMeta?.estado ?? "").trim().toLowerCase();
+  let alcoholBebidasDia = normalizeDurationValue(alcoholMeta?.bebidas_dia ?? "");
+  let alcoholTiempoValor = normalizeDurationValue(alcoholMeta?.tiempo_valor ?? "");
+  let alcoholTiempoUnidad: "anios" | "meses" =
+    String(alcoholMeta?.tiempo_unidad ?? "").trim().toLowerCase() === "meses" ? "meses" : "anios";
+  let alcoholFrecuenciaLegacy = normalizeLegacyNumericValue(data?.alcohol_frecuencia ?? "", {
     nunca: "0",
     "1_mes_o_menos": "0.25",
     "2_4_mes": "0.75",
@@ -1480,22 +1577,72 @@ function normalizeHistoriaForUi(data: any, fallbackDoctor: string) {
     "4_6_semana": "5",
     diario: "7",
   });
+  if (!alcoholEstado) {
+    if (data?.consumidor_alcohol === true) alcoholEstado = "consumidor_actual";
+    else if (data?.consumidor_alcohol === false) alcoholEstado = "nunca";
+    else if (alcoholFrecuenciaLegacy && Number(alcoholFrecuenciaLegacy) > 0) alcoholEstado = "consumidor_actual";
+    else alcoholEstado = "nunca";
+  }
+  if (!alcoholBebidasDia && alcoholFrecuenciaLegacy) alcoholBebidasDia = alcoholFrecuenciaLegacy;
+  const alcoholQueTomaba = String(data?.alcohol_copas ?? "").trim();
+
+  const marihuanaMeta = tryParseJsonObject(data?.marihuana_frecuencia ?? "");
+  let marihuanaEstado = String(marihuanaMeta?.estado ?? "").trim().toLowerCase();
+  let marihuanaFrecuencia = normalizeDurationValue(
+    marihuanaMeta?.veces_semana ?? marihuanaMeta?.frecuencia_semana ?? "",
+  );
+  let marihuanaTiempoValor = normalizeDurationValue(marihuanaMeta?.tiempo_valor ?? "");
+  let marihuanaTiempoUnidad: "anios" | "meses" =
+    String(marihuanaMeta?.tiempo_unidad ?? "").trim().toLowerCase() === "meses" ? "meses" : "anios";
+  const marihuanaFrecuenciaLegacy = normalizeLegacyNumericValue(data?.marihuana_frecuencia ?? "", {
+    nunca: "0",
+    "1_mes_o_menos": "0.25",
+    "2_4_mes": "0.75",
+    "2_3_semana": "2.5",
+    "4_6_semana": "5",
+    diario: "7",
+  });
+  if (!marihuanaEstado) {
+    if (data?.fumador_marihuana === true) marihuanaEstado = "consumidor_actual";
+    else if (data?.fumador_marihuana === false) marihuanaEstado = "nunca";
+    else if (marihuanaFrecuenciaLegacy && Number(marihuanaFrecuenciaLegacy) > 0) marihuanaEstado = "consumidor_actual";
+    else marihuanaEstado = "nunca";
+  }
+  if (!marihuanaFrecuencia) {
+    marihuanaFrecuencia = marihuanaFrecuenciaLegacy;
+  }
   if (!marihuanaFrecuencia) {
     if (data?.fumador_marihuana === true) marihuanaFrecuencia = "2.5";
     if (data?.fumador_marihuana === false) marihuanaFrecuencia = "0";
   }
-  let alcoholFrecuencia = normalizeLegacyNumericValue(data?.alcohol_frecuencia ?? "", {
-    nunca: "0",
-    "1_mes_o_menos": "0.25",
-    "2_4_mes": "0.75",
-    "2_3_semana": "2.5",
-    "4_6_semana": "5",
-    diario: "7",
-  });
-  if (!alcoholFrecuencia) {
-    if (data?.consumidor_alcohol === true) alcoholFrecuencia = "0.75";
-    if (data?.consumidor_alcohol === false) alcoholFrecuencia = "0";
+
+  const drogasMeta = tryParseJsonObject(data?.drogas_frecuencia ?? "");
+  const drogasLegacyConsumo = String(data?.drogas_consumo ?? "").trim().toLowerCase();
+  let drogasConsumoEstado = String(drogasMeta?.estado ?? "").trim().toLowerCase();
+  if (!drogasConsumoEstado) {
+    if (drogasLegacyConsumo === "actual") drogasConsumoEstado = "consumidor_actual";
+    else if (drogasLegacyConsumo === "pasado") drogasConsumoEstado = "exconsumidor";
+    else if (drogasLegacyConsumo === "consumidor_actual" || drogasLegacyConsumo === "exconsumidor" || drogasLegacyConsumo === "nunca") {
+      drogasConsumoEstado = drogasLegacyConsumo;
+    } else {
+      drogasConsumoEstado = "nunca";
+    }
   }
+  let drogasFrecuenciaSemana = normalizeDurationValue(
+    drogasMeta?.frecuencia_semana ?? drogasMeta?.veces_semana ?? "",
+  );
+  if (!drogasFrecuenciaSemana) {
+    drogasFrecuenciaSemana = normalizeLegacyNumericValue(data?.drogas_frecuencia ?? "", {
+      nunca: "0",
+      "1_mes_o_menos": "0.25",
+      "2_4_mes": "0.75",
+      "2_3_semana": "2.5",
+      "4_6_semana": "5",
+      diario: "7",
+    });
+  }
+  const drogasTiempo = splitDurationWithUnit(drogasMeta?.tiempo ?? "", "anios");
+
   let deporteFrecuencia = String(data?.deporte_frecuencia ?? "").trim();
   if (!deporteFrecuencia) {
     if (data?.deportista === true) deporteFrecuencia = "2";
@@ -1526,33 +1673,32 @@ function normalizeHistoriaForUi(data: any, fallbackDoctor: string) {
       "11_20": "15",
       "21_plus": "21",
     }),
-    tabaquismo_anios: normalizeLegacyNumericValue(data?.tabaquismo_anios ?? "", {
-      lt_1: "0.5",
-      "1_5": "3",
-      "6_10": "8",
-      "11_20": "15",
-      "21_plus": "21",
-    }),
-    tabaquismo_anios_desde_dejo: normalizeLegacyNumericValue(data?.tabaquismo_anios_desde_dejo ?? "", {
-      lt_1: "0.5",
-      "1_3": "2",
-      "4_10": "7",
-      "10_plus": "10",
-    }),
-    alcohol_frecuencia: alcoholFrecuencia,
-    alcohol_copas: "",
+    tabaquismo_anios: composeDurationWithUnit(tabaquismoTiempoConsumo.valor, tabaquismoTiempoConsumo.unidad),
+    tabaquismo_tiempo_consumo_valor: tabaquismoTiempoConsumo.valor,
+    tabaquismo_tiempo_consumo_unidad: tabaquismoTiempoConsumo.unidad,
+    tabaquismo_anios_desde_dejo: composeDurationWithUnit(tabaquismoTiempoDesdeDejo.valor, tabaquismoTiempoDesdeDejo.unidad),
+    tabaquismo_tiempo_desde_dejo_valor: tabaquismoTiempoDesdeDejo.valor,
+    tabaquismo_tiempo_desde_dejo_unidad: tabaquismoTiempoDesdeDejo.unidad,
+    alcohol_estado: alcoholEstado,
+    alcohol_bebidas_dia: alcoholBebidasDia,
+    alcohol_tiempo_valor: alcoholTiempoValor,
+    alcohol_tiempo_unidad: alcoholTiempoUnidad,
+    alcohol_que_tomaba: alcoholQueTomaba,
+    alcohol_frecuencia: String(data?.alcohol_frecuencia ?? ""),
+    alcohol_copas: alcoholQueTomaba,
+    marihuana_estado: marihuanaEstado,
     marihuana_frecuencia: marihuanaFrecuencia,
+    marihuana_frecuencia_semana: marihuanaFrecuencia,
+    marihuana_tiempo_valor: marihuanaTiempoValor,
+    marihuana_tiempo_unidad: marihuanaTiempoUnidad,
     marihuana_forma: data?.marihuana_forma ?? "",
-    drogas_consumo: data?.drogas_consumo ?? "",
+    drogas_consumo_estado: drogasConsumoEstado,
+    drogas_consumo: drogasConsumoEstado,
     drogas_tipos: data?.drogas_tipos ?? "",
-    drogas_frecuencia: normalizeLegacyNumericValue(data?.drogas_frecuencia ?? "", {
-      nunca: "0",
-      "1_mes_o_menos": "0.25",
-      "2_4_mes": "0.75",
-      "2_3_semana": "2.5",
-      "4_6_semana": "5",
-      diario: "7",
-    }),
+    drogas_frecuencia: String(data?.drogas_frecuencia ?? ""),
+    drogas_frecuencia_semana: drogasFrecuenciaSemana,
+    drogas_tiempo_valor: drogasTiempo.valor,
+    drogas_tiempo_unidad: drogasTiempo.unidad,
     deporte_frecuencia: deporteFrecuencia,
     deporte_duracion: data?.deporte_duracion ?? "",
     deporte_horas_dia: data?.deporte_duracion ?? "",
@@ -3609,8 +3755,54 @@ export default function App() {
         ""
       );
       const tabaquismoEstado = String(historiaData?.tabaquismo_estado ?? "").trim();
-      const marihuanaFrecuencia = String(historiaData?.marihuana_frecuencia ?? "").trim();
-      const alcoholFrecuencia = String(historiaData?.alcohol_frecuencia ?? "").trim();
+      const tabaquismoTiempoConsumoPayload = composeDurationWithUnit(
+        historiaData?.tabaquismo_tiempo_consumo_valor,
+        historiaData?.tabaquismo_tiempo_consumo_unidad,
+      );
+      const tabaquismoTiempoDesdeDejoPayload = composeDurationWithUnit(
+        historiaData?.tabaquismo_tiempo_desde_dejo_valor,
+        historiaData?.tabaquismo_tiempo_desde_dejo_unidad,
+      );
+      const alcoholEstado = String(historiaData?.alcohol_estado ?? "nunca").trim() || "nunca";
+      const alcoholBebidasDia = normalizeDurationValue(historiaData?.alcohol_bebidas_dia ?? "");
+      const alcoholTiempoValor = normalizeDurationValue(historiaData?.alcohol_tiempo_valor ?? "");
+      const alcoholTiempoUnidad = String(historiaData?.alcohol_tiempo_unidad ?? "").trim().toLowerCase() === "meses" ? "meses" : "anios";
+      const alcoholQueTomaba = String(historiaData?.alcohol_que_tomaba ?? "").trim();
+      const alcoholFrecuenciaPayload = JSON.stringify({
+        estado: alcoholEstado,
+        bebidas_dia: alcoholBebidasDia || null,
+        tiempo_valor: alcoholTiempoValor || null,
+        tiempo_unidad: alcoholTiempoUnidad,
+      });
+      const marihuanaEstado = String(historiaData?.marihuana_estado ?? "nunca").trim() || "nunca";
+      const marihuanaFrecuencia = normalizeDurationValue(
+        historiaData?.marihuana_frecuencia_semana ?? historiaData?.marihuana_frecuencia ?? "",
+      );
+      const marihuanaTiempoValor = normalizeDurationValue(historiaData?.marihuana_tiempo_valor ?? "");
+      const marihuanaTiempoUnidad = String(historiaData?.marihuana_tiempo_unidad ?? "").trim().toLowerCase() === "meses" ? "meses" : "anios";
+      const marihuanaFrecuenciaPayload = JSON.stringify({
+        estado: marihuanaEstado,
+        veces_semana: marihuanaFrecuencia || null,
+        tiempo_valor: marihuanaTiempoValor || null,
+        tiempo_unidad: marihuanaTiempoUnidad,
+      });
+      const drogasEstado = String(historiaData?.drogas_consumo_estado ?? historiaData?.drogas_consumo ?? "nunca").trim() || "nunca";
+      const drogasEstadoDb =
+        drogasEstado === "consumidor_actual"
+          ? "actual"
+          : drogasEstado === "exconsumidor"
+            ? "pasado"
+            : "nunca";
+      const drogasFrecuenciaSemana = normalizeDurationValue(
+        historiaData?.drogas_frecuencia_semana ?? historiaData?.drogas_frecuencia ?? "",
+      );
+      const drogasTiempoValor = normalizeDurationValue(historiaData?.drogas_tiempo_valor ?? "");
+      const drogasTiempoUnidad = String(historiaData?.drogas_tiempo_unidad ?? "").trim().toLowerCase() === "meses" ? "meses" : "anios";
+      const drogasFrecuenciaPayload = JSON.stringify({
+        estado: drogasEstado,
+        frecuencia_semana: drogasFrecuenciaSemana || null,
+        tiempo: composeDurationWithUnit(drogasTiempoValor, drogasTiempoUnidad) || null,
+      });
       const deporteFrecuencia = String(historiaData?.deporte_frecuencia ?? "").trim();
       const deporteTiposPayload = composeCantidadYTexto(
         historiaData?.deporte_tipos_cantidad,
@@ -3681,8 +3873,8 @@ export default function App() {
         enfermedades: composeCantidadYTexto(historiaData.enfermedades_cantidad, historiaData.enfermedades),
         cirugias: composeCantidadYTexto(historiaData.cirugias_cantidad, historiaData.cirugias),
         fumador_tabaco: tabaquismoEstado === "fumador_actual",
-        fumador_marihuana: Number(marihuanaFrecuencia) > 0,
-        consumidor_alcohol: Number(alcoholFrecuencia) > 0,
+        fumador_marihuana: marihuanaEstado === "consumidor_actual",
+        consumidor_alcohol: alcoholEstado === "consumidor_actual",
         diabetes: diabetesLegacy,
         tipo_diabetes: tipoDiabetesLegacy,
         deportista: Boolean(deporteFrecuencia && deporteFrecuencia !== "0"),
@@ -3691,15 +3883,15 @@ export default function App() {
         exposicion_uv: historiaData.exposicion_uv,
         tabaquismo_estado: historiaData.tabaquismo_estado,
         tabaquismo_intensidad: historiaData.tabaquismo_intensidad,
-        tabaquismo_anios: historiaData.tabaquismo_anios,
-        tabaquismo_anios_desde_dejo: historiaData.tabaquismo_anios_desde_dejo,
-        alcohol_frecuencia: historiaData.alcohol_frecuencia,
-        alcohol_copas: null,
-        marihuana_frecuencia: historiaData.marihuana_frecuencia,
+        tabaquismo_anios: tabaquismoTiempoConsumoPayload || null,
+        tabaquismo_anios_desde_dejo: tabaquismoTiempoDesdeDejoPayload || null,
+        alcohol_frecuencia: alcoholFrecuenciaPayload,
+        alcohol_copas: alcoholQueTomaba || null,
+        marihuana_frecuencia: marihuanaFrecuenciaPayload,
         marihuana_forma: historiaData.marihuana_forma,
-        drogas_consumo: historiaData.drogas_consumo,
+        drogas_consumo: drogasEstadoDb,
         drogas_tipos: joinPipeList(splitPipeList(historiaData.drogas_tipos)),
-        drogas_frecuencia: historiaData.drogas_frecuencia,
+        drogas_frecuencia: drogasFrecuenciaPayload,
         deporte_frecuencia: historiaData.deporte_frecuencia,
         deporte_duracion: deporteHorasDia || null,
         deporte_tipos: deporteTiposPayload || null,
@@ -8371,12 +8563,30 @@ export default function App() {
                           <select
                             style={historiaInputStyle}
                             value={historiaData.tabaquismo_estado ?? ""}
-                            onChange={(e) => setHistoriaData({ ...historiaData, tabaquismo_estado: e.target.value })}
+                            onChange={(e) => {
+                              const estado = e.target.value;
+                              if (estado === "nunca") {
+                                setHistoriaData({
+                                  ...historiaData,
+                                  tabaquismo_estado: estado,
+                                  tabaquismo_intensidad: "",
+                                  tabaquismo_tiempo_consumo_valor: "",
+                                  tabaquismo_tiempo_consumo_unidad: "anios",
+                                  tabaquismo_tiempo_desde_dejo_valor: "",
+                                  tabaquismo_tiempo_desde_dejo_unidad: "anios",
+                                });
+                                return;
+                              }
+                              setHistoriaData({
+                                ...historiaData,
+                                tabaquismo_estado: estado,
+                              });
+                            }}
                           >
                             <option value="">Seleccionar</option>
                             <option value="nunca">Nunca</option>
-                            <option value="ex_fumador">Ex fumador</option>
-                            <option value="fumador_actual">Fumador actual</option>
+                            <option value="ex_fumador">Ex consumidor</option>
+                            <option value="fumador_actual">Consumidor actual</option>
                           </select>
                         </label>
                         {["ex_fumador", "fumador_actual"].includes(String(historiaData.tabaquismo_estado ?? "")) && (
@@ -8393,122 +8603,316 @@ export default function App() {
                               />
                             </label>
                             <label style={{ display: "grid", gap: 4 }}>
-                              <span>Años fumando</span>
+                              <span>Tiempo siendo consumidor</span>
                               <input
                                 type="number"
                                 min={0}
                                 step="0.1"
                                 style={historiaInputStyle}
-                                value={historiaData.tabaquismo_anios ?? ""}
-                                onChange={(e) => setHistoriaData({ ...historiaData, tabaquismo_anios: e.target.value })}
+                                value={historiaData.tabaquismo_tiempo_consumo_valor ?? ""}
+                                onChange={(e) => setHistoriaData({ ...historiaData, tabaquismo_tiempo_consumo_valor: e.target.value })}
                               />
+                            </label>
+                            <label style={{ display: "grid", gap: 4 }}>
+                              <span>Unidad</span>
+                              <select
+                                style={historiaInputStyle}
+                                value={historiaData.tabaquismo_tiempo_consumo_unidad ?? "anios"}
+                                onChange={(e) => setHistoriaData({ ...historiaData, tabaquismo_tiempo_consumo_unidad: e.target.value })}
+                              >
+                                {DURACION_CONSUMO_UNIDAD_OPTIONS.map((opt) => (
+                                  <option key={`tabaco-consumo-unidad-${opt.value}`} value={opt.value}>{opt.label}</option>
+                                ))}
+                              </select>
                             </label>
                           </>
                         )}
                         {String(historiaData.tabaquismo_estado ?? "") === "ex_fumador" && (
-                          <label style={{ display: "grid", gap: 4 }}>
-                            <span>Años desde que lo dejó</span>
-                            <input
-                              type="number"
-                              min={0}
-                              step="0.1"
-                              style={historiaInputStyle}
-                              value={historiaData.tabaquismo_anios_desde_dejo ?? ""}
-                              onChange={(e) => setHistoriaData({ ...historiaData, tabaquismo_anios_desde_dejo: e.target.value })}
-                            />
-                          </label>
+                          <>
+                            <label style={{ display: "grid", gap: 4 }}>
+                              <span>Tiempo desde que lo dejó</span>
+                              <input
+                                type="number"
+                                min={0}
+                                step="0.1"
+                                style={historiaInputStyle}
+                                value={historiaData.tabaquismo_tiempo_desde_dejo_valor ?? ""}
+                                onChange={(e) => setHistoriaData({ ...historiaData, tabaquismo_tiempo_desde_dejo_valor: e.target.value })}
+                              />
+                            </label>
+                            <label style={{ display: "grid", gap: 4 }}>
+                              <span>Unidad desde que lo dejó</span>
+                              <select
+                                style={historiaInputStyle}
+                                value={historiaData.tabaquismo_tiempo_desde_dejo_unidad ?? "anios"}
+                                onChange={(e) => setHistoriaData({ ...historiaData, tabaquismo_tiempo_desde_dejo_unidad: e.target.value })}
+                              >
+                                {DURACION_CONSUMO_UNIDAD_OPTIONS.map((opt) => (
+                                  <option key={`tabaco-dejo-unidad-${opt.value}`} value={opt.value}>{opt.label}</option>
+                                ))}
+                              </select>
+                            </label>
+                          </>
                         )}
                       </div>
                     </div>
 
                     <div style={{ borderTop: "1px solid #f0e1cf", paddingTop: 10 }}>
                       <div style={{ fontWeight: 700, marginBottom: 8 }}>Alcohol, marihuana y otras drogas</div>
-                      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 10 }}>
-                        <label style={{ display: "grid", gap: 4 }}>
-                          <span>Alcohol: frecuencia por veces por semana</span>
-                          <input
-                            type="number"
-                            min={0}
-                            step="0.1"
-                            style={historiaInputStyle}
-                            value={historiaData.alcohol_frecuencia ?? ""}
-                            onChange={(e) => setHistoriaData({ ...historiaData, alcohol_frecuencia: e.target.value })}
-                          />
-                        </label>
-                        <label style={{ display: "grid", gap: 4 }}>
-                          <span>Marihuana: veces por semana</span>
-                          <input
-                            type="number"
-                            min={0}
-                            step="0.1"
-                            style={historiaInputStyle}
-                            value={historiaData.marihuana_frecuencia ?? ""}
-                            onChange={(e) => setHistoriaData({ ...historiaData, marihuana_frecuencia: e.target.value })}
-                          />
-                        </label>
-                        <label style={{ display: "grid", gap: 4 }}>
-                          <span>Marihuana: forma</span>
-                          <select
-                            style={historiaInputStyle}
-                            value={historiaData.marihuana_forma ?? ""}
-                            onChange={(e) => setHistoriaData({ ...historiaData, marihuana_forma: e.target.value })}
-                          >
-                            <option value="">Seleccionar</option>
-                            <option value="fumada">Fumada</option>
-                            <option value="vaporizada">Vaporizada</option>
-                            <option value="comestibles">Comestibles</option>
-                            <option value="mixta">Mixta</option>
-                          </select>
-                        </label>
-                        <label style={{ display: "grid", gap: 4 }}>
-                          <span>Drogas (otras): consumo</span>
-                          <select
-                            style={historiaInputStyle}
-                            value={historiaData.drogas_consumo ?? ""}
-                            onChange={(e) => setHistoriaData({ ...historiaData, drogas_consumo: e.target.value })}
-                          >
-                            <option value="">Seleccionar</option>
-                            <option value="nunca">Nunca</option>
-                            <option value="actual">Sí (actual)</option>
-                            <option value="pasado">Sí (pasado)</option>
-                          </select>
-                        </label>
-                      </div>
-                      {["actual", "pasado"].includes(String(historiaData.drogas_consumo ?? "")) && (
-                        <div style={{ marginTop: 8, display: "grid", gap: 8 }}>
-                          <div>
-                            <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 4 }}>Drogas: tipo</div>
-                            <div style={{ display: "flex", flexWrap: "wrap", gap: 12 }}>
-                              {DROGAS_TIPOS_OPTIONS.map((opt) => (
-                                <label key={`drogas-tipo-${opt}`} style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                                  <input
-                                    type="checkbox"
-                                    checked={splitPipeList(historiaData.drogas_tipos).includes(opt)}
-                                    onChange={(e) =>
-                                      setHistoriaData({
-                                        ...historiaData,
-                                        drogas_tipos: togglePipeValue(historiaData.drogas_tipos, opt, e.target.checked),
-                                      })
-                                    }
-                                  />
-                                  <span>{opt}</span>
-                                </label>
-                              ))}
-                            </div>
-                          </div>
-                          <label style={{ display: "grid", gap: 4, maxWidth: 340 }}>
-                            <span>Drogas: frecuencia veces por semana</span>
-                            <input
-                              type="number"
-                              min={0}
-                              step="0.1"
+                      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 10 }}>
+                        <div style={{ border: "1px solid #f0e1cf", borderRadius: 10, padding: 10, display: "grid", gap: 8 }}>
+                          <div style={{ fontWeight: 700, color: "#5f4a32" }}>Alcohol</div>
+                          <label style={{ display: "grid", gap: 4 }}>
+                            <span>Estado</span>
+                            <select
                               style={historiaInputStyle}
-                              value={historiaData.drogas_frecuencia ?? ""}
-                              onChange={(e) => setHistoriaData({ ...historiaData, drogas_frecuencia: e.target.value })}
-                            />
+                              value={historiaData.alcohol_estado ?? "nunca"}
+                              onChange={(e) => {
+                                const estado = e.target.value;
+                                if (estado === "nunca") {
+                                  setHistoriaData({
+                                    ...historiaData,
+                                    alcohol_estado: estado,
+                                    alcohol_bebidas_dia: "",
+                                    alcohol_que_tomaba: "",
+                                    alcohol_tiempo_valor: "",
+                                    alcohol_tiempo_unidad: "anios",
+                                  });
+                                  return;
+                                }
+                                setHistoriaData({ ...historiaData, alcohol_estado: estado });
+                              }}
+                            >
+                              {ESTADO_CONSUMO_OPTIONS.map((opt) => (
+                                <option key={`alcohol-estado-${opt.value}`} value={opt.value}>{opt.label}</option>
+                              ))}
+                            </select>
                           </label>
+                          {String(historiaData.alcohol_estado ?? "nunca") !== "nunca" && (
+                            <>
+                              <label style={{ display: "grid", gap: 4 }}>
+                                <span>Bebidas al día</span>
+                                <input
+                                  type="number"
+                                  min={0}
+                                  step="0.1"
+                                  style={historiaInputStyle}
+                                  value={historiaData.alcohol_bebidas_dia ?? ""}
+                                  onChange={(e) => setHistoriaData({ ...historiaData, alcohol_bebidas_dia: e.target.value })}
+                                />
+                              </label>
+                              <label style={{ display: "grid", gap: 4 }}>
+                                <span>Qué tomaba</span>
+                                <input
+                                  type="text"
+                                  style={historiaInputStyle}
+                                  value={historiaData.alcohol_que_tomaba ?? ""}
+                                  onChange={(e) => setHistoriaData({ ...historiaData, alcohol_que_tomaba: e.target.value })}
+                                />
+                              </label>
+                              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                                <label style={{ display: "grid", gap: 4 }}>
+                                  <span>Tiempo siendo consumidor</span>
+                                  <input
+                                    type="number"
+                                    min={0}
+                                    step="0.1"
+                                    style={historiaInputStyle}
+                                    value={historiaData.alcohol_tiempo_valor ?? ""}
+                                    onChange={(e) => setHistoriaData({ ...historiaData, alcohol_tiempo_valor: e.target.value })}
+                                  />
+                                </label>
+                                <label style={{ display: "grid", gap: 4 }}>
+                                  <span>Unidad</span>
+                                  <select
+                                    style={historiaInputStyle}
+                                    value={historiaData.alcohol_tiempo_unidad ?? "anios"}
+                                    onChange={(e) => setHistoriaData({ ...historiaData, alcohol_tiempo_unidad: e.target.value })}
+                                  >
+                                    {DURACION_CONSUMO_UNIDAD_OPTIONS.map((opt) => (
+                                      <option key={`alcohol-unidad-${opt.value}`} value={opt.value}>{opt.label}</option>
+                                    ))}
+                                  </select>
+                                </label>
+                              </div>
+                            </>
+                          )}
                         </div>
-                      )}
+
+                        <div style={{ border: "1px solid #f0e1cf", borderRadius: 10, padding: 10, display: "grid", gap: 8 }}>
+                          <div style={{ fontWeight: 700, color: "#5f4a32" }}>Marihuana</div>
+                          <label style={{ display: "grid", gap: 4 }}>
+                            <span>Estado</span>
+                            <select
+                              style={historiaInputStyle}
+                              value={historiaData.marihuana_estado ?? "nunca"}
+                              onChange={(e) => {
+                                const estado = e.target.value;
+                                if (estado === "nunca") {
+                                  setHistoriaData({
+                                    ...historiaData,
+                                    marihuana_estado: estado,
+                                    marihuana_frecuencia_semana: "",
+                                    marihuana_tiempo_valor: "",
+                                    marihuana_tiempo_unidad: "anios",
+                                    marihuana_forma: "",
+                                  });
+                                  return;
+                                }
+                                setHistoriaData({ ...historiaData, marihuana_estado: estado });
+                              }}
+                            >
+                              {ESTADO_CONSUMO_OPTIONS.map((opt) => (
+                                <option key={`marihuana-estado-${opt.value}`} value={opt.value}>{opt.label}</option>
+                              ))}
+                            </select>
+                          </label>
+                          {String(historiaData.marihuana_estado ?? "nunca") !== "nunca" && (
+                            <>
+                              <label style={{ display: "grid", gap: 4 }}>
+                                <span>Veces por semana</span>
+                                <input
+                                  type="number"
+                                  min={0}
+                                  step="0.1"
+                                  style={historiaInputStyle}
+                                  value={historiaData.marihuana_frecuencia_semana ?? ""}
+                                  onChange={(e) => setHistoriaData({ ...historiaData, marihuana_frecuencia_semana: e.target.value })}
+                                />
+                              </label>
+                              <label style={{ display: "grid", gap: 4 }}>
+                                <span>Forma</span>
+                                <select
+                                  style={historiaInputStyle}
+                                  value={historiaData.marihuana_forma ?? ""}
+                                  onChange={(e) => setHistoriaData({ ...historiaData, marihuana_forma: e.target.value })}
+                                >
+                                  <option value="">Seleccionar</option>
+                                  <option value="fumada">Fumada</option>
+                                  <option value="vaporizada">Vaporizada</option>
+                                  <option value="comestibles">Comestibles</option>
+                                  <option value="mixta">Mixta</option>
+                                </select>
+                              </label>
+                              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                                <label style={{ display: "grid", gap: 4 }}>
+                                  <span>Tiempo siendo consumidor</span>
+                                  <input
+                                    type="number"
+                                    min={0}
+                                    step="0.1"
+                                    style={historiaInputStyle}
+                                    value={historiaData.marihuana_tiempo_valor ?? ""}
+                                    onChange={(e) => setHistoriaData({ ...historiaData, marihuana_tiempo_valor: e.target.value })}
+                                  />
+                                </label>
+                                <label style={{ display: "grid", gap: 4 }}>
+                                  <span>Unidad</span>
+                                  <select
+                                    style={historiaInputStyle}
+                                    value={historiaData.marihuana_tiempo_unidad ?? "anios"}
+                                    onChange={(e) => setHistoriaData({ ...historiaData, marihuana_tiempo_unidad: e.target.value })}
+                                  >
+                                    {DURACION_CONSUMO_UNIDAD_OPTIONS.map((opt) => (
+                                      <option key={`marihuana-unidad-${opt.value}`} value={opt.value}>{opt.label}</option>
+                                    ))}
+                                  </select>
+                                </label>
+                              </div>
+                            </>
+                          )}
+                        </div>
+
+                        <div style={{ border: "1px solid #f0e1cf", borderRadius: 10, padding: 10, display: "grid", gap: 8 }}>
+                          <div style={{ fontWeight: 700, color: "#5f4a32" }}>Drogas (otras)</div>
+                          <label style={{ display: "grid", gap: 4 }}>
+                            <span>Estado</span>
+                            <select
+                              style={historiaInputStyle}
+                              value={historiaData.drogas_consumo_estado ?? "nunca"}
+                              onChange={(e) => {
+                                const estado = e.target.value;
+                                if (estado === "nunca") {
+                                  setHistoriaData({
+                                    ...historiaData,
+                                    drogas_consumo_estado: estado,
+                                    drogas_tipos: "",
+                                    drogas_frecuencia_semana: "",
+                                    drogas_tiempo_valor: "",
+                                    drogas_tiempo_unidad: "anios",
+                                  });
+                                  return;
+                                }
+                                setHistoriaData({ ...historiaData, drogas_consumo_estado: estado });
+                              }}
+                            >
+                              {ESTADO_CONSUMO_OPTIONS.map((opt) => (
+                                <option key={`drogas-estado-${opt.value}`} value={opt.value}>{opt.label}</option>
+                              ))}
+                            </select>
+                          </label>
+                          {String(historiaData.drogas_consumo_estado ?? "nunca") !== "nunca" && (
+                            <>
+                              <div>
+                                <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 4 }}>Tipo</div>
+                                <div style={{ display: "flex", flexWrap: "wrap", gap: 12 }}>
+                                  {DROGAS_TIPOS_OPTIONS.map((opt) => (
+                                    <label key={`drogas-tipo-${opt}`} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                                      <input
+                                        type="checkbox"
+                                        checked={splitPipeList(historiaData.drogas_tipos).includes(opt)}
+                                        onChange={(e) =>
+                                          setHistoriaData({
+                                            ...historiaData,
+                                            drogas_tipos: togglePipeValue(historiaData.drogas_tipos, opt, e.target.checked),
+                                          })
+                                        }
+                                      />
+                                      <span>{opt}</span>
+                                    </label>
+                                  ))}
+                                </div>
+                              </div>
+                              <label style={{ display: "grid", gap: 4 }}>
+                                <span>Frecuencia (veces por semana)</span>
+                                <input
+                                  type="number"
+                                  min={0}
+                                  step="0.1"
+                                  style={historiaInputStyle}
+                                  value={historiaData.drogas_frecuencia_semana ?? ""}
+                                  onChange={(e) => setHistoriaData({ ...historiaData, drogas_frecuencia_semana: e.target.value })}
+                                />
+                              </label>
+                              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                                <label style={{ display: "grid", gap: 4 }}>
+                                  <span>Tiempo siendo consumidor</span>
+                                  <input
+                                    type="number"
+                                    min={0}
+                                    step="0.1"
+                                    style={historiaInputStyle}
+                                    value={historiaData.drogas_tiempo_valor ?? ""}
+                                    onChange={(e) => setHistoriaData({ ...historiaData, drogas_tiempo_valor: e.target.value })}
+                                  />
+                                </label>
+                                <label style={{ display: "grid", gap: 4 }}>
+                                  <span>Unidad</span>
+                                  <select
+                                    style={historiaInputStyle}
+                                    value={historiaData.drogas_tiempo_unidad ?? "anios"}
+                                    onChange={(e) => setHistoriaData({ ...historiaData, drogas_tiempo_unidad: e.target.value })}
+                                  >
+                                    {DURACION_CONSUMO_UNIDAD_OPTIONS.map((opt) => (
+                                      <option key={`drogas-unidad-${opt.value}`} value={opt.value}>{opt.label}</option>
+                                    ))}
+                                  </select>
+                                </label>
+                              </div>
+                            </>
+                          )}
+                        </div>
+                      </div>
                     </div>
 
                     <div style={{ borderTop: "1px solid #f0e1cf", paddingTop: 10 }}>
