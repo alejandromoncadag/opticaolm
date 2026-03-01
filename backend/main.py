@@ -1697,12 +1697,25 @@ def _export_filename(prefix: str, desde_date: date, hasta_date: date, sucursal_i
     return f"{prefix}_{sid}_{desde_date.isoformat()}_{hasta_date.isoformat()}.csv"
 
 
-def _sql_humanize_anios_expr(sql_col_ref: str) -> str:
+def _sql_humanize_anios_text_expr(sql_col_ref: str) -> str:
     return (
         f"CASE "
         f"WHEN {sql_col_ref} IS NULL THEN NULL "
-        f"WHEN {sql_col_ref} IN ('1|anios', '1.0|anios') THEN '1|año' "
-        f"ELSE replace({sql_col_ref}, '|anios', '|años') "
+        f"ELSE regexp_replace( "
+        f"       regexp_replace({sql_col_ref}, E'\\\\m(anios|anos)\\\\M', 'años', 'gi'), "
+        f"       E'\\\\m(ano)\\\\M', 'año', 'gi' "
+        f"     ) "
+        f"END"
+    )
+
+
+def _sql_humanize_anios_expr(sql_col_ref: str) -> str:
+    text_expr = _sql_humanize_anios_text_expr(sql_col_ref)
+    return (
+        f"CASE "
+        f"WHEN {sql_col_ref} IS NULL THEN NULL "
+        f"WHEN regexp_replace(lower({sql_col_ref}), E'\\\\s+', '', 'g') IN ('1|anios', '1|anos', '1|ano', '1|año', '1|años', '1.0|anios', '1.0|anos', '1.0|ano', '1.0|año', '1.0|años') THEN '1|año' "
+        f"ELSE {text_expr} "
         f"END"
     )
 
@@ -2070,31 +2083,17 @@ def export_historias_clinicas_csv(
         "created_by", "created_at_tz", "updated_at", "activo",
     ]
     select_expr_overrides = {
+        "diabetes_anios": f"{_sql_humanize_anios_text_expr('h.diabetes_anios')} AS diabetes_anios",
         "tabaquismo_anios": f"{_sql_humanize_anios_expr('h.tabaquismo_anios')} AS tabaquismo_anios",
         "tabaquismo_anios_desde_dejo": f"{_sql_humanize_anios_expr('h.tabaquismo_anios_desde_dejo')} AS tabaquismo_anios_desde_dejo",
-        "alcohol_frecuencia": (
-            "replace("
-            "replace(h.alcohol_frecuencia, '\"tiempo_unidad\":\"anios\"', '\"tiempo_unidad\":\"años\"'), "
-            "'|anios', '|años'"
-            ") AS alcohol_frecuencia"
-        ),
-        "marihuana_frecuencia": (
-            "replace("
-            "replace(h.marihuana_frecuencia, '\"tiempo_unidad\":\"anios\"', '\"tiempo_unidad\":\"años\"'), "
-            "'|anios', '|años'"
-            ") AS marihuana_frecuencia"
-        ),
-        "drogas_frecuencia": (
-            "replace("
-            "replace(h.drogas_frecuencia, '\"tiempo_unidad\":\"anios\"', '\"tiempo_unidad\":\"años\"'), "
-            "'|anios', '|años'"
-            ") AS drogas_frecuencia"
-        ),
+        "alcohol_frecuencia": f"{_sql_humanize_anios_text_expr('h.alcohol_frecuencia')} AS alcohol_frecuencia",
+        "marihuana_frecuencia": f"{_sql_humanize_anios_text_expr('h.marihuana_frecuencia')} AS marihuana_frecuencia",
+        "drogas_frecuencia": f"{_sql_humanize_anios_text_expr('h.drogas_frecuencia')} AS drogas_frecuencia",
         "tiempo_uso_lentes": (
             "CASE "
             "WHEN h.tiempo_uso_lentes IS NULL THEN NULL "
-            "WHEN h.tiempo_uso_lentes IN ('1 años', '1 anios', '1 año', '1 ano') THEN '1 año' "
-            "ELSE replace(h.tiempo_uso_lentes, ' anios', ' años') "
+            "WHEN regexp_replace(lower(h.tiempo_uso_lentes), E'\\s+', '', 'g') IN ('1años', '1anios', '1año', '1ano', '1.0años', '1.0anios', '1.0año', '1.0ano') THEN '1 año' "
+            f"ELSE {_sql_humanize_anios_text_expr('h.tiempo_uso_lentes')} "
             "END AS tiempo_uso_lentes"
         ),
     }
