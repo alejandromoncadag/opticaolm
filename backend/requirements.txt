@@ -4,3 +4,5 @@ python-jose[cryptography]
 passlib[argon2]
 psycopg[binary]
 python-dotenv
+google-api-python-client
+google-auth
