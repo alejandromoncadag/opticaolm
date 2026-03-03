@@ -1944,6 +1944,7 @@ export default function App() {
   const [agendaSlots, setAgendaSlots] = useState<AgendaSlot[]>([]);
   const [agendaLoading, setAgendaLoading] = useState(false);
   const [agendaTimezone, setAgendaTimezone] = useState<string>("");
+  const [agendaCalendarError, setAgendaCalendarError] = useState<string>("");
   const [agendaSlotSeleccionado, setAgendaSlotSeleccionado] = useState<AgendaSlot | null>(null);
   const [qPacienteConsulta, setQPacienteConsulta] = useState("");
   const [loadingPacienteConsulta, setLoadingPacienteConsulta] = useState(false);
@@ -2601,6 +2602,7 @@ export default function App() {
       const slots = Array.isArray(data?.slots) ? data.slots : [];
       setAgendaSlots(slots);
       setAgendaTimezone(data?.timezone ?? "");
+      setAgendaCalendarError(typeof data?.calendar_error === "string" ? data.calendar_error : "");
       setAgendaSlotSeleccionado((prev) => {
         if (!prev) return null;
         const found = slots.find((s: AgendaSlot) => s.inicio === prev.inicio && s.fin === prev.fin);
@@ -2609,6 +2611,7 @@ export default function App() {
     } catch (e: any) {
       setAgendaSlots([]);
       setAgendaSlotSeleccionado(null);
+      setAgendaCalendarError("");
       setError(e?.message ?? String(e));
     } finally {
       setAgendaLoading(false);
@@ -5247,6 +5250,11 @@ export default function App() {
                     </button>
                     {agendaTimezone && <span style={{ fontSize: 12, opacity: 0.75 }}>Zona: {agendaTimezone}</span>}
                   </div>
+                  {!!agendaCalendarError && (
+                    <div style={{ marginBottom: 8, fontSize: 12, color: "#9a3412" }}>
+                      Aviso Google Calendar: {agendaCalendarError}
+                    </div>
+                  )}
 
                   {agendaLoading ? (
                     <div style={{ fontSize: 13 }}>Cargando horarios...</div>

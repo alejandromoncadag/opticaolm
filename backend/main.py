@@ -2482,6 +2482,31 @@ def _refresh_token_for_sucursal(sucursal_id: int | None) -> str:
     return _GOOGLE_OAUTH_REFRESH_TOKEN_FALLBACK
 
 
+def _calendar_primary_fallback_enabled() -> bool:
+    return os.getenv("GOOGLE_CALENDAR_PRIMARY_FALLBACK", "true").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _should_retry_with_primary_calendar(exc: Exception) -> bool:
+    msg = str(exc).lower()
+    return (
+        "not found" in msg
+        or "404" in msg
+        or "forbidden" in msg
+        or "403" in msg
+        or "permission" in msg
+        or "insufficient" in msg
+    )
+
+
+def _calendar_id_candidates(calendar_id: str | None) -> list[str]:
+    candidates: list[str] = []
+    if calendar_id and str(calendar_id).strip():
+        candidates.append(str(calendar_id).strip())
+    if _calendar_primary_fallback_enabled() and not any(c.lower() == "primary" for c in candidates):
+        candidates.append("primary")
+    return candidates
+
+
 def _format_consulta_tipo_for_humans(tipo_consulta: str | None) -> str:
     if not tipo_consulta or not str(tipo_consulta).strip():
         return "General"
@@ -2842,10 +2867,14 @@ def _get_google_calendar_service(sucursal_id: int | None = None):
 
 def _calendar_id_for_sucursal(sucursal_id: int) -> str:
     _ensure_google_env_cache_loaded()
-    cal_id = _GOOGLE_CALENDAR_IDS_BY_SUCURSAL.get(str(sucursal_id))
+    cal_id = (_GOOGLE_CALENDAR_IDS_BY_SUCURSAL.get(str(sucursal_id)) or "").strip()
+    if cal_id:
+        return cal_id
+    if _calendar_primary_fallback_enabled():
+        return "primary"
     if not cal_id:
         raise HTTPException(status_code=400, detail=f"No hay calendar configurado para sucursal {sucursal_id}.")
-    return str(cal_id)
+    return cal_id
 
 
 @app.get("/agenda/test", summary="Crear evento de prueba en Google Calendar por sucursal")
@@ -2857,6 +2886,7 @@ def agenda_test(sucursal_id: int, user=Depends(get_current_user)):
     tz_name = _timezone_for_sucursal(sucursal_id)
     tz = ZoneInfo(tz_name)
     calendar_id = _calendar_id_for_sucursal(sucursal_id)
+    calendar_candidates = _calendar_id_candidates(calendar_id)
     service = _get_google_calendar_service(sucursal_id=sucursal_id)
 
     start_dt = datetime.now(tz).replace(second=0, microsecond=0) + timedelta(minutes=2)
@@ -2869,15 +2899,29 @@ def agenda_test(sucursal_id: int, user=Depends(get_current_user)):
         "end": {"dateTime": end_dt.isoformat(), "timeZone": tz_name},
     }
 
-    try:
-        created = service.events().insert(calendarId=calendar_id, body=body).execute()
-    except Exception as e:
-        _raise_google_calendar_error(e)
+    last_exc: Exception | None = None
+    created = None
+    calendar_used = calendar_id
+    for idx, current_calendar_id in enumerate(calendar_candidates):
+        try:
+            created = service.events().insert(calendarId=current_calendar_id, body=body).execute()
+            calendar_used = current_calendar_id
+            break
+        except Exception as e:
+            last_exc = e
+            has_next = idx < (len(calendar_candidates) - 1)
+            if has_next and _should_retry_with_primary_calendar(e):
+                continue
+            _raise_google_calendar_error(e)
+    if created is None and last_exc is not None:
+        _raise_google_calendar_error(last_exc)
+    if created is None:
+        raise HTTPException(status_code=400, detail="No se pudo crear evento de prueba.")
 
     return {
         "ok": True,
         "sucursal_id": sucursal_id,
-        "calendar_id": calendar_id,
+        "calendar_id": calendar_used,
         "event_id": str(created.get("id", "")),
         "event_link": created.get("htmlLink"),
         "summary": summary,
@@ -2928,33 +2972,47 @@ def _fetch_busy_intervals(
     sucursal_id: int | None = None,
 ) -> list[tuple[datetime, datetime]]:
     service = _get_google_calendar_service(sucursal_id=sucursal_id)
-    try:
-        events_result = service.events().list(
-            calendarId=calendar_id,
-            timeMin=start_dt.astimezone(timezone.utc).isoformat(),
-            timeMax=end_dt.astimezone(timezone.utc).isoformat(),
-            singleEvents=True,
-            orderBy="startTime",
-        ).execute()
-    except Exception as e:
-        _raise_google_calendar_error(e)
-    items = events_result.get("items", [])
-    busy: list[tuple[datetime, datetime]] = []
+    candidates = _calendar_id_candidates(calendar_id)
+    if not candidates:
+        raise HTTPException(status_code=400, detail="No hay calendar configurado para esta sucursal.")
 
-    for ev in items:
-        start_raw = ev.get("start", {}).get("dateTime")
-        end_raw = ev.get("end", {}).get("dateTime")
-        if not start_raw or not end_raw:
-            continue
-        s = datetime.fromisoformat(start_raw)
-        e = datetime.fromisoformat(end_raw)
-        if s.tzinfo is None:
-            s = s.replace(tzinfo=ZoneInfo(tz_name))
-        if e.tzinfo is None:
-            e = e.replace(tzinfo=ZoneInfo(tz_name))
-        busy.append((s, e))
+    last_exc: Exception | None = None
+    for idx, current_calendar_id in enumerate(candidates):
+        try:
+            events_result = service.events().list(
+                calendarId=current_calendar_id,
+                timeMin=start_dt.astimezone(timezone.utc).isoformat(),
+                timeMax=end_dt.astimezone(timezone.utc).isoformat(),
+                singleEvents=True,
+                orderBy="startTime",
+            ).execute()
+            items = events_result.get("items", [])
+            busy: list[tuple[datetime, datetime]] = []
 
-    return busy
+            for ev in items:
+                start_raw = ev.get("start", {}).get("dateTime")
+                end_raw = ev.get("end", {}).get("dateTime")
+                if not start_raw or not end_raw:
+                    continue
+                s = datetime.fromisoformat(start_raw)
+                e = datetime.fromisoformat(end_raw)
+                if s.tzinfo is None:
+                    s = s.replace(tzinfo=ZoneInfo(tz_name))
+                if e.tzinfo is None:
+                    e = e.replace(tzinfo=ZoneInfo(tz_name))
+                busy.append((s, e))
+
+            return busy
+        except Exception as e:
+            last_exc = e
+            has_next = idx < (len(candidates) - 1)
+            if has_next and _should_retry_with_primary_calendar(e):
+                continue
+            _raise_google_calendar_error(e)
+
+    if last_exc is not None:
+        _raise_google_calendar_error(last_exc)
+    return []
 
 
 def _has_overlap(start_dt: datetime, end_dt: datetime, busy: list[tuple[datetime, datetime]]) -> bool:
@@ -3034,10 +3092,14 @@ def _build_slots_for_day(sucursal_id: int, fecha: date, duracion_min: int = 30) 
         end_dt=day_end,
     )
     calendar_sync = False
+    calendar_error: str | None = None
     if _calendar_feature_enabled():
-        cal_id = _calendar_id_for_sucursal(sucursal_id)
-        busy.extend(_fetch_busy_intervals(cal_id, tz_name, day_start, day_end, sucursal_id=sucursal_id))
-        calendar_sync = True
+        try:
+            cal_id = _calendar_id_for_sucursal(sucursal_id)
+            busy.extend(_fetch_busy_intervals(cal_id, tz_name, day_start, day_end, sucursal_id=sucursal_id))
+            calendar_sync = True
+        except HTTPException as e:
+            calendar_error = str(e.detail)
 
     slots = []
     current = day_start
@@ -3057,7 +3119,13 @@ def _build_slots_for_day(sucursal_id: int, fecha: date, duracion_min: int = 30) 
             )
         current += timedelta(minutes=step_min)
 
-    return {"timezone": tz_name, "fecha": str(fecha), "slots": slots, "calendar_sync": calendar_sync}
+    return {
+        "timezone": tz_name,
+        "fecha": str(fecha),
+        "slots": slots,
+        "calendar_sync": calendar_sync,
+        "calendar_error": calendar_error,
+    }
 
 
 def _create_calendar_event_for_consulta(
@@ -3076,6 +3144,7 @@ def _create_calendar_event_for_consulta(
 ) -> str:
     tz_name = _timezone_for_sucursal(sucursal_id)
     cal_id = _calendar_id_for_sucursal(sucursal_id)
+    calendar_candidates = _calendar_id_candidates(cal_id)
     service = _get_google_calendar_service(sucursal_id=sucursal_id)
     start_local = start_dt.astimezone(ZoneInfo(tz_name))
     end_local = end_dt.astimezone(ZoneInfo(tz_name))
@@ -3143,11 +3212,21 @@ def _create_calendar_event_for_consulta(
     if _looks_like_email(paciente_correo):
         body["attendees"] = [{"email": str(paciente_correo).strip()}]
 
-    try:
-        created = service.events().insert(calendarId=cal_id, body=body, sendUpdates="all").execute()
-    except Exception as e:
-        _raise_google_calendar_error(e)
-    return str(created.get("id", ""))
+    last_exc: Exception | None = None
+    for idx, current_calendar_id in enumerate(calendar_candidates):
+        try:
+            created = service.events().insert(calendarId=current_calendar_id, body=body, sendUpdates="all").execute()
+            return str(created.get("id", ""))
+        except Exception as e:
+            last_exc = e
+            has_next = idx < (len(calendar_candidates) - 1)
+            if has_next and _should_retry_with_primary_calendar(e):
+                continue
+            _raise_google_calendar_error(e)
+
+    if last_exc is not None:
+        _raise_google_calendar_error(last_exc)
+    return ""
 
 
 def _delete_calendar_event_for_consulta(
@@ -3157,15 +3236,30 @@ def _delete_calendar_event_for_consulta(
     if not event_id or not str(event_id).strip():
         return
     cal_id = _calendar_id_for_sucursal(sucursal_id)
+    calendar_candidates = _calendar_id_candidates(cal_id)
     service = _get_google_calendar_service(sucursal_id=sucursal_id)
-    try:
-        service.events().delete(calendarId=cal_id, eventId=str(event_id).strip(), sendUpdates="all").execute()
-    except Exception as e:
-        msg = str(e).lower()
-        # Si ya no existe en Google Calendar, lo tratamos como borrado exitoso.
-        if "404" in msg or "not found" in msg:
+    last_exc: Exception | None = None
+    for idx, current_calendar_id in enumerate(calendar_candidates):
+        try:
+            service.events().delete(
+                calendarId=current_calendar_id,
+                eventId=str(event_id).strip(),
+                sendUpdates="all",
+            ).execute()
             return
-        _raise_google_calendar_error(e)
+        except Exception as e:
+            msg = str(e).lower()
+            # Si ya no existe en Google Calendar, lo tratamos como borrado exitoso.
+            if "404" in msg or "not found" in msg:
+                return
+            last_exc = e
+            has_next = idx < (len(calendar_candidates) - 1)
+            if has_next and _should_retry_with_primary_calendar(e):
+                continue
+            _raise_google_calendar_error(e)
+
+    if last_exc is not None:
+        _raise_google_calendar_error(last_exc)
 
 
 def _validate_in_business_hours(sucursal_id: int, start_dt: datetime, end_dt: datetime):
