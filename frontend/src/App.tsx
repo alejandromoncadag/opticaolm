@@ -3064,9 +3064,7 @@ export default function App() {
 
     try {
       if (!formPaciente.primer_nombre?.trim()) throw new Error("Primer nombre es obligatorio.");
-      if (!formPaciente.segundo_nombre?.trim()) throw new Error("Segundo nombre es obligatorio.");
       if (!formPaciente.apellido_paterno?.trim()) throw new Error("Apellido paterno es obligatorio.");
-      if (!formPaciente.apellido_materno?.trim()) throw new Error("Apellido materno es obligatorio.");
       if (!formPaciente.fecha_nacimiento?.trim()) throw new Error("Fecha de nacimiento es obligatoria.");
       if (!formPaciente.sexo?.trim()) throw new Error("Sexo es obligatorio.");
       const telefonoDigits = onlyDigits(pacienteTelefonoLocal);
@@ -4667,11 +4665,10 @@ export default function App() {
             </label>
 
             <label style={{ display: "block", marginBottom: 8 }}>
-              Segundo nombre *
+              Segundo nombre
               <input
                 value={formPaciente.segundo_nombre ?? ""}
                 onChange={(e) => setFormPaciente({ ...formPaciente, segundo_nombre: e.target.value })}
-                required
                 style={{ width: "100%", padding: 10, borderRadius: 10, border: "1px solid #ddd" }}
               />
             </label>
@@ -4687,11 +4684,10 @@ export default function App() {
             </label>
 
             <label style={{ display: "block", marginBottom: 8 }}>
-              Apellido materno *
+              Apellido materno
               <input
                 value={formPaciente.apellido_materno ?? ""}
                 onChange={(e) => setFormPaciente({ ...formPaciente, apellido_materno: e.target.value })}
-                required
                 style={{ width: "100%", padding: 10, borderRadius: 10, border: "1px solid #ddd" }}
               />
             </label>
