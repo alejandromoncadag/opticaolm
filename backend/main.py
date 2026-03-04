@@ -533,6 +533,7 @@ def ensure_consultas_schema():
                 """
                 ALTER TABLE core.consultas
                 ADD COLUMN IF NOT EXISTS agenda_event_id text NULL,
+                ADD COLUMN IF NOT EXISTS agenda_calendar_id text NULL,
                 ADD COLUMN IF NOT EXISTS agenda_inicio timestamptz NULL,
                 ADD COLUMN IF NOT EXISTS agenda_fin timestamptz NULL,
                 ADD COLUMN IF NOT EXISTS etapa_consulta text NULL,
@@ -543,6 +544,7 @@ def ensure_consultas_schema():
             cur.execute(
                 """
                 ALTER TABLE core.consultas
+                ADD COLUMN IF NOT EXISTS created_by text NULL,
                 ADD COLUMN IF NOT EXISTS doctor_primer_nombre text NULL,
                 ADD COLUMN IF NOT EXISTS doctor_apellido_paterno text NULL;
                 """
@@ -3141,7 +3143,7 @@ def _create_calendar_event_for_consulta(
     doctor_nombre: str | None,
     sucursal_nombre: str | None,
     sucursal_location: str | None,
-) -> str:
+) -> tuple[str, str | None]:
     tz_name = _timezone_for_sucursal(sucursal_id)
     cal_id = _calendar_id_for_sucursal(sucursal_id)
     calendar_candidates = _calendar_id_candidates(cal_id)
@@ -3216,7 +3218,7 @@ def _create_calendar_event_for_consulta(
     for idx, current_calendar_id in enumerate(calendar_candidates):
         try:
             created = service.events().insert(calendarId=current_calendar_id, body=body, sendUpdates="all").execute()
-            return str(created.get("id", ""))
+            return str(created.get("id", "")), str(current_calendar_id)
         except Exception as e:
             last_exc = e
             has_next = idx < (len(calendar_candidates) - 1)
@@ -3226,40 +3228,57 @@ def _create_calendar_event_for_consulta(
 
     if last_exc is not None:
         _raise_google_calendar_error(last_exc)
-    return ""
+    return "", None
 
 
 def _delete_calendar_event_for_consulta(
     sucursal_id: int,
     event_id: str,
-) -> None:
+    calendar_id_hint: str | None = None,
+) -> bool:
     if not event_id or not str(event_id).strip():
-        return
+        return False
+
     cal_id = _calendar_id_for_sucursal(sucursal_id)
-    calendar_candidates = _calendar_id_candidates(cal_id)
+    calendar_candidates: list[str] = []
+    for candidate in _calendar_id_candidates(calendar_id_hint):
+        normalized = str(candidate).strip()
+        if normalized and normalized not in calendar_candidates:
+            calendar_candidates.append(normalized)
+    for candidate in _calendar_id_candidates(cal_id):
+        normalized = str(candidate).strip()
+        if normalized and normalized not in calendar_candidates:
+            calendar_candidates.append(normalized)
+
+    if not calendar_candidates:
+        return False
+
     service = _get_google_calendar_service(sucursal_id=sucursal_id)
     last_exc: Exception | None = None
     for idx, current_calendar_id in enumerate(calendar_candidates):
+        has_next = idx < (len(calendar_candidates) - 1)
         try:
             service.events().delete(
                 calendarId=current_calendar_id,
                 eventId=str(event_id).strip(),
                 sendUpdates="all",
             ).execute()
-            return
+            return True
         except Exception as e:
             msg = str(e).lower()
             # Si ya no existe en Google Calendar, lo tratamos como borrado exitoso.
             if "404" in msg or "not found" in msg:
-                return
+                if has_next:
+                    continue
+                return True
             last_exc = e
-            has_next = idx < (len(calendar_candidates) - 1)
             if has_next and _should_retry_with_primary_calendar(e):
                 continue
             _raise_google_calendar_error(e)
 
     if last_exc is not None:
         _raise_google_calendar_error(last_exc)
+    return False
 
 
 def _validate_in_business_hours(sucursal_id: int, start_dt: datetime, end_dt: datetime):
@@ -5641,6 +5660,7 @@ def crear_consulta(c: ConsultaCreate, user=Depends(get_current_user)):
     c.tipo_consulta = tipo_consulta_compuesto
 
     agenda_event_id: str | None = None
+    agenda_calendar_id: str | None = None
     try:
         with psycopg.connect(DB_CONNINFO) as conn:
             with conn.cursor() as cur:
@@ -5750,7 +5770,7 @@ def crear_consulta(c: ConsultaCreate, user=Depends(get_current_user)):
                             if x and str(x).strip()
                         ]
                     )
-                    agenda_event_id = _create_calendar_event_for_consulta(
+                    agenda_event_id, agenda_calendar_id = _create_calendar_event_for_consulta(
                         consulta_id=new_id,
                         sucursal_id=c.sucursal_id,
                         start_dt=agenda_start,
@@ -5768,16 +5788,21 @@ def crear_consulta(c: ConsultaCreate, user=Depends(get_current_user)):
                         cur.execute(
                             """
                             UPDATE core.consultas
-                            SET agenda_event_id = %s
+                            SET agenda_event_id = %s,
+                                agenda_calendar_id = %s
                             WHERE consulta_id = %s
                               AND sucursal_id = %s
                             """,
-                            (agenda_event_id, new_id, c.sucursal_id),
+                            (agenda_event_id, agenda_calendar_id, new_id, c.sucursal_id),
                         )
 
             conn.commit()
 
-        return {"consulta_id": new_id, "agenda_event_id": agenda_event_id}
+        return {
+            "consulta_id": new_id,
+            "agenda_event_id": agenda_event_id,
+            "agenda_calendar_id": agenda_calendar_id,
+        }
 
     except HTTPException:
         raise
@@ -5801,7 +5826,7 @@ def eliminar_consulta(consulta_id: int, sucursal_id: int, user=Depends(get_curre
     DELETE FROM core.consultas
     WHERE consulta_id = %s
       AND sucursal_id = %s
-    RETURNING consulta_id, agenda_event_id;
+    RETURNING consulta_id, agenda_event_id, agenda_calendar_id;
     """
 
     try:
@@ -5812,10 +5837,12 @@ def eliminar_consulta(consulta_id: int, sucursal_id: int, user=Depends(get_curre
                 if row is None:
                     raise HTTPException(status_code=404, detail="Consulta no existe en esa sucursal.")
                 agenda_event_id = row[1]
+                agenda_calendar_id = row[2]
                 if agenda_event_id:
                     _delete_calendar_event_for_consulta(
                         sucursal_id=sucursal_id,
                         event_id=str(agenda_event_id),
+                        calendar_id_hint=str(agenda_calendar_id) if agenda_calendar_id else None,
                     )
             conn.commit()
 
@@ -5921,7 +5948,7 @@ def eliminar_paciente(paciente_id: int, sucursal_id: int, user=Depends(get_curre
                 # Consultas ligadas para borrar también evento en Google Calendar.
                 cur.execute(
                     """
-                    SELECT consulta_id, agenda_event_id
+                    SELECT consulta_id, agenda_event_id, agenda_calendar_id
                     FROM core.consultas
                     WHERE paciente_id = %s
                       AND sucursal_id = %s;
@@ -5930,12 +5957,13 @@ def eliminar_paciente(paciente_id: int, sucursal_id: int, user=Depends(get_curre
                 )
                 consultas_rows = cur.fetchall()
                 calendar_deleted = 0
-                for _, agenda_event_id in consultas_rows:
+                for _, agenda_event_id, agenda_calendar_id in consultas_rows:
                     if agenda_event_id:
                         try:
                             _delete_calendar_event_for_consulta(
                                 sucursal_id=sucursal_id,
                                 event_id=str(agenda_event_id),
+                                calendar_id_hint=str(agenda_calendar_id) if agenda_calendar_id else None,
                             )
                             calendar_deleted += 1
                         except Exception:
