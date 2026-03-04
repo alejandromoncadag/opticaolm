@@ -4169,6 +4169,23 @@ def listar_ventas(
 ):
     require_roles(user, ("admin", "recepcion", "doctor"))
     sucursal_id = force_sucursal(user, sucursal_id)
+    tz_name = _timezone_for_sucursal(sucursal_id) if sucursal_id is not None else None
+    search_tz = tz_name or "America/Mexico_City"
+    fecha_hora_local_expr = (
+        f"DATE(v.fecha_hora AT TIME ZONE '{tz_name}')"
+        if tz_name
+        else "DATE(v.fecha_hora)"
+    )
+    year_expr = (
+        f"EXTRACT(YEAR FROM v.fecha_hora AT TIME ZONE '{tz_name}')"
+        if tz_name
+        else "EXTRACT(YEAR FROM v.fecha_hora)"
+    )
+    month_expr = (
+        f"EXTRACT(MONTH FROM v.fecha_hora AT TIME ZONE '{tz_name}')"
+        if tz_name
+        else "EXTRACT(MONTH FROM v.fecha_hora)"
+    )
 
     where = ["v.activo = true"]
     params: list[Any] = []
@@ -4181,25 +4198,30 @@ def listar_ventas(
         raise HTTPException(status_code=400, detail="Mes inválido. Debe ser entre 1 y 12.")
 
     if fecha_desde and fecha_hasta:
-        where.append("DATE(v.fecha_hora) BETWEEN %s AND %s")
+        where.append(f"{fecha_hora_local_expr} BETWEEN %s AND %s")
         params.extend([fecha_desde, fecha_hasta])
     elif fecha_desde:
-        where.append("DATE(v.fecha_hora) >= %s")
+        where.append(f"{fecha_hora_local_expr} >= %s")
         params.append(fecha_desde)
     elif fecha_hasta:
-        where.append("DATE(v.fecha_hora) <= %s")
+        where.append(f"{fecha_hora_local_expr} <= %s")
         params.append(fecha_hasta)
     elif anio is not None and mes is not None:
-        where.append("EXTRACT(YEAR FROM v.fecha_hora) = %s")
-        where.append("EXTRACT(MONTH FROM v.fecha_hora) = %s")
+        where.append(f"{year_expr} = %s")
+        where.append(f"{month_expr} = %s")
         params.extend([anio, mes])
     elif anio is not None:
-        where.append("EXTRACT(YEAR FROM v.fecha_hora) = %s")
+        where.append(f"{year_expr} = %s")
         params.append(anio)
     else:
         # Si hay texto de búsqueda, no limitar automáticamente a "hoy"
         if not (q and q.strip()):
-            where.append("DATE(v.fecha_hora) = CURRENT_DATE")
+            if tz_name:
+                hoy_local = datetime.now(ZoneInfo(tz_name)).date()
+                where.append(f"{fecha_hora_local_expr} = %s")
+                params.append(hoy_local)
+            else:
+                where.append("DATE(v.fecha_hora) = CURRENT_DATE")
 
     if q and q.strip():
         qq = f"%{q.strip()}%"
@@ -4207,12 +4229,12 @@ def listar_ventas(
             """
             (
               CAST(v.venta_id AS TEXT) ILIKE %s
-              OR TO_CHAR(v.fecha_hora AT TIME ZONE 'America/Mexico_City', 'YYYY-MM-DD HH24:MI') ILIKE %s
-              OR CONCAT_WS(' ', v.primer_nombre, v.segundo_nombre, v.apellido_paterno, v.apellido_materno) ILIKE %s
+              OR TO_CHAR(v.fecha_hora AT TIME ZONE '{search_tz}', 'YYYY-MM-DD HH24:MI') ILIKE %s
+              OR COALESCE(v.paciente_nombre, '') ILIKE %s
               OR COALESCE(v.compra, '') ILIKE %s
               OR CAST(v.monto_total AS TEXT) ILIKE %s
             )
-            """
+            """.format(search_tz=search_tz)
         )
         params.extend([qq, qq, qq, qq, qq])
 
@@ -5140,6 +5162,23 @@ def listar_consultas(
 
     require_roles(user, ("admin", "recepcion", "doctor"))
     sucursal_id = force_sucursal(user, sucursal_id)
+    tz_name = _timezone_for_sucursal(sucursal_id) if sucursal_id is not None else None
+    search_tz = tz_name or "America/Mexico_City"
+    fecha_hora_local_expr = (
+        f"DATE(v.fecha_hora AT TIME ZONE '{tz_name}')"
+        if tz_name
+        else "DATE(v.fecha_hora)"
+    )
+    year_expr = (
+        f"EXTRACT(YEAR FROM v.fecha_hora AT TIME ZONE '{tz_name}')"
+        if tz_name
+        else "EXTRACT(YEAR FROM v.fecha_hora)"
+    )
+    month_expr = (
+        f"EXTRACT(MONTH FROM v.fecha_hora AT TIME ZONE '{tz_name}')"
+        if tz_name
+        else "EXTRACT(MONTH FROM v.fecha_hora)"
+    )
 
     where = ["v.activo = true"]
     params = []
@@ -5157,25 +5196,30 @@ def listar_consultas(
         raise HTTPException(status_code=400, detail="Mes inválido. Debe ser entre 1 y 12.")
 
     if fecha_desde and fecha_hasta:
-        where.append("DATE(v.fecha_hora) BETWEEN %s AND %s")
+        where.append(f"{fecha_hora_local_expr} BETWEEN %s AND %s")
         params.extend([fecha_desde, fecha_hasta])
     elif fecha_desde:
-        where.append("DATE(v.fecha_hora) >= %s")
+        where.append(f"{fecha_hora_local_expr} >= %s")
         params.append(fecha_desde)
     elif fecha_hasta:
-        where.append("DATE(v.fecha_hora) <= %s")
+        where.append(f"{fecha_hora_local_expr} <= %s")
         params.append(fecha_hasta)
     elif anio is not None and mes is not None:
-        where.append("EXTRACT(YEAR FROM v.fecha_hora) = %s")
-        where.append("EXTRACT(MONTH FROM v.fecha_hora) = %s")
+        where.append(f"{year_expr} = %s")
+        where.append(f"{month_expr} = %s")
         params.extend([anio, mes])
     elif anio is not None:
-        where.append("EXTRACT(YEAR FROM v.fecha_hora) = %s")
+        where.append(f"{year_expr} = %s")
         params.append(anio)
     else:
         # Si hay texto de búsqueda, no limitar automáticamente a "hoy"
         if not (q and q.strip()):
-            where.append("DATE(v.fecha_hora) = CURRENT_DATE")
+            if tz_name:
+                hoy_local = datetime.now(ZoneInfo(tz_name)).date()
+                where.append(f"{fecha_hora_local_expr} = %s")
+                params.append(hoy_local)
+            else:
+                where.append("DATE(v.fecha_hora) = CURRENT_DATE")
 
     if q and q.strip():
         qq = f"%{q.strip()}%"
@@ -5183,13 +5227,13 @@ def listar_consultas(
             """
             (
               CAST(v.consulta_id AS TEXT) ILIKE %s
-              OR CONCAT_WS(' ', v.primer_nombre, v.segundo_nombre, v.apellido_paterno, v.apellido_materno) ILIKE %s
+              OR COALESCE(v.paciente_nombre, '') ILIKE %s
               OR CONCAT_WS(' ', v.doctor_primer_nombre, v.doctor_apellido_paterno) ILIKE %s
               OR COALESCE(v.etapa_consulta, '') ILIKE %s
               OR COALESCE(v.motivo_consulta, '') ILIKE %s
-              OR TO_CHAR(v.fecha_hora AT TIME ZONE 'America/Mexico_City', 'YYYY-MM-DD HH24:MI') ILIKE %s
+              OR TO_CHAR(v.fecha_hora AT TIME ZONE '{search_tz}', 'YYYY-MM-DD HH24:MI') ILIKE %s
             )
-            """
+            """.format(search_tz=search_tz)
         )
         params.extend([qq, qq, qq, qq, qq, qq])
 
