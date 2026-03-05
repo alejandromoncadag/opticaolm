@@ -236,7 +236,6 @@ def ensure_historia_schema():
                 ADD COLUMN IF NOT EXISTS distancia_promedio_pantalla_cm text,
                 ADD COLUMN IF NOT EXISTS iluminacion_trabajo text,
                 ADD COLUMN IF NOT EXISTS flotadores_destellos text,
-                ADD COLUMN IF NOT EXISTS flotadores_inicio_reciente boolean,
                 ADD COLUMN IF NOT EXISTS flotadores_lateralidad text,
                 ADD COLUMN IF NOT EXISTS uso_lentes_proteccion_uv text,
                 ADD COLUMN IF NOT EXISTS uso_lentes_sol_frecuencia text,
@@ -270,6 +269,12 @@ def ensure_historia_schema():
                 ADD COLUMN IF NOT EXISTS seguimiento_requerido boolean,
                 ADD COLUMN IF NOT EXISTS seguimiento_tipo text,
                 ADD COLUMN IF NOT EXISTS seguimiento_valor text;
+                """
+            )
+            cur.execute(
+                """
+                ALTER TABLE core.historias_clinicas
+                DROP COLUMN IF EXISTS flotadores_inicio_reciente;
                 """
             )
 
@@ -1160,7 +1165,6 @@ class HistoriaClinicaBase(BaseModel):
     distancia_promedio_pantalla_cm: Optional[str] = None
     iluminacion_trabajo: Optional[str] = None
     flotadores_destellos: Optional[str] = None
-    flotadores_inicio_reciente: Optional[bool] = None
     flotadores_lateralidad: Optional[str] = None
     horas_exterior_dia: Optional[str] = None
     nivel_educativo: Optional[str] = None
@@ -2065,7 +2069,7 @@ def export_historias_clinicas_csv(
         "uso_lentes_proteccion_uv", "uso_lentes_sol_frecuencia",
         "fotofobia_escala", "dolor_ocular_escala", "cefalea_frecuencia",
         "trabajo_cerca_horas_dia", "distancia_promedio_pantalla_cm", "iluminacion_trabajo",
-        "flotadores_destellos", "flotadores_inicio_reciente", "flotadores_lateralidad",
+        "flotadores_destellos", "flotadores_lateralidad",
         "horas_exterior_dia", "nivel_educativo", "horas_lectura_dia",
         "horas_sueno_promedio", "estres_nivel", "peso_kg", "altura_cm",
         "sintomas_al_despertar", "sintomas_al_despertar_otro",
@@ -3993,7 +3997,7 @@ HISTORIA_ALLOWED_FIELDS = {
     "uso_lentes_proteccion_uv", "uso_lentes_sol_frecuencia",
     "fotofobia_escala", "dolor_ocular_escala", "cefalea_frecuencia",
     "trabajo_cerca_horas_dia", "distancia_promedio_pantalla_cm", "iluminacion_trabajo",
-    "flotadores_destellos", "flotadores_inicio_reciente", "flotadores_lateralidad",
+    "flotadores_destellos", "flotadores_lateralidad",
     "horas_exterior_dia", "nivel_educativo", "horas_lectura_dia",
     "horas_sueno_promedio", "estres_nivel", "peso_kg", "altura_cm",
     "sintomas_al_despertar", "sintomas_al_despertar_otro",
@@ -5493,7 +5497,7 @@ def get_historia_clinica(
                    uso_lentes_proteccion_uv, uso_lentes_sol_frecuencia,
                    fotofobia_escala, dolor_ocular_escala, cefalea_frecuencia,
                    trabajo_cerca_horas_dia, distancia_promedio_pantalla_cm, iluminacion_trabajo,
-                   flotadores_destellos, flotadores_inicio_reciente, flotadores_lateralidad,
+                   flotadores_destellos, flotadores_lateralidad,
                    horas_exterior_dia, nivel_educativo, horas_lectura_dia,
                    horas_sueno_promedio, estres_nivel, peso_kg, altura_cm,
                    sintomas_al_despertar, sintomas_al_despertar_otro,

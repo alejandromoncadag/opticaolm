@@ -1753,7 +1753,6 @@ function normalizeHistoriaForUi(data: any, fallbackDoctor: string) {
     distancia_promedio_pantalla_cm: normalizeLegacyNumericValue(data?.distancia_promedio_pantalla_cm ?? "", {}),
     iluminacion_trabajo: data?.iluminacion_trabajo ?? "",
     flotadores_destellos: data?.flotadores_destellos ?? "",
-    flotadores_inicio_reciente: data?.flotadores_inicio_reciente ?? null,
     flotadores_lateralidad: data?.flotadores_lateralidad ?? "",
     uso_lentes_proteccion_uv: normalizeTiempoRango6(data?.uso_lentes_proteccion_uv ?? ""),
     uso_lentes_sol_frecuencia: normalizeUsoLentesSolFrecuencia(data?.uso_lentes_sol_frecuencia ?? ""),
@@ -3916,7 +3915,6 @@ export default function App() {
         dolor_ocular_escala: historiaData.dolor_ocular_escala,
         cefalea_frecuencia: historiaData.cefalea_frecuencia,
         flotadores_destellos: historiaData.flotadores_destellos,
-        flotadores_inicio_reciente: historiaData.flotadores_inicio_reciente,
         flotadores_lateralidad: historiaData.flotadores_lateralidad,
         usa_lentes: historiaData.usa_lentes,
         tipo_lentes_actual: usaLentes ? (tipoLentesActual || null) : null,
@@ -9201,7 +9199,6 @@ export default function App() {
                               setHistoriaData({
                                 ...historiaData,
                                 flotadores_destellos: val,
-                                flotadores_inicio_reciente: val ? (historiaData.flotadores_inicio_reciente ?? null) : null,
                                 flotadores_lateralidad: val ? (historiaData.flotadores_lateralidad ?? "") : "",
                               });
                             }}
@@ -9214,18 +9211,6 @@ export default function App() {
                         </label>
                         {Boolean(historiaData.flotadores_destellos) && historiaData.flotadores_destellos !== "ninguno" && (
                           <>
-                            <label style={{ display: "grid", gap: 4 }}>
-                              <span>Inicio reciente</span>
-                              <select
-                                style={historiaInputStyle}
-                                value={String(historiaData.flotadores_inicio_reciente ?? "")}
-                                onChange={(e) => setHistoriaData({ ...historiaData, flotadores_inicio_reciente: parseBoolSelect(e.target.value) })}
-                              >
-                                <option value="">Seleccionar</option>
-                                <option value="true">Si</option>
-                                <option value="false">No</option>
-                              </select>
-                            </label>
                             <label style={{ display: "grid", gap: 4 }}>
                               <span>Lateralidad</span>
                               <select

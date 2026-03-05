@@ -47,7 +47,7 @@ HISTORIAS_CANONICAL_COLUMNS = [
     "uso_lentes_proteccion_uv", "uso_lentes_sol_frecuencia",
     "fotofobia_escala", "dolor_ocular_escala", "cefalea_frecuencia",
     "trabajo_cerca_horas_dia", "distancia_promedio_pantalla_cm", "iluminacion_trabajo",
-    "flotadores_destellos", "flotadores_inicio_reciente", "flotadores_lateralidad",
+    "flotadores_destellos", "flotadores_lateralidad",
     "horas_exterior_dia", "nivel_educativo", "horas_lectura_dia",
     "horas_sueno_promedio", "estres_nivel", "peso_kg", "altura_cm",
     "sintomas_al_despertar", "sintomas_al_despertar_otro",
