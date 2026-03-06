@@ -341,14 +341,12 @@ def ensure_historia_schema():
                 UPDATE core.historias_clinicas
                 SET paciente_pais = CASE
                   WHEN paciente_pais IS NULL OR TRIM(paciente_pais) = '' THEN NULL
-                  WHEN LOWER(translate(TRIM(paciente_pais), 'ÁÉÍÓÚÜáéíóúü', 'AEIOUUaeiouu')) IN ('mexico', 'mex', 'mx') THEN 'México'
                   ELSE TRIM(paciente_pais)
                 END
                 WHERE paciente_pais IS NOT NULL
                   AND (
                     TRIM(paciente_pais) = ''
                     OR TRIM(paciente_pais) <> paciente_pais
-                    OR LOWER(translate(TRIM(paciente_pais), 'ÁÉÍÓÚÜáéíóúü', 'AEIOUUaeiouu')) IN ('mexico', 'mex', 'mx')
                   );
                 """
             )
@@ -680,7 +678,6 @@ def ensure_pacientes_schema():
                   estado_direccion = COALESCE(NULLIF(TRIM(estado_direccion), ''), NULLIF(TRIM(estado), '')),
                   pais = CASE
                     WHEN pais IS NULL OR TRIM(pais) = '' THEN NULL
-                    WHEN LOWER(translate(TRIM(pais), 'ÁÉÍÓÚÜáéíóúü', 'AEIOUUaeiouu')) IN ('mexico', 'mex', 'mx') THEN 'México'
                     ELSE TRIM(pais)
                   END
                 WHERE
@@ -697,7 +694,6 @@ def ensure_pacientes_schema():
                     pais IS NOT NULL AND (
                       TRIM(pais) = ''
                       OR TRIM(pais) <> pais
-                      OR LOWER(translate(TRIM(pais), 'ÁÉÍÓÚÜáéíóúü', 'AEIOUUaeiouu')) IN ('mexico', 'mex', 'mx')
                     )
                   );
                 """
