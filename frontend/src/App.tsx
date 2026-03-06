@@ -365,6 +365,8 @@ const PHONE_COUNTRIES: PhoneCountryOption[] = [
 ];
 
 const DEFAULT_PHONE_COUNTRY = "MX";
+const PHONE_LOCAL_MIN_DIGITS = 7;
+const PHONE_LOCAL_MAX_DIGITS = 15;
 
 type LoginResponse = {
   access_token: string;
@@ -699,11 +701,11 @@ function splitPhoneForUi(value: string | null | undefined): { countryIso: string
 
   const countriesByDial = [...PHONE_COUNTRIES].sort((a, b) => b.dial.length - a.dial.length);
   const found = countriesByDial.find((c) => raw === c.dial || raw.startsWith(`${c.dial} `) || raw.startsWith(c.dial));
-  if (!found) return { countryIso: DEFAULT_PHONE_COUNTRY, local: onlyDigits(raw).slice(0, 10) };
+  if (!found) return { countryIso: DEFAULT_PHONE_COUNTRY, local: onlyDigits(raw).slice(0, PHONE_LOCAL_MAX_DIGITS) };
 
   let local = onlyDigits(raw.slice(found.dial.length).trim());
   if (local.startsWith("-")) local = local.slice(1).trim();
-  return { countryIso: found.iso, local: local.slice(0, 10) };
+  return { countryIso: found.iso, local: local.slice(0, PHONE_LOCAL_MAX_DIGITS) };
 }
 
 function composeInternationalPhone(countryIso: string, local: string): string {
@@ -1944,7 +1946,7 @@ export default function App() {
     codigo_postal: "",
     municipio: "",
     estado_direccion: "",
-    pais: "México",
+    pais: "",
   });
   const [pacienteTelefonoPais, setPacienteTelefonoPais] = useState<string>(DEFAULT_PHONE_COUNTRY);
   const [pacienteTelefonoLocal, setPacienteTelefonoLocal] = useState<string>("");
@@ -3048,7 +3050,7 @@ export default function App() {
       codigo_postal: p.codigo_postal ?? "",
       municipio: p.municipio ?? "",
       estado_direccion: p.estado_direccion ?? "",
-      pais: p.pais ?? "México",
+      pais: p.pais ?? "",
     });
     setTab("pacientes");
   }
@@ -3074,7 +3076,7 @@ export default function App() {
       codigo_postal: "",
       municipio: "",
       estado_direccion: "",
-      pais: "México",
+      pais: "",
     });
   }
 
@@ -3091,8 +3093,8 @@ export default function App() {
       if (!formPaciente.fecha_nacimiento?.trim()) throw new Error("Fecha de nacimiento es obligatoria.");
       if (!formPaciente.sexo?.trim()) throw new Error("Sexo es obligatorio.");
       const telefonoDigits = onlyDigits(pacienteTelefonoLocal);
-      if (telefonoDigits.length !== 10) {
-        throw new Error("Teléfono debe tener exactamente 10 dígitos.");
+      if (telefonoDigits.length < PHONE_LOCAL_MIN_DIGITS || telefonoDigits.length > PHONE_LOCAL_MAX_DIGITS) {
+        throw new Error(`Teléfono debe tener entre ${PHONE_LOCAL_MIN_DIGITS} y ${PHONE_LOCAL_MAX_DIGITS} dígitos.`);
       }
       const telefonoFinal = composeInternationalPhone(pacienteTelefonoPais, telefonoDigits);
       if (editingPacienteId === null && !formPaciente.como_nos_conocio?.trim()) {
@@ -4766,17 +4768,17 @@ export default function App() {
                 </select>
                 <input
                   value={pacienteTelefonoLocal}
-                  onChange={(e) => setPacienteTelefonoLocal(onlyDigits(e.target.value).slice(0, 10))}
+                  onChange={(e) => setPacienteTelefonoLocal(onlyDigits(e.target.value).slice(0, PHONE_LOCAL_MAX_DIGITS))}
                   required
                   inputMode="numeric"
-                  pattern="[0-9]{10}"
-                  maxLength={10}
-                  placeholder="10 digitos"
+                  pattern="[0-9]{7,15}"
+                  maxLength={PHONE_LOCAL_MAX_DIGITS}
+                  placeholder="7 a 15 digitos"
                   style={{ width: "100%", padding: 10, borderRadius: 10, border: "1px solid #ddd" }}
                 />
               </div>
               <div style={{ marginTop: 4, fontSize: 12, opacity: 0.75 }}>
-                Captura exactamente 10 dígitos.
+                Captura entre 7 y 15 dígitos.
               </div>
             </label>
 

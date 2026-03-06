@@ -1582,13 +1582,13 @@ def normalize_patient_phone(value: str | None) -> str | None:
             raise HTTPException(status_code=400, detail="Teléfono inválido. Usa código país + número.")
         country_code = m.group(1)
         local_digits = re.sub(r"\D", "", m.group(2))
-        if len(local_digits) != 10:
-            raise HTTPException(status_code=400, detail="Teléfono debe tener exactamente 10 dígitos.")
+        if len(local_digits) < 7 or len(local_digits) > 15:
+            raise HTTPException(status_code=400, detail="Teléfono debe tener entre 7 y 15 dígitos.")
         return f"+{country_code} {local_digits}"
 
     digits = re.sub(r"\D", "", raw)
-    if len(digits) != 10:
-        raise HTTPException(status_code=400, detail="Teléfono debe tener exactamente 10 dígitos.")
+    if len(digits) < 7 or len(digits) > 15:
+        raise HTTPException(status_code=400, detail="Teléfono debe tener entre 7 y 15 dígitos.")
     return digits
 
 
@@ -1609,8 +1609,18 @@ def normalize_country_name(value: str | None) -> str | None:
     ):
         folded = folded.replace(src, dst)
     compact = re.sub(r"[^a-z]", "", folded)
-    if compact in {"mexico", "mex", "mx"}:
-        return "México"
+    canonical = {
+        "mexico": "México",
+        "mex": "México",
+        "mx": "México",
+        "argentina": "Argentina",
+        "argetina": "Argentina",
+        "ar": "Argentina",
+        "venezuela": "Venezuela",
+        "ve": "Venezuela",
+    }
+    if compact in canonical:
+        return canonical[compact]
     return raw
 
 
@@ -3861,7 +3871,7 @@ def listar_sucursales():
 @app.post("/pacientes", summary="Crear paciente")
 def crear_paciente(p: PacienteCreate, user=Depends(get_current_user)):
 
-    require_roles(user, ("admin", "recepcion"))
+    require_roles(user, ("admin", "recepcion", "doctor"))
     p.sucursal_id = force_sucursal(user, p.sucursal_id)
     sanitize_model_strings(p)
 
@@ -3875,7 +3885,7 @@ def crear_paciente(p: PacienteCreate, user=Depends(get_current_user)):
     p.telefono = normalize_patient_phone(p.telefono)
     p.pais = normalize_country_name(p.pais)
     if not p.telefono:
-        raise HTTPException(status_code=400, detail="Teléfono es obligatorio y debe tener 10 dígitos.")
+        raise HTTPException(status_code=400, detail="Teléfono es obligatorio y debe tener entre 7 y 15 dígitos.")
     
 
     cp_value = p.cp if p.cp not in (None, "") else p.codigo_postal
@@ -3958,7 +3968,7 @@ def actualizar_paciente(paciente_id: int, p: PacienteCreate, user=Depends(get_cu
     p.telefono = normalize_patient_phone(p.telefono)
     p.pais = normalize_country_name(p.pais)
     if not p.telefono:
-        raise HTTPException(status_code=400, detail="Teléfono es obligatorio y debe tener 10 dígitos.")
+        raise HTTPException(status_code=400, detail="Teléfono es obligatorio y debe tener entre 7 y 15 dígitos.")
 
 
     cp_value = p.cp if p.cp not in (None, "") else p.codigo_postal
