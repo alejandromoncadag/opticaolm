@@ -250,6 +250,7 @@ type ExportCsvTipo =
   | "ventas"
   | "pacientes"
   | "historias_clinicas"
+  | "historias_ml"
   | "sucursales"
   | "diccionario_columnas_fisico";
 
@@ -334,6 +335,7 @@ const EXPORT_TIPOS_POR_FECHA: ExportCsvTipo[] = [
   "ventas",
   "pacientes",
   "historias_clinicas",
+  "historias_ml",
 ];
 
 const EXPORT_TIPOS_CON_PACIENTE: ExportCsvTipo[] = [
@@ -341,6 +343,7 @@ const EXPORT_TIPOS_CON_PACIENTE: ExportCsvTipo[] = [
   "ventas",
   "pacientes",
   "historias_clinicas",
+  "historias_ml",
 ];
 
 type PhoneCountryOption = {
@@ -1502,9 +1505,22 @@ function normalizeHistoriaForUi(data: any, fallbackDoctor: string) {
     .map((token) => token.replace(/^principal:\s*/i, "").replace(/^secundarios?:\s*/i, "").trim())
     .filter(Boolean)
     .map((token) => normalizeDiagToken(token));
-  let diagnosticoPrincipal = joinPipeList(splitPipeList(data?.diagnostico_principal ?? ""));
+  const diagnosticoPrincipalTokensRaw = splitPipeList(data?.diagnostico_principal ?? "");
+  let diagnosticoPrincipal = diagnosticoPrincipalTokensRaw.find((t) => principalKnown.has(t)) ?? "";
+  if (!diagnosticoPrincipal && diagnosticoPrincipalTokensRaw.length > 1 && diagnosticoPrincipalTokensRaw.every((t) => t.length === 1)) {
+    const compact = normalizeDiagToken(diagnosticoPrincipalTokensRaw.join(""));
+    if (principalKnown.has(compact)) diagnosticoPrincipal = compact;
+  }
   let diagnosticoPrincipalOtro = String(data?.diagnostico_principal_otro ?? "").trim();
-  let diagnosticosSecundarios = joinPipeList(splitPipeList(data?.diagnosticos_secundarios ?? ""));
+  const diagnosticosSecundariosTokensRaw = splitPipeList(data?.diagnosticos_secundarios ?? "");
+  let diagnosticosSecundariosTokens = diagnosticosSecundariosTokensRaw.filter((t) => secundarioKnown.has(t));
+  if (diagnosticosSecundariosTokens.length === 0 && diagnosticosSecundariosTokensRaw.length > 1 && diagnosticosSecundariosTokensRaw.every((t) => t.length === 1)) {
+    const compact = normalizeDiagToken(diagnosticosSecundariosTokensRaw.join(""));
+    if (secundarioKnown.has(compact)) {
+      diagnosticosSecundariosTokens = [compact];
+    }
+  }
+  let diagnosticosSecundarios = joinPipeList(diagnosticosSecundariosTokens);
   let diagnosticosSecundariosOtro = String(data?.diagnosticos_secundarios_otro ?? "").trim();
   if (!diagnosticoPrincipal && !diagnosticosSecundarios && legacyDiagnosticoTokens.length > 0) {
     const principalSet = new Set<string>();
@@ -1522,9 +1538,16 @@ function normalizeHistoriaForUi(data: any, fallbackDoctor: string) {
       }
       principalOtros.push(token.replace(/_/g, " "));
     }
-    diagnosticoPrincipal = joinPipeList(Array.from(principalSet));
+    const principalList = Array.from(principalSet);
+    diagnosticoPrincipal = principalList[0] ?? "";
     diagnosticosSecundarios = joinPipeList(Array.from(secundarioSet));
     diagnosticoPrincipalOtro = diagnosticoPrincipalOtro || principalOtros.join(", ");
+  }
+  if (diagnosticoPrincipal !== "otro") {
+    diagnosticoPrincipalOtro = "";
+  }
+  if (!splitPipeList(diagnosticosSecundarios).includes("otro_secundario")) {
+    diagnosticosSecundariosOtro = "";
   }
   const seguimientoValorRaw = String(data?.seguimiento_valor ?? "").trim();
   const seguimientoValorFecha = /^\d{4}-\d{2}-\d{2}$/.test(seguimientoValorRaw) ? seguimientoValorRaw : "";
@@ -1920,7 +1943,7 @@ export default function App() {
     codigo_postal: "",
     municipio: "",
     estado_direccion: "",
-    pais: "",
+    pais: "México",
   });
   const [pacienteTelefonoPais, setPacienteTelefonoPais] = useState<string>(DEFAULT_PHONE_COUNTRY);
   const [pacienteTelefonoLocal, setPacienteTelefonoLocal] = useState<string>("");
@@ -3024,7 +3047,7 @@ export default function App() {
       codigo_postal: p.codigo_postal ?? "",
       municipio: p.municipio ?? "",
       estado_direccion: p.estado_direccion ?? "",
-      pais: p.pais ?? "",
+      pais: p.pais ?? "México",
     });
     setTab("pacientes");
   }
@@ -3050,7 +3073,7 @@ export default function App() {
       codigo_postal: "",
       municipio: "",
       estado_direccion: "",
-      pais: "",
+      pais: "México",
     });
   }
 
@@ -3734,12 +3757,20 @@ export default function App() {
         historiaData?.recomendacion_tratamiento_cantidad,
         historiaData?.recomendacion_tratamiento
       );
-      const diagnosticoPrincipalSeleccionados = splitPipeList(historiaData?.diagnostico_principal ?? "");
-      const diagnosticoPrincipalOtro = String(historiaData?.diagnostico_principal_otro ?? "").trim();
+      const diagnosticoPrincipalTokens = splitPipeList(historiaData?.diagnostico_principal ?? "");
+      const diagnosticoPrincipal = diagnosticoPrincipalTokens[0] ?? "";
+      const diagnosticoPrincipalOtroRaw = String(historiaData?.diagnostico_principal_otro ?? "").trim();
+      if (!diagnosticoPrincipal) {
+        throw new Error("Diagnóstico principal es obligatorio (elige una opción).");
+      }
+      if (diagnosticoPrincipal === "otro" && !diagnosticoPrincipalOtroRaw) {
+        throw new Error("Escribe el detalle en 'Otro diagnóstico principal'.");
+      }
+      const diagnosticoPrincipalOtro = diagnosticoPrincipal === "otro" ? diagnosticoPrincipalOtroRaw : "";
       const diagnosticoSecundarioSeleccionados = splitPipeList(historiaData?.diagnosticos_secundarios ?? "");
       const diagnosticoSecundarioOtro = String(historiaData?.diagnosticos_secundarios_otro ?? "").trim();
       const diagnosticoPrincipalResumen = joinPipeList([
-        ...diagnosticoPrincipalSeleccionados,
+        diagnosticoPrincipal,
         ...(diagnosticoPrincipalOtro ? [`otro:${diagnosticoPrincipalOtro}`] : []),
       ]);
       const diagnosticoSecundarioResumen = joinPipeList([
@@ -3964,7 +3995,7 @@ export default function App() {
         papila: historiaData.papila,
         biomicroscopia: historiaData.biomicroscopia,
         diagnostico_general: diagnosticoGeneralPayload || null,
-        diagnostico_principal: joinPipeList(diagnosticoPrincipalSeleccionados),
+        diagnostico_principal: diagnosticoPrincipal,
         diagnostico_principal_otro: diagnosticoPrincipalOtro || null,
         diagnosticos_secundarios: joinPipeList(diagnosticoSecundarioSeleccionados),
         diagnosticos_secundarios_otro: diagnosticoSecundarioOtro || null,
@@ -4205,6 +4236,7 @@ export default function App() {
     .split("|")
     .map((x: string) => x.trim())
     .filter(Boolean);
+  const diagnosticoPrincipalSeleccionado = diagnosticoPrincipalSeleccionados[0] ?? "";
   const diagnosticoSecundarioSeleccionados = String(historiaData?.diagnosticos_secundarios ?? "")
     .split("|")
     .map((x: string) => x.trim())
@@ -6228,7 +6260,7 @@ export default function App() {
                       <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
                         <input
                           type="checkbox"
-                          checked={exportTiposSeleccionados.length === 6}
+                          checked={exportTiposSeleccionados.length === 7}
                           onChange={(e) => {
                             if (e.target.checked) {
                               setExportTiposSeleccionados([
@@ -6236,6 +6268,7 @@ export default function App() {
                                 "ventas",
                                 "pacientes",
                                 "historias_clinicas",
+                                "historias_ml",
                                 "sucursales",
                                 "diccionario_columnas_fisico",
                               ]);
@@ -6276,6 +6309,14 @@ export default function App() {
                           onChange={() => toggleExportTipo("historias_clinicas")}
                         />
                         <span>Historias clínicas</span>
+                      </label>
+                      <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        <input
+                          type="checkbox"
+                          checked={exportTiposSeleccionados.includes("historias_ml")}
+                          onChange={() => toggleExportTipo("historias_ml")}
+                        />
+                        <span>Historias ML (base)</span>
                       </label>
                       <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
                         <input
@@ -7656,12 +7697,14 @@ export default function App() {
                           {DIAGNOSTICO_PRINCIPAL_OPTIONS.map((opt) => (
                             <label key={`diag-principal-${opt.value}`} style={{ display: "flex", alignItems: "center", gap: 6 }}>
                               <input
-                                type="checkbox"
-                                checked={diagnosticoPrincipalSeleccionados.includes(opt.value)}
+                                type="radio"
+                                name="diagnostico-principal"
+                                checked={diagnosticoPrincipalSeleccionado === opt.value}
                                 onChange={(e) => {
+                                  if (!e.target.checked) return;
                                   const current = historiaData ?? {};
-                                  const next = togglePipeValue(current.diagnostico_principal, opt.value, e.target.checked);
-                                  const removeOtro = opt.value === "otro" && !e.target.checked;
+                                  const next = opt.value;
+                                  const removeOtro = opt.value !== "otro";
                                   setHistoriaData({
                                     ...current,
                                     diagnostico_principal: next,
@@ -7673,7 +7716,7 @@ export default function App() {
                             </label>
                           ))}
                         </div>
-                        {diagnosticoPrincipalSeleccionados.includes("otro") && (
+                        {diagnosticoPrincipalSeleccionado === "otro" && (
                           <input
                             style={historiaItemInputStyle}
                             placeholder="Otro diagnóstico principal"

@@ -338,6 +338,43 @@ def ensure_historia_schema():
             )
             cur.execute(
                 """
+                UPDATE core.historias_clinicas
+                SET paciente_pais = CASE
+                  WHEN paciente_pais IS NULL OR TRIM(paciente_pais) = '' THEN NULL
+                  WHEN LOWER(translate(TRIM(paciente_pais), 'ÁÉÍÓÚÜáéíóúü', 'AEIOUUaeiouu')) IN ('mexico', 'mex', 'mx') THEN 'México'
+                  ELSE TRIM(paciente_pais)
+                END
+                WHERE paciente_pais IS NOT NULL
+                  AND (
+                    TRIM(paciente_pais) = ''
+                    OR TRIM(paciente_pais) <> paciente_pais
+                    OR LOWER(translate(TRIM(paciente_pais), 'ÁÉÍÓÚÜáéíóúü', 'AEIOUUaeiouu')) IN ('mexico', 'mex', 'mx')
+                  );
+                """
+            )
+            cur.execute(
+                """
+                UPDATE core.historias_clinicas
+                SET
+                  diagnostico_principal = NULLIF(split_part(regexp_replace(lower(trim(COALESCE(diagnostico_principal, ''))), E'\\s*\\|\\s*', '|', 'g'), '|', 1), ''),
+                  diagnosticos_secundarios = NULLIF(regexp_replace(lower(trim(COALESCE(diagnosticos_secundarios, ''))), E'\\s*\\|\\s*', '|', 'g'), ''),
+                  diagnostico_principal_otro = CASE
+                    WHEN lower(trim(COALESCE(diagnostico_principal, ''))) = 'otro' THEN NULLIF(trim(diagnostico_principal_otro), '')
+                    ELSE NULL
+                  END,
+                  diagnosticos_secundarios_otro = CASE
+                    WHEN lower(COALESCE(diagnosticos_secundarios, '')) LIKE '%otro_secundario%' THEN NULLIF(trim(diagnosticos_secundarios_otro), '')
+                    ELSE NULL
+                  END
+                WHERE
+                  diagnostico_principal IS NOT NULL
+                  OR diagnosticos_secundarios IS NOT NULL
+                  OR diagnostico_principal_otro IS NOT NULL
+                  OR diagnosticos_secundarios_otro IS NOT NULL;
+                """
+            )
+            cur.execute(
+                """
                 ALTER TABLE core.historias_clinicas
                   ALTER COLUMN created_at_tz SET DEFAULT NOW();
                 """
@@ -640,7 +677,12 @@ def ensure_pacientes_schema():
                   apellido_materno = NULLIF(TRIM(apellido_materno), ''),
                   codigo_postal = COALESCE(NULLIF(TRIM(codigo_postal), ''), NULLIF(TRIM(cp), '')),
                   cp = COALESCE(NULLIF(TRIM(cp), ''), NULLIF(TRIM(codigo_postal), '')),
-                  estado_direccion = COALESCE(NULLIF(TRIM(estado_direccion), ''), NULLIF(TRIM(estado), ''))
+                  estado_direccion = COALESCE(NULLIF(TRIM(estado_direccion), ''), NULLIF(TRIM(estado), '')),
+                  pais = CASE
+                    WHEN pais IS NULL OR TRIM(pais) = '' THEN NULL
+                    WHEN LOWER(translate(TRIM(pais), 'ÁÉÍÓÚÜáéíóúü', 'AEIOUUaeiouu')) IN ('mexico', 'mex', 'mx') THEN 'México'
+                    ELSE TRIM(pais)
+                  END
                 WHERE
                   created_at IS NULL
                   OR creado_en IS NULL
@@ -650,7 +692,14 @@ def ensure_pacientes_schema():
                   OR (apellido_paterno IS NULL AND nombre IS NOT NULL)
                   OR (codigo_postal IS NULL AND cp IS NOT NULL)
                   OR (cp IS NULL AND codigo_postal IS NOT NULL)
-                  OR (estado_direccion IS NULL AND estado IS NOT NULL);
+                  OR (estado_direccion IS NULL AND estado IS NOT NULL)
+                  OR (
+                    pais IS NOT NULL AND (
+                      TRIM(pais) = ''
+                      OR TRIM(pais) <> pais
+                      OR LOWER(translate(TRIM(pais), 'ÁÉÍÓÚÜáéíóúü', 'AEIOUUaeiouu')) IN ('mexico', 'mex', 'mx')
+                    )
+                  );
                 """
             )
 
@@ -1244,6 +1293,33 @@ COMO_NOS_CONOCIO_VALUES = {"instagram", "fb", "google", "linkedin", "linkedln", 
 COMO_NOS_CONOCIO_CANONICAL = {"linkedln": "linkedin"}
 CONSULTA_ETAPA_ALLOWED = {"primera_vez_en_clinica", "seguimiento"}
 CONSULTA_MOTIVO_ALLOWED = {"revision_general", "graduacion_lentes", "lentes_contacto", "molestia", "otro"}
+DIAGNOSTICO_PRINCIPAL_ALLOWED = {
+    "miopia",
+    "hipermetropia",
+    "astigmatismo",
+    "presbicia",
+    "ojo_seco",
+    "conjuntivitis_alergica",
+    "blefaritis_mgd",
+    "pterigion_pinguecula",
+    "catarata",
+    "glaucoma",
+    "queratocono",
+    "patologia_retiniana",
+    "otro",
+}
+DIAGNOSTICO_SECUNDARIO_ALLOWED = {
+    "anisometropia",
+    "astenopia",
+    "insuficiencia_convergencia",
+    "disfuncion_acomodativa",
+    "intolerancia_lentes_contacto",
+    "chalazion_orzuelo",
+    "ojo_rojo",
+    "moscas_volantes",
+    "cefalea_asociada",
+    "otro_secundario",
+}
 VENTA_COMPRA_ALLOWED = {
     "examen_de_la_vista",
     "armazon_solo",
@@ -1514,6 +1590,28 @@ def normalize_patient_phone(value: str | None) -> str | None:
     if len(digits) != 10:
         raise HTTPException(status_code=400, detail="Teléfono debe tener exactamente 10 dígitos.")
     return digits
+
+
+def normalize_country_name(value: str | None) -> str | None:
+    if value is None:
+        return None
+    raw = str(value).strip()
+    if not raw:
+        return None
+    folded = raw.lower()
+    for src, dst in (
+        ("á", "a"),
+        ("é", "e"),
+        ("í", "i"),
+        ("ó", "o"),
+        ("ú", "u"),
+        ("ü", "u"),
+    ):
+        folded = folded.replace(src, dst)
+    compact = re.sub(r"[^a-z]", "", folded)
+    if compact in {"mexico", "mex", "mx"}:
+        return "México"
+    return raw
 
 
 def is_missing_value(v):
@@ -2112,6 +2210,162 @@ def export_historias_clinicas_csv(
     ORDER BY h.created_at_tz DESC, h.historia_id DESC;
     """
     filename = _export_filename("historias_clinicas", desde_date, hasta_date, sid)
+    return StreamingResponse(
+        _stream_csv_query(sql, tuple(params), headers, delimiter_char),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.get("/export/historias_ml.csv", summary="Exportar dataset ML base de historias clínicas (solo admin)")
+def export_historias_ml_csv(
+    sucursal_id: str = "all",
+    desde: str | None = None,
+    hasta: str | None = None,
+    paciente_id: int | None = None,
+    doctor_id: int | None = None,
+    delimiter: str = "comma",
+    user=Depends(_current_user_dep),
+):
+    require_roles(user, ("admin",))
+    if doctor_id is not None:
+        raise HTTPException(status_code=400, detail="doctor_id no aplica para export ML de historias clínicas.")
+
+    sid = _parse_export_sucursal_id(sucursal_id)
+    delimiter_char = _parse_export_delimiter(delimiter)
+    desde_date, hasta_date = _resolve_export_date_range(desde, hasta, sid)
+
+    where = ["h.activo = true", "DATE(h.created_at_tz) BETWEEN %s AND %s"]
+    params: list[Any] = [desde_date, hasta_date]
+    if sid is not None:
+        where.append("h.sucursal_id = %s")
+        params.append(sid)
+    if paciente_id is not None:
+        where.append("h.paciente_id = %s")
+        params.append(paciente_id)
+
+    headers = [
+        "historia_id",
+        "sucursal_id",
+        "paciente_id",
+        "created_at_tz",
+        "diagnostico_principal",
+        "diagnostico_principal_otro",
+        "diagnosticos_secundarios",
+        "diagnosticos_secundarios_otro",
+        "seguimiento_requerido",
+        "seguimiento_valor",
+        "paciente_edad",
+        "sexo",
+        "diabetes_estado",
+        "diabetes_control",
+        "hipertension",
+        "usa_lentes",
+        "tipo_lentes_actual",
+        "tiempo_uso_lentes",
+        "fotofobia_escala",
+        "dolor_ocular_escala",
+        "cefalea_frecuencia",
+        "horas_pantalla_dia",
+        "conduccion_nocturna_horas",
+        "horas_sueno_promedio",
+        "estres_nivel",
+        "peso_kg",
+        "altura_cm",
+        "tabaquismo_estado",
+        "tabaquismo_intensidad",
+        "tabaquismo_anios",
+        "tabaquismo_anios_desde_dejo",
+        "alcohol_estado",
+        "alcohol_bebidas_dia",
+        "marihuana_estado",
+        "marihuana_veces_semana",
+        "drogas_estado",
+        "drogas_frecuencia_semana",
+        "sintomas",
+        "antecedentes_generales",
+        "antecedentes_oculares_familiares",
+        "exposicion_uv",
+        "uso_pantalla_en_oscuridad",
+        "nivel_educativo",
+        "horas_lectura_dia",
+        "horas_exterior_dia",
+        "deporte_frecuencia",
+        "deporte_duracion",
+        "deporte_tipos",
+        "od_esfera",
+        "od_cilindro",
+        "od_eje",
+        "oi_esfera",
+        "oi_cilindro",
+        "oi_eje",
+    ]
+
+    sql = f"""
+    SELECT
+      h.historia_id,
+      h.sucursal_id,
+      h.paciente_id,
+      h.created_at_tz,
+      NULLIF(split_part(COALESCE(h.diagnostico_principal, ''), '|', 1), '') AS diagnostico_principal,
+      NULLIF(TRIM(h.diagnostico_principal_otro), '') AS diagnostico_principal_otro,
+      NULLIF(TRIM(h.diagnosticos_secundarios), '') AS diagnosticos_secundarios,
+      NULLIF(TRIM(h.diagnosticos_secundarios_otro), '') AS diagnosticos_secundarios_otro,
+      h.seguimiento_requerido,
+      h.seguimiento_valor,
+      h.paciente_edad,
+      NULLIF(TRIM(p.sexo), '') AS sexo,
+      NULLIF(TRIM(h.diabetes_estado), '') AS diabetes_estado,
+      NULLIF(TRIM(h.diabetes_control), '') AS diabetes_control,
+      h.hipertension,
+      h.usa_lentes,
+      NULLIF(TRIM(h.tipo_lentes_actual), '') AS tipo_lentes_actual,
+      NULLIF(TRIM(h.tiempo_uso_lentes), '') AS tiempo_uso_lentes,
+      NULLIF(TRIM(h.fotofobia_escala), '') AS fotofobia_escala,
+      NULLIF(TRIM(h.dolor_ocular_escala), '') AS dolor_ocular_escala,
+      NULLIF(TRIM(h.cefalea_frecuencia), '') AS cefalea_frecuencia,
+      NULLIF(TRIM(h.horas_pantalla_dia), '') AS horas_pantalla_dia,
+      NULLIF(TRIM(h.conduccion_nocturna_horas), '') AS conduccion_nocturna_horas,
+      NULLIF(TRIM(h.horas_sueno_promedio), '') AS horas_sueno_promedio,
+      NULLIF(TRIM(h.estres_nivel), '') AS estres_nivel,
+      h.peso_kg,
+      h.altura_cm,
+      NULLIF(TRIM(h.tabaquismo_estado), '') AS tabaquismo_estado,
+      NULLIF(TRIM(h.tabaquismo_intensidad), '') AS tabaquismo_intensidad,
+      NULLIF(TRIM(h.tabaquismo_anios), '') AS tabaquismo_anios,
+      NULLIF(TRIM(h.tabaquismo_anios_desde_dejo), '') AS tabaquismo_anios_desde_dejo,
+      NULLIF(substring(COALESCE(h.alcohol_frecuencia, '') FROM '"estado"\\s*:\\s*"([^"]+)"'), '') AS alcohol_estado,
+      NULLIF(substring(COALESCE(h.alcohol_frecuencia, '') FROM '"bebidas_dia"\\s*:\\s*"?([0-9]+(?:\\.[0-9]+)?)"?'), '') AS alcohol_bebidas_dia,
+      NULLIF(substring(COALESCE(h.marihuana_frecuencia, '') FROM '"estado"\\s*:\\s*"([^"]+)"'), '') AS marihuana_estado,
+      NULLIF(substring(COALESCE(h.marihuana_frecuencia, '') FROM '"veces_semana"\\s*:\\s*"?([0-9]+(?:\\.[0-9]+)?)"?'), '') AS marihuana_veces_semana,
+      NULLIF(substring(COALESCE(h.drogas_frecuencia, '') FROM '"estado"\\s*:\\s*"([^"]+)"'), '') AS drogas_estado,
+      NULLIF(substring(COALESCE(h.drogas_frecuencia, '') FROM '"frecuencia_semana"\\s*:\\s*"?([0-9]+(?:\\.[0-9]+)?)"?'), '') AS drogas_frecuencia_semana,
+      NULLIF(TRIM(h.sintomas), '') AS sintomas,
+      NULLIF(TRIM(h.antecedentes_generales), '') AS antecedentes_generales,
+      NULLIF(TRIM(h.antecedentes_oculares_familiares), '') AS antecedentes_oculares_familiares,
+      NULLIF(TRIM(h.exposicion_uv), '') AS exposicion_uv,
+      NULLIF(TRIM(h.uso_pantalla_en_oscuridad), '') AS uso_pantalla_en_oscuridad,
+      NULLIF(TRIM(h.nivel_educativo), '') AS nivel_educativo,
+      NULLIF(TRIM(h.horas_lectura_dia), '') AS horas_lectura_dia,
+      NULLIF(TRIM(h.horas_exterior_dia), '') AS horas_exterior_dia,
+      NULLIF(TRIM(h.deporte_frecuencia), '') AS deporte_frecuencia,
+      NULLIF(TRIM(h.deporte_duracion), '') AS deporte_duracion,
+      NULLIF(TRIM(h.deporte_tipos), '') AS deporte_tipos,
+      NULLIF(TRIM(h.od_esfera), '') AS od_esfera,
+      NULLIF(TRIM(h.od_cilindro), '') AS od_cilindro,
+      NULLIF(TRIM(h.od_eje), '') AS od_eje,
+      NULLIF(TRIM(h.oi_esfera), '') AS oi_esfera,
+      NULLIF(TRIM(h.oi_cilindro), '') AS oi_cilindro,
+      NULLIF(TRIM(h.oi_eje), '') AS oi_eje
+    FROM core.historias_clinicas h
+    LEFT JOIN core.pacientes p
+      ON p.paciente_id = h.paciente_id
+     AND p.sucursal_id = h.sucursal_id
+    WHERE {' AND '.join(where)}
+    ORDER BY h.created_at_tz DESC, h.historia_id DESC;
+    """
+
+    filename = _export_filename("historias_ml", desde_date, hasta_date, sid)
     return StreamingResponse(
         _stream_csv_query(sql, tuple(params), headers, delimiter_char),
         media_type="text/csv; charset=utf-8",
@@ -3619,6 +3873,7 @@ def crear_paciente(p: PacienteCreate, user=Depends(get_current_user)):
         raise HTTPException(status_code=400, detail="apellido_paterno es obligatorio.")
     p.como_nos_conocio = normalize_como_nos_conocio(p.como_nos_conocio)
     p.telefono = normalize_patient_phone(p.telefono)
+    p.pais = normalize_country_name(p.pais)
     if not p.telefono:
         raise HTTPException(status_code=400, detail="Teléfono es obligatorio y debe tener 10 dígitos.")
     
@@ -3701,6 +3956,7 @@ def actualizar_paciente(paciente_id: int, p: PacienteCreate, user=Depends(get_cu
         raise HTTPException(status_code=400, detail="apellido_paterno es obligatorio.")
     p.como_nos_conocio = normalize_como_nos_conocio(p.como_nos_conocio)
     p.telefono = normalize_patient_phone(p.telefono)
+    p.pais = normalize_country_name(p.pais)
     if not p.telefono:
         raise HTTPException(status_code=400, detail="Teléfono es obligatorio y debe tener 10 dígitos.")
 
@@ -4068,6 +4324,64 @@ def _normalize_historia_payload(raw_data: dict[str, Any]) -> dict[str, Any]:
     elif "seguimiento_requerido" in data and data.get("seguimiento_requerido") is not True:
         data["seguimiento_tipo"] = None
         data["seguimiento_valor"] = None
+
+    if "diagnostico_principal" in data:
+        principal = normalize_multi_allowed_tokens(
+            data.get("diagnostico_principal"),
+            DIAGNOSTICO_PRINCIPAL_ALLOWED,
+            "diagnostico_principal",
+            required=False,
+        )
+        if not principal:
+            data["diagnostico_principal"] = None
+        else:
+            principal_tokens = split_pipe_tokens(principal)
+            if len(principal_tokens) > 1:
+                raise HTTPException(
+                    status_code=400,
+                    detail="diagnostico_principal debe tener una sola opción.",
+                )
+            data["diagnostico_principal"] = principal_tokens[0]
+
+    if "diagnosticos_secundarios" in data:
+        data["diagnosticos_secundarios"] = normalize_multi_allowed_tokens(
+            data.get("diagnosticos_secundarios"),
+            DIAGNOSTICO_SECUNDARIO_ALLOWED,
+            "diagnosticos_secundarios",
+            required=False,
+        )
+
+    if "diagnostico_principal_otro" in data:
+        otro = str(data.get("diagnostico_principal_otro") or "").strip()
+        data["diagnostico_principal_otro"] = otro or None
+    if "diagnosticos_secundarios_otro" in data:
+        otro_sec = str(data.get("diagnosticos_secundarios_otro") or "").strip()
+        data["diagnosticos_secundarios_otro"] = otro_sec or None
+
+    principal_token = normalize_controlled_token(data.get("diagnostico_principal"))
+    secundarios_tokens = split_pipe_tokens(data.get("diagnosticos_secundarios"))
+
+    if "diagnostico_principal" in data:
+        if not principal_token:
+            raise HTTPException(status_code=400, detail="diagnostico_principal es obligatorio.")
+        if principal_token == "otro":
+            if is_missing_value(data.get("diagnostico_principal_otro")):
+                raise HTTPException(
+                    status_code=400,
+                    detail="diagnostico_principal_otro es obligatorio cuando diagnostico_principal=otro.",
+                )
+        else:
+            data["diagnostico_principal_otro"] = None
+
+    if "diagnosticos_secundarios" in data:
+        if "otro_secundario" in secundarios_tokens:
+            if is_missing_value(data.get("diagnosticos_secundarios_otro")):
+                raise HTTPException(
+                    status_code=400,
+                    detail="diagnosticos_secundarios_otro es obligatorio cuando diagnosticos_secundarios incluye otro_secundario.",
+                )
+        else:
+            data["diagnosticos_secundarios_otro"] = None
 
     return data
 
@@ -5601,6 +5915,11 @@ def create_historia_clinica(
             payload = sanitize_payload_strings(data.dict(exclude_unset=True))
             payload.pop("paciente_id", None)
             payload = _normalize_historia_payload(payload)
+            if is_missing_value(payload.get("diagnostico_principal")):
+                raise HTTPException(
+                    status_code=400,
+                    detail="diagnostico_principal es obligatorio al crear historia clínica.",
+                )
 
             if payload:
                 set_parts: list[str] = []
