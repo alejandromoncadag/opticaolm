@@ -4178,7 +4178,7 @@ export default function App() {
   const canViewVentasCantidadMensualChart = isAdmin || isRecep;
   const canViewHistoriaTab = isAdmin || isDoctor;
 
-  const canCreatePaciente = isAdmin || isRecep;
+  const canCreatePaciente = isAdmin || isRecep || isDoctor;
   const canEditPaciente = isAdmin || isRecep || isDoctor;
   const canDeletePaciente = isAdmin;
 
@@ -4773,12 +4773,8 @@ export default function App() {
                   inputMode="numeric"
                   pattern="[0-9]{7,15}"
                   maxLength={PHONE_LOCAL_MAX_DIGITS}
-                  placeholder="7 a 15 digitos"
                   style={{ width: "100%", padding: 10, borderRadius: 10, border: "1px solid #ddd" }}
                 />
-              </div>
-              <div style={{ marginTop: 4, fontSize: 12, opacity: 0.75 }}>
-                Captura entre 7 y 15 dígitos.
               </div>
             </label>
 
