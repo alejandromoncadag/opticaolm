@@ -1598,29 +1598,6 @@ def normalize_country_name(value: str | None) -> str | None:
     raw = str(value).strip()
     if not raw:
         return None
-    folded = raw.lower()
-    for src, dst in (
-        ("á", "a"),
-        ("é", "e"),
-        ("í", "i"),
-        ("ó", "o"),
-        ("ú", "u"),
-        ("ü", "u"),
-    ):
-        folded = folded.replace(src, dst)
-    compact = re.sub(r"[^a-z]", "", folded)
-    canonical = {
-        "mexico": "México",
-        "mex": "México",
-        "mx": "México",
-        "argentina": "Argentina",
-        "argetina": "Argentina",
-        "ar": "Argentina",
-        "venezuela": "Venezuela",
-        "ve": "Venezuela",
-    }
-    if compact in canonical:
-        return canonical[compact]
     return raw
 
 
