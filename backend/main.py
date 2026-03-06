@@ -356,14 +356,14 @@ def ensure_historia_schema():
                 """
                 UPDATE core.historias_clinicas
                 SET
-                  diagnostico_principal = NULLIF(split_part(regexp_replace(lower(trim(COALESCE(diagnostico_principal, ''))), E'\\s*\\|\\s*', '|', 'g'), '|', 1), ''),
+                  diagnostico_principal = NULLIF(regexp_replace(lower(trim(COALESCE(diagnostico_principal, ''))), E'\\s*\\|\\s*', '|', 'g'), ''),
                   diagnosticos_secundarios = NULLIF(regexp_replace(lower(trim(COALESCE(diagnosticos_secundarios, ''))), E'\\s*\\|\\s*', '|', 'g'), ''),
                   diagnostico_principal_otro = CASE
-                    WHEN lower(trim(COALESCE(diagnostico_principal, ''))) = 'otro' THEN NULLIF(trim(diagnostico_principal_otro), '')
+                    WHEN regexp_replace(lower(trim(COALESCE(diagnostico_principal, ''))), E'\\s*\\|\\s*', '|', 'g') ~ '(^|\\|)otro(\\||$)' THEN NULLIF(trim(diagnostico_principal_otro), '')
                     ELSE NULL
                   END,
                   diagnosticos_secundarios_otro = CASE
-                    WHEN lower(COALESCE(diagnosticos_secundarios, '')) LIKE '%otro_secundario%' THEN NULLIF(trim(diagnosticos_secundarios_otro), '')
+                    WHEN regexp_replace(lower(trim(COALESCE(diagnosticos_secundarios, ''))), E'\\s*\\|\\s*', '|', 'g') ~ '(^|\\|)otro_secundario(\\||$)' THEN NULLIF(trim(diagnosticos_secundarios_otro), '')
                     ELSE NULL
                   END
                 WHERE
@@ -2307,7 +2307,7 @@ def export_historias_ml_csv(
       h.sucursal_id,
       h.paciente_id,
       h.created_at_tz,
-      NULLIF(split_part(COALESCE(h.diagnostico_principal, ''), '|', 1), '') AS diagnostico_principal,
+      NULLIF(TRIM(h.diagnostico_principal), '') AS diagnostico_principal,
       NULLIF(TRIM(h.diagnostico_principal_otro), '') AS diagnostico_principal_otro,
       NULLIF(TRIM(h.diagnosticos_secundarios), '') AS diagnosticos_secundarios,
       NULLIF(TRIM(h.diagnosticos_secundarios_otro), '') AS diagnosticos_secundarios_otro,
@@ -4326,22 +4326,12 @@ def _normalize_historia_payload(raw_data: dict[str, Any]) -> dict[str, Any]:
         data["seguimiento_valor"] = None
 
     if "diagnostico_principal" in data:
-        principal = normalize_multi_allowed_tokens(
+        data["diagnostico_principal"] = normalize_multi_allowed_tokens(
             data.get("diagnostico_principal"),
             DIAGNOSTICO_PRINCIPAL_ALLOWED,
             "diagnostico_principal",
             required=False,
         )
-        if not principal:
-            data["diagnostico_principal"] = None
-        else:
-            principal_tokens = split_pipe_tokens(principal)
-            if len(principal_tokens) > 1:
-                raise HTTPException(
-                    status_code=400,
-                    detail="diagnostico_principal debe tener una sola opción.",
-                )
-            data["diagnostico_principal"] = principal_tokens[0]
 
     if "diagnosticos_secundarios" in data:
         data["diagnosticos_secundarios"] = normalize_multi_allowed_tokens(
@@ -4358,17 +4348,17 @@ def _normalize_historia_payload(raw_data: dict[str, Any]) -> dict[str, Any]:
         otro_sec = str(data.get("diagnosticos_secundarios_otro") or "").strip()
         data["diagnosticos_secundarios_otro"] = otro_sec or None
 
-    principal_token = normalize_controlled_token(data.get("diagnostico_principal"))
+    principal_tokens = split_pipe_tokens(data.get("diagnostico_principal"))
     secundarios_tokens = split_pipe_tokens(data.get("diagnosticos_secundarios"))
 
     if "diagnostico_principal" in data:
-        if not principal_token:
+        if not principal_tokens:
             raise HTTPException(status_code=400, detail="diagnostico_principal es obligatorio.")
-        if principal_token == "otro":
+        if "otro" in principal_tokens:
             if is_missing_value(data.get("diagnostico_principal_otro")):
                 raise HTTPException(
                     status_code=400,
-                    detail="diagnostico_principal_otro es obligatorio cuando diagnostico_principal=otro.",
+                    detail="diagnostico_principal_otro es obligatorio cuando diagnostico_principal incluye otro.",
                 )
         else:
             data["diagnostico_principal_otro"] = None

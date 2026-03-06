@@ -1506,11 +1506,12 @@ function normalizeHistoriaForUi(data: any, fallbackDoctor: string) {
     .filter(Boolean)
     .map((token) => normalizeDiagToken(token));
   const diagnosticoPrincipalTokensRaw = splitPipeList(data?.diagnostico_principal ?? "");
-  let diagnosticoPrincipal = diagnosticoPrincipalTokensRaw.find((t) => principalKnown.has(t)) ?? "";
-  if (!diagnosticoPrincipal && diagnosticoPrincipalTokensRaw.length > 1 && diagnosticoPrincipalTokensRaw.every((t) => t.length === 1)) {
+  let diagnosticoPrincipalTokens = diagnosticoPrincipalTokensRaw.filter((t) => principalKnown.has(t));
+  if (diagnosticoPrincipalTokens.length === 0 && diagnosticoPrincipalTokensRaw.length > 1 && diagnosticoPrincipalTokensRaw.every((t) => t.length === 1)) {
     const compact = normalizeDiagToken(diagnosticoPrincipalTokensRaw.join(""));
-    if (principalKnown.has(compact)) diagnosticoPrincipal = compact;
+    if (principalKnown.has(compact)) diagnosticoPrincipalTokens = [compact];
   }
+  let diagnosticoPrincipal = joinPipeList(diagnosticoPrincipalTokens);
   let diagnosticoPrincipalOtro = String(data?.diagnostico_principal_otro ?? "").trim();
   const diagnosticosSecundariosTokensRaw = splitPipeList(data?.diagnosticos_secundarios ?? "");
   let diagnosticosSecundariosTokens = diagnosticosSecundariosTokensRaw.filter((t) => secundarioKnown.has(t));
@@ -1539,11 +1540,11 @@ function normalizeHistoriaForUi(data: any, fallbackDoctor: string) {
       principalOtros.push(token.replace(/_/g, " "));
     }
     const principalList = Array.from(principalSet);
-    diagnosticoPrincipal = principalList[0] ?? "";
+    diagnosticoPrincipal = joinPipeList(principalList);
     diagnosticosSecundarios = joinPipeList(Array.from(secundarioSet));
     diagnosticoPrincipalOtro = diagnosticoPrincipalOtro || principalOtros.join(", ");
   }
-  if (diagnosticoPrincipal !== "otro") {
+  if (!splitPipeList(diagnosticoPrincipal).includes("otro")) {
     diagnosticoPrincipalOtro = "";
   }
   if (!splitPipeList(diagnosticosSecundarios).includes("otro_secundario")) {
@@ -3757,20 +3758,20 @@ export default function App() {
         historiaData?.recomendacion_tratamiento_cantidad,
         historiaData?.recomendacion_tratamiento
       );
-      const diagnosticoPrincipalTokens = splitPipeList(historiaData?.diagnostico_principal ?? "");
-      const diagnosticoPrincipal = diagnosticoPrincipalTokens[0] ?? "";
+      const diagnosticoPrincipalSeleccionados = splitPipeList(historiaData?.diagnostico_principal ?? "");
+      const diagnosticoPrincipal = joinPipeList(diagnosticoPrincipalSeleccionados);
       const diagnosticoPrincipalOtroRaw = String(historiaData?.diagnostico_principal_otro ?? "").trim();
-      if (!diagnosticoPrincipal) {
-        throw new Error("Diagnóstico principal es obligatorio (elige una opción).");
+      if (diagnosticoPrincipalSeleccionados.length === 0) {
+        throw new Error("Diagnóstico principal es obligatorio (elige al menos una opción).");
       }
-      if (diagnosticoPrincipal === "otro" && !diagnosticoPrincipalOtroRaw) {
+      if (diagnosticoPrincipalSeleccionados.includes("otro") && !diagnosticoPrincipalOtroRaw) {
         throw new Error("Escribe el detalle en 'Otro diagnóstico principal'.");
       }
-      const diagnosticoPrincipalOtro = diagnosticoPrincipal === "otro" ? diagnosticoPrincipalOtroRaw : "";
+      const diagnosticoPrincipalOtro = diagnosticoPrincipalSeleccionados.includes("otro") ? diagnosticoPrincipalOtroRaw : "";
       const diagnosticoSecundarioSeleccionados = splitPipeList(historiaData?.diagnosticos_secundarios ?? "");
       const diagnosticoSecundarioOtro = String(historiaData?.diagnosticos_secundarios_otro ?? "").trim();
       const diagnosticoPrincipalResumen = joinPipeList([
-        diagnosticoPrincipal,
+        ...diagnosticoPrincipalSeleccionados,
         ...(diagnosticoPrincipalOtro ? [`otro:${diagnosticoPrincipalOtro}`] : []),
       ]);
       const diagnosticoSecundarioResumen = joinPipeList([
@@ -4232,11 +4233,7 @@ export default function App() {
     .split("|")
     .map((x: string) => x.trim())
     .filter(Boolean);
-  const diagnosticoPrincipalSeleccionados = String(historiaData?.diagnostico_principal ?? "")
-    .split("|")
-    .map((x: string) => x.trim())
-    .filter(Boolean);
-  const diagnosticoPrincipalSeleccionado = diagnosticoPrincipalSeleccionados[0] ?? "";
+  const diagnosticoPrincipalSeleccionados = splitPipeList(historiaData?.diagnostico_principal ?? "");
   const diagnosticoSecundarioSeleccionados = String(historiaData?.diagnosticos_secundarios ?? "")
     .split("|")
     .map((x: string) => x.trim())
@@ -7697,14 +7694,12 @@ export default function App() {
                           {DIAGNOSTICO_PRINCIPAL_OPTIONS.map((opt) => (
                             <label key={`diag-principal-${opt.value}`} style={{ display: "flex", alignItems: "center", gap: 6 }}>
                               <input
-                                type="radio"
-                                name="diagnostico-principal"
-                                checked={diagnosticoPrincipalSeleccionado === opt.value}
+                                type="checkbox"
+                                checked={diagnosticoPrincipalSeleccionados.includes(opt.value)}
                                 onChange={(e) => {
-                                  if (!e.target.checked) return;
                                   const current = historiaData ?? {};
-                                  const next = opt.value;
-                                  const removeOtro = opt.value !== "otro";
+                                  const next = togglePipeValue(current.diagnostico_principal, opt.value, e.target.checked);
+                                  const removeOtro = opt.value === "otro" && !e.target.checked;
                                   setHistoriaData({
                                     ...current,
                                     diagnostico_principal: next,
@@ -7716,7 +7711,7 @@ export default function App() {
                             </label>
                           ))}
                         </div>
-                        {diagnosticoPrincipalSeleccionado === "otro" && (
+                        {diagnosticoPrincipalSeleccionados.includes("otro") && (
                           <input
                             style={historiaItemInputStyle}
                             placeholder="Otro diagnóstico principal"
