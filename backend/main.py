@@ -371,6 +371,9 @@ def ensure_historia_schema():
                   OR diagnosticos_secundarios_otro IS NOT NULL;
                 """
             )
+            repaired_diag_rows = _repair_historia_diag_fields(cur)
+            if repaired_diag_rows:
+                print(f"[startup] historias_clinicas diagnósticos reparados: {repaired_diag_rows}")
             cur.execute(
                 """
                 ALTER TABLE core.historias_clinicas
@@ -1316,6 +1319,10 @@ DIAGNOSTICO_SECUNDARIO_ALLOWED = {
     "cefalea_asociada",
     "otro_secundario",
 }
+DIAGNOSTICO_PRINCIPAL_ALIASES: dict[str, str] = {}
+DIAGNOSTICO_SECUNDARIO_ALIASES: dict[str, str] = {
+    "aniometropia": "anisometropia",
+}
 VENTA_COMPRA_ALLOWED = {
     "examen_de_la_vista",
     "armazon_solo",
@@ -1427,6 +1434,177 @@ def normalize_multi_allowed_tokens(
     if required and not dedup:
         raise HTTPException(status_code=400, detail=f"{field_label} es requerido.")
     return "|".join(dedup) if dedup else None
+
+
+def _fold_ascii_token(value: str | None) -> str:
+    raw = str(value or "").strip().lower()
+    if not raw:
+        return ""
+    for src, dst in (
+        ("á", "a"),
+        ("é", "e"),
+        ("í", "i"),
+        ("ó", "o"),
+        ("ú", "u"),
+        ("ü", "u"),
+        ("ñ", "n"),
+    ):
+        raw = raw.replace(src, dst)
+    return re.sub(r"[^a-z0-9]+", "", raw)
+
+
+def _canonical_diag_token(
+    raw_token: str | None,
+    allowed: set[str],
+    aliases: dict[str, str],
+) -> str | None:
+    token = normalize_controlled_token(raw_token)
+    if token and token in allowed:
+        return token
+
+    compact = _fold_ascii_token(raw_token)
+    if not compact:
+        return None
+    mapped = aliases.get(compact, compact)
+    if mapped in allowed:
+        return mapped
+    return None
+
+
+def _extract_diag_general_segment(diagnostico_general: str | None, section: str) -> str:
+    text = str(diagnostico_general or "")
+    if not text.strip():
+        return ""
+    pattern = re.compile(rf"(?im)^\s*{section}\s*:\s*(.+)$")
+    m = pattern.search(text)
+    if not m:
+        return ""
+    return str(m.group(1) or "").strip()
+
+
+def _best_effort_diag_tokens(
+    raw_value: str | None,
+    allowed: set[str],
+    aliases: dict[str, str],
+    diagnostico_general: str | None,
+    general_section: str,
+) -> list[str]:
+    tokens = split_pipe_tokens(raw_value)
+    out: list[str] = []
+    for token in tokens:
+        canonical = _canonical_diag_token(token, allowed, aliases)
+        if canonical:
+            out.append(canonical)
+    out = list(dict.fromkeys(out))
+    if out:
+        return out
+
+    # Corrige patrones dañados tipo a|n|i|s|o|...
+    compact = _canonical_diag_token("".join(tokens), allowed, aliases)
+    if compact:
+        return [compact]
+
+    # Fallback: intenta recuperar desde diagnostico_general legacy.
+    segment = _extract_diag_general_segment(diagnostico_general, general_section)
+    if segment:
+        seg_tokens: list[str] = []
+        for piece in re.split(r"[|,;/]+", segment):
+            canonical = _canonical_diag_token(piece, allowed, aliases)
+            if canonical:
+                seg_tokens.append(canonical)
+        seg_tokens = list(dict.fromkeys(seg_tokens))
+        if seg_tokens:
+            return seg_tokens
+
+        compact_segment = _canonical_diag_token(segment, allowed, aliases)
+        if compact_segment:
+            return [compact_segment]
+
+    return []
+
+
+def _repair_historia_diag_fields(cur) -> int:
+    cur.execute(
+        """
+        SELECT
+          historia_id,
+          diagnostico_general,
+          diagnostico_principal,
+          diagnostico_principal_otro,
+          diagnosticos_secundarios,
+          diagnosticos_secundarios_otro
+        FROM core.historias_clinicas
+        WHERE activo = true;
+        """
+    )
+    rows = cur.fetchall()
+    repaired = 0
+
+    for historia_id, diag_general, diag_principal, diag_principal_otro, diag_sec, diag_sec_otro in rows:
+        principal_tokens = _best_effort_diag_tokens(
+            diag_principal,
+            DIAGNOSTICO_PRINCIPAL_ALLOWED,
+            DIAGNOSTICO_PRINCIPAL_ALIASES,
+            diag_general,
+            "principal",
+        )
+        secundarios_tokens = _best_effort_diag_tokens(
+            diag_sec,
+            DIAGNOSTICO_SECUNDARIO_ALLOWED,
+            DIAGNOSTICO_SECUNDARIO_ALIASES,
+            diag_general,
+            "secundarios?",
+        )
+
+        next_principal = "|".join(principal_tokens) if principal_tokens else None
+        next_secundarios = "|".join(secundarios_tokens) if secundarios_tokens else None
+        next_principal_otro = str(diag_principal_otro or "").strip() or None
+        next_sec_otro = str(diag_sec_otro or "").strip() or None
+
+        if "otro" not in principal_tokens:
+            next_principal_otro = None
+        if "otro_secundario" not in secundarios_tokens:
+            next_sec_otro = None
+
+        current_principal_tokens = [
+            t for t in split_pipe_tokens(diag_principal) if t in DIAGNOSTICO_PRINCIPAL_ALLOWED
+        ]
+        current_secundarios_tokens = [
+            t for t in split_pipe_tokens(diag_sec) if t in DIAGNOSTICO_SECUNDARIO_ALLOWED
+        ]
+        current_principal = "|".join(list(dict.fromkeys(current_principal_tokens))) or None
+        current_secundarios = "|".join(list(dict.fromkeys(current_secundarios_tokens))) or None
+        current_principal_otro = str(diag_principal_otro or "").strip() or None
+        current_sec_otro = str(diag_sec_otro or "").strip() or None
+
+        if (
+            current_principal != next_principal
+            or current_secundarios != next_secundarios
+            or current_principal_otro != next_principal_otro
+            or current_sec_otro != next_sec_otro
+        ):
+            cur.execute(
+                """
+                UPDATE core.historias_clinicas
+                SET
+                  diagnostico_principal = %s,
+                  diagnostico_principal_otro = %s,
+                  diagnosticos_secundarios = %s,
+                  diagnosticos_secundarios_otro = %s,
+                  updated_at = NOW()
+                WHERE historia_id = %s;
+                """,
+                (
+                    next_principal,
+                    next_principal_otro,
+                    next_secundarios,
+                    next_sec_otro,
+                    historia_id,
+                ),
+            )
+            repaired += 1
+
+    return repaired
 
 
 def extract_consulta_from_tipo(tipo_consulta: str | None) -> tuple[str | None, str | None]:
