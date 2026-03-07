@@ -1906,7 +1906,7 @@ def _resolve_export_date_range(desde: str | None, hasta: str | None, sucursal_id
         hasta_date = None
 
     if desde_date is None and hasta_date is None:
-        tz_name = _timezone_for_sucursal(sucursal_id) if sucursal_id is not None else "UTC"
+        tz_name = _timezone_for_sucursal(sucursal_id) if sucursal_id is not None else "America/Mexico_City"
         today = datetime.now(ZoneInfo(tz_name)).date()
         desde_date = date(today.year, today.month, 1)
         hasta_date = date(today.year, today.month, monthrange(today.year, today.month)[1])
@@ -1929,6 +1929,13 @@ def _csv_value(value: Any) -> Any:
     if isinstance(value, bool):
         return "true" if value else "false"
     return value
+
+
+def _sql_export_local_date_expr(ts_col_ref: str, sucursal_col_ref: str) -> str:
+    return (
+        f"DATE({ts_col_ref} AT TIME ZONE "
+        f"(CASE WHEN {sucursal_col_ref} = 2 THEN 'America/Cancun' ELSE 'America/Mexico_City' END))"
+    )
 
 
 def _stream_csv_query(sql: str, params: tuple[Any, ...], headers: list[str], delimiter_char: str):
@@ -1981,6 +1988,20 @@ def _sql_humanize_anios_expr(sql_col_ref: str) -> str:
         f"WHEN {sql_col_ref} IS NULL THEN NULL "
         f"WHEN regexp_replace(lower({sql_col_ref}), E'\\\\s+', '', 'g') IN ('1|anios', '1|anos', '1|ano', '1|año', '1|años', '1.0|anios', '1.0|anos', '1.0|ano', '1.0|año', '1.0|años') THEN '1|año' "
         f"ELSE {text_expr} "
+        f"END"
+    )
+
+
+def _sql_humanize_uso_pantalla_oscuridad_expr(sql_col_ref: str) -> str:
+    return (
+        f"CASE "
+        f"WHEN {sql_col_ref} IS NULL OR TRIM({sql_col_ref}) = '' THEN NULL "
+        f"WHEN lower(trim({sql_col_ref})) IN ('lt_30min', 'lt-30min', '0_30min', '0-30min') THEN '0-30 minutos' "
+        f"WHEN lower(trim({sql_col_ref})) IN ('30min_1h', '30min-1h') THEN '30 minutos - 1 hora' "
+        f"WHEN lower(trim({sql_col_ref})) IN ('2h_4h', '2h-4h') THEN '2 horas - 4 horas' "
+        f"WHEN lower(trim({sql_col_ref})) IN ('4h_6h', '4h-6h') THEN '4 horas - 6 horas' "
+        f"WHEN lower(trim({sql_col_ref})) IN ('6h_plus', '6h+plus', '6h_plus_h') THEN '+6 horas' "
+        f"ELSE TRIM({sql_col_ref}) "
         f"END"
     )
 
@@ -2051,7 +2072,8 @@ def export_consultas_csv(
                     raise HTTPException(status_code=400, detail="doctor_id inválido o inactivo.")
                 doctor_username = str(row[0])
 
-    where = ["c.activo = true", "DATE(c.fecha_hora) BETWEEN %s AND %s"]
+    consulta_fecha_local_expr = _sql_export_local_date_expr("c.fecha_hora", "c.sucursal_id")
+    where = ["c.activo = true", f"{consulta_fecha_local_expr} BETWEEN %s AND %s"]
     params: list[Any] = [desde_date, hasta_date]
     if sid is not None:
         where.append("c.sucursal_id = %s")
@@ -2137,7 +2159,8 @@ def export_ventas_csv(
                     raise HTTPException(status_code=400, detail="doctor_id inválido o inactivo.")
                 doctor_username = str(row[0])
 
-    where = ["v.activo = true", "DATE(v.fecha_hora) BETWEEN %s AND %s"]
+    venta_fecha_local_expr = _sql_export_local_date_expr("v.fecha_hora", "v.sucursal_id")
+    where = ["v.activo = true", f"{venta_fecha_local_expr} BETWEEN %s AND %s"]
     params: list[Any] = [desde_date, hasta_date]
     if sid is not None:
         where.append("v.sucursal_id = %s")
@@ -2210,7 +2233,8 @@ def export_pacientes_csv(
     delimiter_char = _parse_export_delimiter(delimiter)
     desde_date, hasta_date = _resolve_export_date_range(desde, hasta, sid)
 
-    where = ["p.activo = true", "DATE(p.creado_en) BETWEEN %s AND %s"]
+    paciente_fecha_local_expr = _sql_export_local_date_expr("p.creado_en", "p.sucursal_id")
+    where = ["p.activo = true", f"{paciente_fecha_local_expr} BETWEEN %s AND %s"]
     params: list[Any] = [desde_date, hasta_date]
     if sid is not None:
         where.append("p.sucursal_id = %s")
@@ -2361,6 +2385,9 @@ def export_historias_clinicas_csv(
             f"ELSE {_sql_humanize_anios_text_expr('h.tiempo_uso_lentes')} "
             "END AS tiempo_uso_lentes"
         ),
+        "uso_pantalla_en_oscuridad": (
+            f"{_sql_humanize_uso_pantalla_oscuridad_expr('h.uso_pantalla_en_oscuridad')} AS uso_pantalla_en_oscuridad"
+        ),
     }
     select_cols = ",\n      ".join([select_expr_overrides.get(col, f"h.{col}") for col in headers])
     sql = f"""
@@ -2505,7 +2532,7 @@ def export_historias_ml_csv(
       NULLIF(TRIM(h.antecedentes_generales), '') AS antecedentes_generales,
       NULLIF(TRIM(h.antecedentes_oculares_familiares), '') AS antecedentes_oculares_familiares,
       NULLIF(TRIM(h.exposicion_uv), '') AS exposicion_uv,
-      NULLIF(TRIM(h.uso_pantalla_en_oscuridad), '') AS uso_pantalla_en_oscuridad,
+      {_sql_humanize_uso_pantalla_oscuridad_expr('h.uso_pantalla_en_oscuridad')} AS uso_pantalla_en_oscuridad,
       NULLIF(TRIM(h.nivel_educativo), '') AS nivel_educativo,
       NULLIF(TRIM(h.horas_lectura_dia), '') AS horas_lectura_dia,
       NULLIF(TRIM(h.horas_exterior_dia), '') AS horas_exterior_dia,

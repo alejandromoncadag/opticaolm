@@ -868,7 +868,7 @@ const CONDUCCION_NOCTURNA_OPTIONS = [
   { value: "4_plus_h", label: "4+h" },
 ] as const;
 const USO_PANTALLA_OSCURIDAD_UNIDAD_OPTIONS = [
-  { value: "lt_30min", label: "<30 minutos" },
+  { value: "lt_30min", label: "0-30 minutos" },
   { value: "30min_1h", label: "30 minutos - 1 hora" },
   { value: "2h_4h", label: "2 horas - 4 horas" },
   { value: "4h_6h", label: "4 horas - 6 horas" },
