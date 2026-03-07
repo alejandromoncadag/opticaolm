@@ -2644,16 +2644,20 @@ def export_diccionario_columnas_fisico_csv(
 
 @app.post("/login", summary="Login (devuelve JWT)")
 def login(data: LoginIn):
+    login_username = str(data.username or "").strip()
+    if not login_username:
+        raise HTTPException(status_code=401, detail="Credenciales inválidas.")
+
     # 1) buscar usuario activo
     sql = """
     SELECT username, password_hash, role, sucursal_id, activo, pwd_changed_at
     FROM core.usuarios
-    WHERE username = %s
+    WHERE LOWER(TRIM(username)) = LOWER(%s)
     LIMIT 1;
     """
     with psycopg.connect(DB_CONNINFO) as conn:
         with conn.cursor() as cur:
-            cur.execute(sql, (data.username,))
+            cur.execute(sql, (login_username,))
             row = cur.fetchone()
 
     if row is None:
