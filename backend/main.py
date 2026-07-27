@@ -9,6 +9,7 @@ from passlib.hash import argon2
 from pydantic import BaseModel
 from typing import Optional, Any
 from datetime import datetime, timedelta, timezone, date, time
+import calendar
 from decimal import Decimal, InvalidOperation
 from zoneinfo import ZoneInfo
 import json
@@ -219,8 +220,10 @@ def ensure_historia_schema():
                 ADD COLUMN IF NOT EXISTS diabetes_control text,
                 ADD COLUMN IF NOT EXISTS diabetes_anios text,
                 ADD COLUMN IF NOT EXISTS diabetes_tratamiento text,
+                ADD COLUMN IF NOT EXISTS diabetes_tratamiento_otro text,
                 ADD COLUMN IF NOT EXISTS usa_lentes boolean,
                 ADD COLUMN IF NOT EXISTS tipo_lentes_actual text,
+                ADD COLUMN IF NOT EXISTS lentes_actuales_detalle text,
                 ADD COLUMN IF NOT EXISTS tiempo_uso_lentes text,
                 ADD COLUMN IF NOT EXISTS lentes_contacto_horas_dia text,
                 ADD COLUMN IF NOT EXISTS lentes_contacto_dias_semana text,
@@ -240,8 +243,16 @@ def ensure_historia_schema():
                 ADD COLUMN IF NOT EXISTS uso_lentes_proteccion_uv text,
                 ADD COLUMN IF NOT EXISTS uso_lentes_sol_frecuencia text,
                 ADD COLUMN IF NOT EXISTS horas_exterior_dia text,
+                ADD COLUMN IF NOT EXISTS uso_lentes_sol_horas_dia text,
+                ADD COLUMN IF NOT EXISTS usa_lentes_manejar_dia boolean,
+                ADD COLUMN IF NOT EXISTS tipo_lentes_manejar_dia text,
+                ADD COLUMN IF NOT EXISTS tratamientos_lentes_manejar_dia text,
+                ADD COLUMN IF NOT EXISTS usa_lentes_manejar_noche boolean,
+                ADD COLUMN IF NOT EXISTS tipo_lentes_manejar_noche text,
+                ADD COLUMN IF NOT EXISTS tratamientos_lentes_manejar_noche text,
                 ADD COLUMN IF NOT EXISTS nivel_educativo text,
                 ADD COLUMN IF NOT EXISTS horas_lectura_dia text,
+                ADD COLUMN IF NOT EXISTS lee_libros boolean,
                 ADD COLUMN IF NOT EXISTS horas_sueno_promedio text,
                 ADD COLUMN IF NOT EXISTS estres_nivel text,
                 ADD COLUMN IF NOT EXISTS peso_kg numeric(5,1),
@@ -761,7 +772,6 @@ def ensure_reporting_views():
 
             cur.execute(
                 """
-                DROP VIEW IF EXISTS core.consultas_detalle;
                 DROP VIEW IF EXISTS core.ventas_detalle;
                 DROP VIEW IF EXISTS core.pacientes_detalle;
                 """
@@ -1198,8 +1208,10 @@ class HistoriaClinicaBase(BaseModel):
     diabetes_control: Optional[str] = None
     diabetes_anios: Optional[str] = None
     diabetes_tratamiento: Optional[str] = None
+    diabetes_tratamiento_otro: Optional[str] = None
     usa_lentes: Optional[bool] = None
     tipo_lentes_actual: Optional[str] = None
+    lentes_actuales_detalle: Optional[str] = None
     tiempo_uso_lentes: Optional[str] = None
     lentes_contacto_horas_dia: Optional[str] = None
     lentes_contacto_dias_semana: Optional[str] = None
@@ -1215,8 +1227,16 @@ class HistoriaClinicaBase(BaseModel):
     flotadores_destellos: Optional[str] = None
     flotadores_lateralidad: Optional[str] = None
     horas_exterior_dia: Optional[str] = None
+    uso_lentes_sol_horas_dia: Optional[str] = None
+    usa_lentes_manejar_dia: Optional[bool] = None
+    tipo_lentes_manejar_dia: Optional[str] = None
+    tratamientos_lentes_manejar_dia: Optional[str] = None
+    usa_lentes_manejar_noche: Optional[bool] = None
+    tipo_lentes_manejar_noche: Optional[str] = None
+    tratamientos_lentes_manejar_noche: Optional[str] = None
     nivel_educativo: Optional[str] = None
     horas_lectura_dia: Optional[str] = None
+    lee_libros: Optional[bool] = None
     horas_sueno_promedio: Optional[str] = None
     estres_nivel: Optional[str] = None
     peso_kg: Optional[float] = None
@@ -1288,8 +1308,32 @@ class HistoriaClinicaUpdate(HistoriaClinicaBase):
 class HistoriaEstadoBatchIn(BaseModel):
     paciente_ids: list[int]
 
-COMO_NOS_CONOCIO_VALUES = {"instagram", "fb", "google", "linkedin", "linkedln", "referencia"}
-COMO_NOS_CONOCIO_CANONICAL = {"linkedln": "linkedin"}
+COMO_NOS_CONOCIO_VALUES = {
+    "instagram",
+    "facebook",
+    "tiktok",
+    "google_maps",
+    "whatsapp",
+    "pagina_web",
+    "paso_sucursal",
+    "referencia_familiar_amigo",
+    "cliente_anterior",
+    "campana_evento",
+    "publicidad_impresa",
+    "otro",
+    # Valores legacy conservados para registros existentes.
+    "fb",
+    "google",
+    "linkedin",
+    "linkedln",
+    "referencia",
+}
+COMO_NOS_CONOCIO_CANONICAL = {
+    "fb": "facebook",
+    "google": "google_maps",
+    "linkedln": "linkedin",
+    "referencia": "referencia_familiar_amigo",
+}
 CONSULTA_ETAPA_ALLOWED = {"primera_vez_en_clinica", "seguimiento"}
 CONSULTA_MOTIVO_ALLOWED = {"revision_general", "graduacion_lentes", "lentes_contacto", "molestia", "otro"}
 DIAGNOSTICO_PRINCIPAL_ALLOWED = {
@@ -1358,7 +1402,7 @@ def normalize_como_nos_conocio(value: str | None) -> str | None:
     if v not in COMO_NOS_CONOCIO_VALUES:
         raise HTTPException(
             status_code=400,
-            detail="como_nos_conocio inválido. Usa: instagram, fb, google, linkedin o referencia.",
+            detail="como_nos_conocio inválido.",
         )
     return COMO_NOS_CONOCIO_CANONICAL.get(v, v)
 
@@ -1756,13 +1800,13 @@ def normalize_patient_phone(value: str | None) -> str | None:
             raise HTTPException(status_code=400, detail="Teléfono inválido. Usa código país + número.")
         country_code = m.group(1)
         local_digits = re.sub(r"\D", "", m.group(2))
-        if len(local_digits) < 7 or len(local_digits) > 15:
-            raise HTTPException(status_code=400, detail="Teléfono debe tener entre 7 y 15 dígitos.")
+        if len(local_digits) < 7 or len(local_digits) > 10:
+            raise HTTPException(status_code=400, detail="Teléfono debe tener entre 7 y 10 dígitos.")
         return f"+{country_code} {local_digits}"
 
     digits = re.sub(r"\D", "", raw)
-    if len(digits) < 7 or len(digits) > 15:
-        raise HTTPException(status_code=400, detail="Teléfono debe tener entre 7 y 15 dígitos.")
+    if len(digits) < 7 or len(digits) > 10:
+        raise HTTPException(status_code=400, detail="Teléfono debe tener entre 7 y 10 dígitos.")
     return digits
 
 
@@ -4067,7 +4111,7 @@ def crear_paciente(p: PacienteCreate, user=Depends(get_current_user)):
     p.telefono = normalize_patient_phone(p.telefono)
     p.pais = normalize_country_name(p.pais)
     if not p.telefono:
-        raise HTTPException(status_code=400, detail="Teléfono es obligatorio y debe tener entre 7 y 15 dígitos.")
+        raise HTTPException(status_code=400, detail="Teléfono es obligatorio y debe tener entre 7 y 10 dígitos.")
     
 
     cp_value = p.cp if p.cp not in (None, "") else p.codigo_postal
@@ -4150,7 +4194,7 @@ def actualizar_paciente(paciente_id: int, p: PacienteCreate, user=Depends(get_cu
     p.telefono = normalize_patient_phone(p.telefono)
     p.pais = normalize_country_name(p.pais)
     if not p.telefono:
-        raise HTTPException(status_code=400, detail="Teléfono es obligatorio y debe tener entre 7 y 15 dígitos.")
+        raise HTTPException(status_code=400, detail="Teléfono es obligatorio y debe tener entre 7 y 10 dígitos.")
 
 
     cp_value = p.cp if p.cp not in (None, "") else p.codigo_postal
@@ -4439,14 +4483,17 @@ HISTORIA_ALLOWED_FIELDS = {
     "drogas_consumo", "drogas_tipos", "drogas_frecuencia",
     "deporte_frecuencia", "deporte_duracion", "deporte_tipos",
     "hipertension", "medicamentos",
-    "diabetes_estado", "diabetes_control", "diabetes_anios", "diabetes_tratamiento",
-    "usa_lentes", "tipo_lentes_actual", "tiempo_uso_lentes",
+    "diabetes_estado", "diabetes_control", "diabetes_anios", "diabetes_tratamiento", "diabetes_tratamiento_otro",
+    "usa_lentes", "tipo_lentes_actual", "lentes_actuales_detalle", "tiempo_uso_lentes",
     "lentes_contacto_horas_dia", "lentes_contacto_dias_semana", "sintomas",
     "uso_lentes_proteccion_uv", "uso_lentes_sol_frecuencia",
     "fotofobia_escala", "dolor_ocular_escala", "cefalea_frecuencia",
     "trabajo_cerca_horas_dia", "distancia_promedio_pantalla_cm", "iluminacion_trabajo",
     "flotadores_destellos", "flotadores_lateralidad",
-    "horas_exterior_dia", "nivel_educativo", "horas_lectura_dia",
+    "horas_exterior_dia", "uso_lentes_sol_horas_dia",
+    "usa_lentes_manejar_dia", "tipo_lentes_manejar_dia", "tratamientos_lentes_manejar_dia",
+    "usa_lentes_manejar_noche", "tipo_lentes_manejar_noche", "tratamientos_lentes_manejar_noche",
+    "nivel_educativo", "horas_lectura_dia", "lee_libros",
     "horas_sueno_promedio", "estres_nivel", "peso_kg", "altura_cm",
     "sintomas_al_despertar", "sintomas_al_despertar_otro",
     "convive_mascotas", "convive_mascotas_otro",
@@ -5278,8 +5325,8 @@ def estadisticas_resumen(
             top_pacientes_consultas_rows = cur.fetchall()
 
             pacientes_modo_clean = (pacientes_modo or "mes").strip().lower()
-            if pacientes_modo_clean not in {"dia", "semana", "mes", "rango"}:
-                raise HTTPException(status_code=400, detail="pacientes_modo inválido. Usa: dia, semana, mes o rango.")
+            if pacientes_modo_clean not in {"dia", "semana", "mes", "anio", "rango"}:
+                raise HTTPException(status_code=400, detail="pacientes_modo inválido. Usa: dia, semana, mes, anio o rango.")
 
             p_anio = pacientes_anio or hoy.year
             p_mes = pacientes_mes or hoy.month
@@ -5292,7 +5339,7 @@ def estadisticas_resumen(
 
             pacientes_label = ""
             pacientes_series: list[dict[str, Any]] = []
-            if pacientes_modo_clean == "mes":
+            if pacientes_modo_clean == "anio":
                 cur.execute(
                     f"""
                     SELECT EXTRACT(MONTH FROM p.creado_en)::int AS mes_idx, COUNT(*)::int AS total
@@ -5314,6 +5361,29 @@ def estadisticas_resumen(
                     for idx in range(1, 13)
                 ]
                 pacientes_label = f"Pacientes creados por mes ({p_anio})"
+            elif pacientes_modo_clean == "mes":
+                _, last_day = calendar.monthrange(p_anio, p_mes)
+                p_desde = date(p_anio, p_mes, 1)
+                p_hasta = date(p_anio, p_mes, last_day)
+                cur.execute(
+                    f"""
+                    SELECT DATE(p.creado_en) AS dia, COUNT(*)::int AS total
+                    FROM core.pacientes p
+                    WHERE p.activo = true
+                      AND p.sucursal_id = %s
+                      AND DATE(p.creado_en) BETWEEN %s AND %s
+                      {p_extra_sql}
+                    GROUP BY dia
+                    ORDER BY dia;
+                    """,
+                    (sucursal_id, p_desde, p_hasta, *p_extra_params),
+                )
+                day_map = {str(r[0]): int(r[1]) for r in cur.fetchall()}
+                pacientes_series = [
+                    {"etiqueta": str(day), "total": int(day_map.get(str(day), 0))}
+                    for day in (p_desde + timedelta(days=offset) for offset in range(last_day))
+                ]
+                pacientes_label = f"Pacientes creados por día ({p_mes:02d}/{p_anio})"
             elif pacientes_modo_clean == "dia":
                 if pacientes_fecha:
                     try:
@@ -5987,14 +6057,17 @@ def get_historia_clinica(
                    drogas_consumo, drogas_tipos, drogas_frecuencia,
                    deporte_frecuencia, deporte_duracion, deporte_tipos,
                    hipertension, medicamentos,
-                   diabetes_estado, diabetes_control, diabetes_anios, diabetes_tratamiento,
-                   usa_lentes, tipo_lentes_actual, tiempo_uso_lentes,
+                   diabetes_estado, diabetes_control, diabetes_anios, diabetes_tratamiento, diabetes_tratamiento_otro,
+                   usa_lentes, tipo_lentes_actual, lentes_actuales_detalle, tiempo_uso_lentes,
                    lentes_contacto_horas_dia, lentes_contacto_dias_semana, sintomas,
                    uso_lentes_proteccion_uv, uso_lentes_sol_frecuencia,
                    fotofobia_escala, dolor_ocular_escala, cefalea_frecuencia,
                    trabajo_cerca_horas_dia, distancia_promedio_pantalla_cm, iluminacion_trabajo,
                    flotadores_destellos, flotadores_lateralidad,
-                   horas_exterior_dia, nivel_educativo, horas_lectura_dia,
+                   horas_exterior_dia, uso_lentes_sol_horas_dia,
+                   usa_lentes_manejar_dia, tipo_lentes_manejar_dia, tratamientos_lentes_manejar_dia,
+                   usa_lentes_manejar_noche, tipo_lentes_manejar_noche, tratamientos_lentes_manejar_noche,
+                   nivel_educativo, horas_lectura_dia, lee_libros,
                    horas_sueno_promedio, estres_nivel, peso_kg, altura_cm,
                    sintomas_al_despertar, sintomas_al_despertar_otro,
                    convive_mascotas, convive_mascotas_otro,

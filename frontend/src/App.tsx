@@ -245,6 +245,229 @@ type Sucursal = {
   activa: boolean;
 };
 
+type AddressSelection = {
+  calle: string;
+  numero: string;
+  colonia: string;
+  codigo_postal: string;
+  municipio: string;
+  estado_direccion: string;
+  pais: string;
+};
+
+type GoogleMapsDiagnostic = {
+  phase: string;
+  scriptRequestStarted: boolean;
+  windowGoogleExists: boolean;
+  googleMapsExists: boolean;
+  googleMapsPlacesExists: boolean;
+  errorMessage: string | null;
+};
+
+let googlePlacesLoader: Promise<any> | null = null;
+let googleMapsBootstrapPromise: Promise<void> | null = null;
+
+function getGoogleMapsDiagnostic(
+  phase: string,
+  scriptRequestStarted: boolean,
+  errorMessage: string | null = null,
+): GoogleMapsDiagnostic {
+  const googleWindow = window as any;
+  return {
+    phase,
+    scriptRequestStarted,
+    windowGoogleExists: Boolean(googleWindow.google),
+    googleMapsExists: Boolean(googleWindow.google?.maps),
+    googleMapsPlacesExists: Boolean(googleWindow.google?.maps?.places),
+    errorMessage,
+  };
+}
+
+function loadGooglePlaces(
+  apiKey: string,
+  onDiagnostic: (diagnostic: GoogleMapsDiagnostic) => void,
+): Promise<any> {
+  const googleWindow = window as any;
+  onDiagnostic(getGoogleMapsDiagnostic("Comprobando Google Maps", false));
+
+  if (googlePlacesLoader) {
+    onDiagnostic(getGoogleMapsDiagnostic("Esperando una solicitud de Google Maps existente", true));
+    return googlePlacesLoader;
+  }
+
+  if (
+    googleWindow.google?.maps
+    && typeof googleWindow.google.maps.importLibrary !== "function"
+  ) {
+    document
+      .querySelectorAll<HTMLScriptElement>("script[data-olm-google-maps]")
+      .forEach((script) => script.remove());
+    delete googleWindow.google;
+  }
+
+  const google = (googleWindow.google ||= {});
+  const maps = (google.maps ||= {});
+
+  if (typeof maps.importLibrary !== "function") {
+    const requestedLibraries = new Set<string>();
+
+    const loadScriptOnce = () => {
+      if (googleMapsBootstrapPromise) return googleMapsBootstrapPromise;
+
+      googleMapsBootstrapPromise = new Promise<void>((resolve, reject) => {
+        const script = document.createElement("script");
+        const params = new URLSearchParams();
+
+        params.set("key", apiKey);
+        params.set("v", "weekly");
+        params.set("libraries", [...requestedLibraries].join(","));
+        params.set("language", "es");
+        params.set("region", "MX");
+        params.set("callback", "google.maps.__ib__");
+
+        maps.__ib__ = resolve;
+        script.async = true;
+        script.dataset.olmGoogleMaps = "dynamic";
+        script.src = `https://maps.googleapis.com/maps/api/js?${params.toString()}`;
+        script.nonce = document.querySelector<HTMLScriptElement>("script[nonce]")?.nonce ?? "";
+        script.onerror = () => {
+          const error = new Error("La solicitud del script de Google Maps falló.");
+          onDiagnostic(getGoogleMapsDiagnostic("Falló la solicitud del script", true, error.message));
+          reject(error);
+        };
+
+        onDiagnostic(getGoogleMapsDiagnostic("Solicitud Dynamic Library Import iniciada", true));
+        document.head.appendChild(script);
+      });
+
+      return googleMapsBootstrapPromise;
+    };
+
+    maps.importLibrary = (libraryName: string, ...args: any[]) => {
+      requestedLibraries.add(libraryName);
+      return loadScriptOnce().then(() => maps.importLibrary(libraryName, ...args));
+    };
+  } else {
+    onDiagnostic(getGoogleMapsDiagnostic("Dynamic Library Import ya estaba instalado", false));
+  }
+
+  googlePlacesLoader = (async () => {
+    try {
+      onDiagnostic(getGoogleMapsDiagnostic("Importando Places", true));
+      const placesLibrary = await googleWindow.google.maps.importLibrary("places");
+      onDiagnostic(getGoogleMapsDiagnostic("Places importado correctamente", true));
+      return placesLibrary;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      onDiagnostic(getGoogleMapsDiagnostic("Falló la importación de Places", true, message));
+      throw error;
+    }
+  })();
+
+  return googlePlacesLoader;
+}
+
+function GoogleAddressFinder({ onSelect }: { onSelect: (address: AddressSelection) => void }) {
+  const mountRef = useRef<HTMLDivElement | null>(null);
+  const onSelectRef = useRef(onSelect);
+  onSelectRef.current = onSelect;
+  const [status, setStatus] = useState<"loading" | "ready" | "unavailable" | "error">("loading");
+  const [, setDiagnostic] = useState<GoogleMapsDiagnostic>(() =>
+    getGoogleMapsDiagnostic("Inicializando", false),
+  );
+  const apiKey = (import.meta.env.VITE_GOOGLE_MAPS_API_KEY as string | undefined)?.trim() ?? "";
+
+  useEffect(() => {
+    const mount = mountRef.current;
+    if (!mount) return;
+    if (!apiKey) {
+      setStatus("unavailable");
+      setDiagnostic(getGoogleMapsDiagnostic("Clave no configurada", false, "VITE_GOOGLE_MAPS_API_KEY no está configurada."));
+      return;
+    }
+
+    let disposed = false;
+    let autocomplete: any = null;
+
+    loadGooglePlaces(apiKey, setDiagnostic)
+      .then(({ PlaceAutocompleteElement }) => {
+        if (disposed || !mountRef.current) return;
+
+        autocomplete = new PlaceAutocompleteElement({
+          includedPrimaryTypes: ["street_address"],
+          includedRegionCodes: ["mx"],
+          requestedLanguage: "es",
+          requestedRegion: "mx",
+        });
+        autocomplete.placeholder = "Empieza a escribir una dirección real...";
+        autocomplete.className = "olm-google-address";
+        autocomplete.addEventListener("gmp-select", async (event: any) => {
+          try {
+            const place = event.placePrediction.toPlace();
+            await place.fetchFields({ fields: ["addressComponents"] });
+            const components = place.addressComponents ?? [];
+            const byType = (type: string) => {
+              const component = components.find((item: any) => item.types?.includes(type));
+              return String(component?.longText ?? "").trim();
+            };
+
+            onSelectRef.current({
+              calle: byType("route") || byType("street_address"),
+              numero: byType("street_number"),
+              colonia: byType("neighborhood") || byType("sublocality_level_1") || byType("sublocality"),
+              codigo_postal: byType("postal_code"),
+              municipio: byType("locality") || byType("administrative_area_level_2") || byType("sublocality_level_1"),
+              estado_direccion: byType("administrative_area_level_1"),
+              pais: byType("country"),
+            });
+          } catch {
+            setStatus("error");
+          }
+        });
+
+        mountRef.current.replaceChildren(autocomplete);
+        setStatus("ready");
+        setDiagnostic(getGoogleMapsDiagnostic("Autocomplete listo", true));
+      })
+      .catch((error) => {
+        if (!disposed) {
+          const message = error instanceof Error ? error.message : String(error);
+          setStatus("error");
+          setDiagnostic((current) => ({
+            ...getGoogleMapsDiagnostic(current.phase || "Error de carga", current.scriptRequestStarted, message),
+          }));
+        }
+      });
+
+    return () => {
+      disposed = true;
+      autocomplete?.remove();
+    };
+  }, [apiKey]);
+
+  return (
+    <div className="olm-address-finder">
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center", marginBottom: 7 }}>
+        <span style={{ fontWeight: 850, color: "#24485b" }}>Buscar dirección con Google</span>
+        {status === "ready" && <span className="olm-address-status">Direcciones verificadas</span>}
+      </div>
+      <div ref={mountRef} />
+      {status === "loading" && <div className="olm-address-help">Cargando buscador de direcciones…</div>}
+      {status === "unavailable" && (
+        <div className="olm-address-help">Buscador pendiente de configuración. Los campos manuales siguen disponibles.</div>
+      )}
+      {status === "error" && (
+        <div className="olm-address-help olm-address-help-error">
+          Google no pudo cargar. Puedes completar la dirección manualmente.
+        </div>
+      )}
+      {status === "ready" && (
+        <div className="olm-address-help">Selecciona una sugerencia para completar automáticamente los campos.</div>
+      )}
+    </div>
+  );
+}
+
 type ExportCsvTipo =
   | "consultas"
   | "ventas"
@@ -261,11 +484,11 @@ const API =
   || "https://opticaolm-production.up.railway.app";
 
 function parseUiScale(raw: string | undefined): number {
-  const fallback = 0.67;
+  const fallback = 1;
   if (!raw) return fallback;
   const parsed = Number(raw);
   if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
-  return Math.max(0.5, Math.min(1.25, parsed));
+  return Math.max(1, Math.min(1.25, parsed));
 }
 
 const APP_UI_SCALE = parseUiScale((import.meta.env.VITE_UI_SCALE as string | undefined)?.trim());
@@ -366,7 +589,7 @@ const PHONE_COUNTRIES: PhoneCountryOption[] = [
 
 const DEFAULT_PHONE_COUNTRY = "MX";
 const PHONE_LOCAL_MIN_DIGITS = 7;
-const PHONE_LOCAL_MAX_DIGITS = 15;
+const PHONE_LOCAL_MAX_DIGITS = 10;
 
 type LoginResponse = {
   access_token: string;
@@ -427,40 +650,63 @@ function TabButton({
   children: ReactNode;
   onClick: () => void;
 }) {
-  const activeBg =
+  const activeAccent =
     variant === "pacientes"
-      ? "#6F8A3C"
+      ? "#16a085"
       : variant === "consultas"
-        ? "#C9822B"
+        ? "#f59e0b"
         : variant === "ventas"
-          ? "#4D7A9B"
+          ? "#3b82f6"
           : variant === "historia_clinica"
-            ? "#0F766E"
-            : "#6A5ACD";
-  const activeBorder =
+            ? "#0d9488"
+            : "#8b5cf6";
+  const icon =
     variant === "pacientes"
-      ? "#5f7734"
+      ? "◇"
       : variant === "consultas"
-        ? "#b37225"
+        ? "◷"
         : variant === "ventas"
-          ? "#3f6784"
+          ? "⊕"
           : variant === "historia_clinica"
-            ? "#0B5E59"
-            : "#5346a8";
+            ? "✦"
+            : "⌁";
   return (
     <button
+      type="button"
       onClick={onClick}
+      aria-pressed={active}
       style={{
-        padding: "10px 18px",
-        borderRadius: 12,
-        border: active ? `1px solid ${activeBorder}` : "1px solid #d7c6b2",
-        background: active ? activeBg : "#fff8ef",
-        color: active ? "#fff" : "#3f2f20",
-        fontWeight: 700,
+        padding: "11px 18px",
+        borderRadius: 13,
+        border: active ? "1px solid rgba(255,255,255,.16)" : "1px solid transparent",
+        background: active ? "#ffffff" : "transparent",
+        color: active ? "#102a43" : "#60758a",
+        fontWeight: 800,
         cursor: "pointer",
-        boxShadow: active ? "0 8px 18px rgba(80, 60, 35, 0.18)" : "none",
+        boxShadow: active ? "0 8px 24px rgba(15, 23, 42, 0.12)" : "none",
+        position: "relative",
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 9,
+        whiteSpace: "nowrap",
       }}
     >
+      <span
+        aria-hidden="true"
+        style={{
+          width: 22,
+          height: 22,
+          borderRadius: 7,
+          display: "inline-grid",
+          placeItems: "center",
+          color: active ? "#fff" : activeAccent,
+          background: active ? activeAccent : `${activeAccent}18`,
+          fontSize: 13,
+          lineHeight: 1,
+        }}
+      >
+        {icon}
+      </span>
       {children}
     </button>
   );
@@ -654,11 +900,26 @@ function formatComoNosConocioLabel(value: string | null | undefined): string {
   if (!value) return "";
   const v = value.trim().toLowerCase();
   if (v === "linkedln" || v === "linkedin") return "LinkedIn";
-  if (v === "fb") return "Facebook";
+  if (v === "fb" || v === "facebook") return "Facebook";
   if (v === "instagram") return "Instagram";
-  if (v === "google") return "Google";
-  if (v === "referencia") return "Referencia";
+  if (v === "tiktok") return "TikTok";
+  if (v === "google" || v === "google_maps") return "Google / Google Maps";
+  if (v === "whatsapp") return "WhatsApp";
+  if (v === "pagina_web") return "Página web";
+  if (v === "paso_sucursal") return "Pasó por la sucursal";
+  if (v === "referencia" || v === "referencia_familiar_amigo") return "Referencia de familiar o amigo";
+  if (v === "cliente_anterior") return "Cliente anterior";
+  if (v === "campana_evento") return "Campaña o evento";
+  if (v === "publicidad_impresa") return "Publicidad impresa";
+  if (v === "otro") return "Otro";
   return value;
+}
+
+function pacienteEmailErrorMessage(value: string | null | undefined): string | null {
+  const email = String(value ?? "").trim();
+  if (!email) return null;
+  const validFormat = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/i.test(email);
+  return validFormat ? null : "Email no existe.";
 }
 
 function formatEstadoPacienteLabel(value: string | null | undefined): string {
@@ -762,7 +1023,14 @@ const SINTOMAS_OPTIONS: Array<{ value: string; label: string }> = [
 ];
 
 const DROGAS_TIPOS_OPTIONS = ["estimulantes", "sedantes", "alucinogenos", "opioides", "otras"];
-const DIABETES_TRATAMIENTO_OPTIONS = ["dieta_ejercicio", "pastillas", "insulina", "no_sabe"];
+const DIABETES_TRATAMIENTO_OPTIONS = ["dieta_ejercicio", "pastillas", "insulina", "no_sabe", "otro"];
+const DIABETES_TRATAMIENTO_LABELS: Record<string, string> = {
+  dieta_ejercicio: "Dieta y ejercicio",
+  pastillas: "Pastillas",
+  insulina: "Insulina",
+  no_sabe: "No sabe",
+  otro: "Otro",
+};
 const FLOTADORES_DESTELLOS_OPTIONS = [
   { value: "ninguno", label: "Ninguno" },
   { value: "flotadores_solos", label: "Flotadores solos (moscas volantes)" },
@@ -773,13 +1041,6 @@ const FLOTADORES_DESTELLOS_OPTIONS = [
 const FLOTADORES_LATERALIDAD_OPTIONS = [
   { value: "un_ojo", label: "Un ojo" },
   { value: "ambos_ojos", label: "Ambos ojos" },
-] as const;
-const TIEMPO_USO_DIARIO_RANGO_OPTIONS = [
-  { value: "lt_30min", label: "<30 minutos" },
-  { value: "30min_1h", label: "30 minutos - 1 hora" },
-  { value: "2h_4h", label: "2 horas - 4 horas" },
-  { value: "4h_6h", label: "4 horas - 6 horas" },
-  { value: "6h_plus", label: "+6 horas" },
 ] as const;
 const USO_LENTES_SOL_DIAS_SEMANA_OPTIONS = [
   { value: "0_dias", label: "0 días" },
@@ -812,6 +1073,30 @@ const HORAS_EXTERIOR_DIA_OPTIONS = [
   { value: "1_2h", label: "1-2 h" },
   { value: "2_4h", label: "2-4 h" },
   { value: "4h_mas", label: "4 h o más" },
+] as const;
+const USO_LENTES_SOL_HORAS_DIA_OPTIONS = [
+  { value: "0_min", label: "0 minutos" },
+  { value: "0_60min", label: "0 a 60 minutos" },
+  { value: "1_2h", label: "60 minutos a 2 horas" },
+  { value: "2_4h", label: "2 a 4 horas" },
+  { value: "4h_plus", label: "+4 horas" },
+] as const;
+const TIPO_LENTES_MANEJAR_OPTIONS = [
+  { value: "sol", label: "Sol" },
+  { value: "opticos", label: "Ópticos" },
+] as const;
+const TRATAMIENTOS_LENTES_MANEJAR_OPTIONS = [
+  { value: "antirreflejantes", label: "Antirreflejantes" },
+  { value: "fotocromaticos", label: "Fotocromáticos" },
+  { value: "antiblueray", label: "Antiblueray" },
+  { value: "progresivos", label: "Progresivos" },
+] as const;
+const HORAS_LECTURA_SEMANA_OPTIONS = [
+  { value: "0", label: "0" },
+  { value: "0_2h", label: "0-2 horas" },
+  { value: "2_5h", label: "2-5 horas" },
+  { value: "5_10h", label: "5-10 horas" },
+  { value: "10h_plus", label: "10+ horas" },
 ] as const;
 const NIVEL_EDUCATIVO_OPTIONS = [
   { value: "ninguno", label: "Ninguno" },
@@ -859,7 +1144,8 @@ const CAFEINA_POR_DIA_OPTIONS = [
   { value: "1", label: "1" },
   { value: "2_3", label: "2-3" },
   { value: "4_5", label: "4-5" },
-  { value: "6_plus", label: "6+" },
+  { value: "6_8", label: "6-8" },
+  { value: "10_plus", label: "10+" },
 ] as const;
 const CONDUCCION_NOCTURNA_OPTIONS = [
   { value: "0", label: "0" },
@@ -1173,6 +1459,30 @@ function tryParseJsonObject(value: unknown): Record<string, any> | null {
   return null;
 }
 
+type LentesActualesDetalle = {
+  tipo: string;
+  tratamientos: string[];
+};
+
+function parseLentesActualesDetalle(value: unknown): LentesActualesDetalle[] {
+  if (Array.isArray(value)) {
+    return value.map((item) => ({
+      tipo: String(item?.tipo ?? ""),
+      tratamientos: Array.isArray(item?.tratamientos) ? item.tratamientos.map(String) : [],
+    }));
+  }
+  try {
+    const parsed = JSON.parse(String(value ?? ""));
+    if (!Array.isArray(parsed)) return [];
+    return parsed.map((item) => ({
+      tipo: String(item?.tipo ?? ""),
+      tratamientos: Array.isArray(item?.tratamientos) ? item.tratamientos.map(String) : [],
+    }));
+  } catch {
+    return [];
+  }
+}
+
 function normalizeLegacyNumericValue(
   value: unknown,
   mapping: Record<string, string>,
@@ -1198,22 +1508,6 @@ function normalizeIntegerInput(value: string): string {
   const digits = value.replace(/\D/g, "");
   if (!digits) return "";
   return digits.replace(/^0+(?=\d)/, "") || "0";
-}
-
-function normalizeTiempoRango5(value: unknown): string {
-  const raw = String(value ?? "").trim();
-  if (!raw) return "";
-  const allowed = new Set<string>(TIEMPO_USO_DIARIO_RANGO_OPTIONS.map((opt) => opt.value));
-  if (allowed.has(raw)) return raw;
-  const normalized = raw.toLowerCase();
-  if (allowed.has(normalized)) return normalized;
-  const num = Number(raw.replace(",", "."));
-  if (!Number.isFinite(num)) return "";
-  if (num < 0.5) return "lt_30min";
-  if (num <= 1) return "30min_1h";
-  if (num <= 4) return "2h_4h";
-  if (num <= 6) return "4h_6h";
-  return "6h_plus";
 }
 
 function normalizeUsoLentesSolFrecuencia(value: unknown): string {
@@ -1591,7 +1885,8 @@ function normalizeHistoriaForUi(data: any, fallbackDoctor: string) {
 
   const alcoholMeta = tryParseJsonObject(data?.alcohol_frecuencia ?? "");
   let alcoholEstado = String(alcoholMeta?.estado ?? "").trim().toLowerCase();
-  let alcoholBebidasDia = normalizeDurationValue(alcoholMeta?.bebidas_dia ?? "");
+  let alcoholBebidasDia = normalizeDurationValue(alcoholMeta?.bebidas_semana ?? alcoholMeta?.bebidas_dia ?? "");
+  const alcoholFrecuenciaNivel = String(alcoholMeta?.frecuencia_semana ?? "").trim();
   let alcoholTiempoValor = normalizeDurationValue(alcoholMeta?.tiempo_valor ?? "");
   let alcoholTiempoUnidad: "anios" | "meses" =
     String(alcoholMeta?.tiempo_unidad ?? "").trim().toLowerCase() === "meses" ? "meses" : "anios";
@@ -1707,6 +2002,7 @@ function normalizeHistoriaForUi(data: any, fallbackDoctor: string) {
     tabaquismo_tiempo_desde_dejo_unidad: tabaquismoTiempoDesdeDejo.unidad,
     alcohol_estado: alcoholEstado,
     alcohol_bebidas_dia: alcoholBebidasDia,
+    alcohol_frecuencia_nivel: alcoholFrecuenciaNivel,
     alcohol_tiempo_valor: alcoholTiempoValor,
     alcohol_tiempo_unidad: alcoholTiempoUnidad,
     alcohol_que_tomaba: alcoholQueTomaba,
@@ -1743,8 +2039,10 @@ function normalizeHistoriaForUi(data: any, fallbackDoctor: string) {
       "16_plus": "16",
     }),
     diabetes_tratamiento: data?.diabetes_tratamiento ?? "",
+    diabetes_tratamiento_otro: data?.diabetes_tratamiento_otro ?? "",
     usa_lentes: data?.usa_lentes ?? null,
     tipo_lentes_actual: data?.tipo_lentes_actual ?? "",
+    lentes_pares: parseLentesActualesDetalle(data?.lentes_actuales_detalle),
     tiempo_uso_lentes: data?.tiempo_uso_lentes ?? "",
     tiempo_uso_lentes_anios: tiempoUsoLentesParts.anios,
     lentes_contacto_horas_dia: data?.lentes_contacto_horas_dia ?? null,
@@ -1783,8 +2081,16 @@ function normalizeHistoriaForUi(data: any, fallbackDoctor: string) {
     uso_lentes_proteccion_uv: normalizeTiempoRango6(data?.uso_lentes_proteccion_uv ?? ""),
     uso_lentes_sol_frecuencia: normalizeUsoLentesSolFrecuencia(data?.uso_lentes_sol_frecuencia ?? ""),
     horas_exterior_dia: data?.horas_exterior_dia ?? "",
+    uso_lentes_sol_horas_dia: data?.uso_lentes_sol_horas_dia ?? "",
+    usa_lentes_manejar_dia: data?.usa_lentes_manejar_dia ?? null,
+    tipo_lentes_manejar_dia: data?.tipo_lentes_manejar_dia ?? "",
+    tratamientos_lentes_manejar_dia: data?.tratamientos_lentes_manejar_dia ?? "",
+    usa_lentes_manejar_noche: data?.usa_lentes_manejar_noche ?? null,
+    tipo_lentes_manejar_noche: data?.tipo_lentes_manejar_noche ?? "",
+    tratamientos_lentes_manejar_noche: data?.tratamientos_lentes_manejar_noche ?? "",
     nivel_educativo: data?.nivel_educativo ?? "",
-    horas_lectura_dia: normalizeTiempoRango5(data?.horas_lectura_dia ?? ""),
+    horas_lectura_dia: data?.horas_lectura_dia ?? "",
+    lee_libros: data?.lee_libros ?? null,
     horas_sueno_promedio: normalizeLegacyNumericValue(data?.horas_sueno_promedio ?? "", {}),
     estres_nivel: normalizeLegacyNumericValue(data?.estres_nivel ?? "", {}),
     peso_kg: normalizeOneDecimalInput(String(data?.peso_kg ?? "")),
@@ -1798,7 +2104,7 @@ function normalizeHistoriaForUi(data: any, fallbackDoctor: string) {
     uso_calefaccion_frecuencia: data?.uso_calefaccion_frecuencia ?? "",
     uso_calefaccion_horas_dia: normalizeLegacyNumericValue(data?.uso_calefaccion_horas_dia ?? "", {}),
     uso_pantalla_en_oscuridad: data?.uso_pantalla_en_oscuridad ?? "",
-    cafeina_por_dia: data?.cafeina_por_dia === "6_mas" ? "6_plus" : (data?.cafeina_por_dia ?? ""),
+    cafeina_por_dia: data?.cafeina_por_dia === "6_mas" || data?.cafeina_por_dia === "6_plus" ? "6_8" : (data?.cafeina_por_dia ?? ""),
     seguimiento_requerido: data?.seguimiento_requerido ?? null,
     seguimiento_tipo: data?.seguimiento_requerido === true ? "fecha" : "",
     seguimiento_valor: data?.seguimiento_requerido === true ? seguimientoValorFecha : "",
@@ -1857,8 +2163,9 @@ export default function App() {
   const [statsMes, setStatsMes] = useState(String(new Date().getMonth() + 1));
   const [statsAnio, setStatsAnio] = useState(String(new Date().getFullYear()));
   const [statsFiltroLabel, setStatsFiltroLabel] = useState("Hoy");
-  const [statsPacientesModo, setStatsPacientesModo] = useState<"dia" | "mes" | "rango">("mes");
+  const [statsPacientesModo, setStatsPacientesModo] = useState<"dia" | "mes" | "anio" | "rango">("mes");
   const [statsPacientesAnio, setStatsPacientesAnio] = useState(String(new Date().getFullYear()));
+  const [statsPacientesMes, setStatsPacientesMes] = useState(String(new Date().getMonth() + 1));
   const [statsPacientesFecha, setStatsPacientesFecha] = useState(formatDateYYYYMMDD(new Date()));
   const [statsPacientesFechaDesde, setStatsPacientesFechaDesde] = useState(formatDateYYYYMMDD(new Date(new Date().getFullYear(), new Date().getMonth(), 1)));
   const [statsPacientesFechaHasta, setStatsPacientesFechaHasta] = useState(formatDateYYYYMMDD(new Date()));
@@ -1888,6 +2195,10 @@ export default function App() {
   const [histPacienteId, setHistPacienteId] = useState<number | null>(null);
   const [histConsultas, setHistConsultas] = useState<Consulta[]>([]);
   const [loadingHist, setLoadingHist] = useState(false);
+  const [pacientePerfil, setPacientePerfil] = useState<Paciente | null>(null);
+  const [perfilConsultas, setPerfilConsultas] = useState<Consulta[]>([]);
+  const [perfilVentas, setPerfilVentas] = useState<Venta[]>([]);
+  const [loadingPacientePerfil, setLoadingPacientePerfil] = useState(false);
   const [selectedConsultaDetalle, setSelectedConsultaDetalle] = useState<Consulta | null>(null);
   const [selectedVentaDetalle, setSelectedVentaDetalle] = useState<Venta | null>(null);
 
@@ -1950,6 +2261,7 @@ export default function App() {
   });
   const [pacienteTelefonoPais, setPacienteTelefonoPais] = useState<string>(DEFAULT_PHONE_COUNTRY);
   const [pacienteTelefonoLocal, setPacienteTelefonoLocal] = useState<string>("");
+  const [pacienteEmailError, setPacienteEmailError] = useState<string | null>(null);
 
   const [formConsulta, setFormConsulta] = useState<ConsultaCreate>({
     paciente_id: 0,
@@ -2293,8 +2605,9 @@ export default function App() {
     fechaHasta?: string;
     mes?: string;
     anio?: string;
-    pacientesModo?: "dia" | "mes" | "rango";
+    pacientesModo?: "dia" | "mes" | "anio" | "rango";
     pacientesAnio?: string;
+    pacientesMes?: string;
     pacientesFecha?: string;
     pacientesFechaDesde?: string;
     pacientesFechaHasta?: string;
@@ -2311,6 +2624,7 @@ export default function App() {
     const anio = override?.anio ?? statsAnio;
     const pacientesModo = override?.pacientesModo ?? statsPacientesModo;
     const pacientesAnio = override?.pacientesAnio ?? statsPacientesAnio;
+    const pacientesMes = override?.pacientesMes ?? statsPacientesMes;
     const pacientesFecha = override?.pacientesFecha ?? statsPacientesFecha;
     const pacientesFechaDesde = override?.pacientesFechaDesde ?? statsPacientesFechaDesde;
     const pacientesFechaHasta = override?.pacientesFechaHasta ?? statsPacientesFechaHasta;
@@ -2320,7 +2634,8 @@ export default function App() {
     params.set("sucursal_id", String(sucursalActivaId));
     params.set("modo", modo);
     params.set("pacientes_modo", pacientesModo);
-    if (pacientesModo === "mes" && pacientesAnio) params.set("pacientes_anio", pacientesAnio);
+    if ((pacientesModo === "mes" || pacientesModo === "anio") && pacientesAnio) params.set("pacientes_anio", pacientesAnio);
+    if (pacientesModo === "mes" && pacientesMes) params.set("pacientes_mes", pacientesMes);
     if (pacientesModo === "dia" && pacientesFecha) params.set("pacientes_fecha", pacientesFecha);
     if (pacientesModo === "rango" && pacientesFechaDesde) params.set("pacientes_fecha_desde", pacientesFechaDesde);
     if (pacientesModo === "rango" && pacientesFechaHasta) params.set("pacientes_fecha_hasta", pacientesFechaHasta);
@@ -3029,6 +3344,7 @@ export default function App() {
   
   function startEditPaciente(p: Paciente) {
     setSuccessPacienteMsg(null);
+    setPacienteEmailError(null);
     const phoneUi = splitPhoneForUi(p.telefono);
     setPacienteTelefonoPais(phoneUi.countryIso);
     setPacienteTelefonoLocal(phoneUi.local);
@@ -3057,6 +3373,7 @@ export default function App() {
 
   function cancelEditPaciente() {
     setEditingPacienteId(null);
+    setPacienteEmailError(null);
     setPacienteTelefonoPais(DEFAULT_PHONE_COUNTRY);
     setPacienteTelefonoLocal("");
     setFormPaciente({
@@ -3080,6 +3397,35 @@ export default function App() {
     });
   }
 
+  function resetPacienteForm() {
+    cancelEditPaciente();
+    setSuccessPacienteMsg(null);
+    setError(null);
+  }
+
+  async function openPacientePerfil(paciente: Paciente) {
+    setPacientePerfil(paciente);
+    setPerfilConsultas([]);
+    setPerfilVentas([]);
+    setLoadingPacientePerfil(true);
+    setError(null);
+
+    try {
+      const [consultasResponse, ventasResponse] = await Promise.all([
+        apiFetch(`/pacientes/${paciente.paciente_id}/consultas?sucursal_id=${sucursalActivaId}&limit=200`),
+        apiFetch(`/pacientes/${paciente.paciente_id}/ventas?sucursal_id=${sucursalActivaId}&limit=200`),
+      ]);
+      if (!consultasResponse.ok) throw new Error(await readErrorMessage(consultasResponse));
+      if (!ventasResponse.ok) throw new Error(await readErrorMessage(ventasResponse));
+      setPerfilConsultas(await consultasResponse.json());
+      setPerfilVentas(await ventasResponse.json());
+    } catch (e: any) {
+      setError(e?.message ?? String(e));
+    } finally {
+      setLoadingPacientePerfil(false);
+    }
+  }
+
   // ---- Acciones de formularios ----
   async function onSubmitPaciente(e: FormEvent) {
     e.preventDefault();
@@ -3092,6 +3438,9 @@ export default function App() {
       if (!formPaciente.apellido_paterno?.trim()) throw new Error("Apellido paterno es obligatorio.");
       if (!formPaciente.fecha_nacimiento?.trim()) throw new Error("Fecha de nacimiento es obligatoria.");
       if (!formPaciente.sexo?.trim()) throw new Error("Sexo es obligatorio.");
+      const emailError = pacienteEmailErrorMessage(formPaciente.correo);
+      setPacienteEmailError(emailError);
+      if (emailError) throw new Error(emailError);
       const telefonoDigits = onlyDigits(pacienteTelefonoLocal);
       if (telefonoDigits.length < PHONE_LOCAL_MIN_DIGITS || telefonoDigits.length > PHONE_LOCAL_MAX_DIGITS) {
         throw new Error(`Teléfono debe tener entre ${PHONE_LOCAL_MIN_DIGITS} y ${PHONE_LOCAL_MAX_DIGITS} dígitos.`);
@@ -3811,7 +4160,8 @@ export default function App() {
       const alcoholTiempoUnidad = String(historiaData?.alcohol_tiempo_unidad ?? "").trim().toLowerCase() === "meses" ? "meses" : "anios";
       const alcoholFrecuenciaPayload = JSON.stringify({
         estado: alcoholEstado,
-        bebidas_dia: alcoholBebidasDia || null,
+        frecuencia_semana: String(historiaData?.alcohol_frecuencia_nivel ?? "").trim() || null,
+        bebidas_semana: alcoholBebidasDia || null,
         tiempo_valor: alcoholTiempoValor || null,
         tiempo_unidad: alcoholTiempoUnidad,
       });
@@ -3942,6 +4292,9 @@ export default function App() {
         diabetes_control: historiaData.diabetes_control,
         diabetes_anios: historiaData.diabetes_anios,
         diabetes_tratamiento: joinPipeList(splitPipeList(historiaData.diabetes_tratamiento)),
+        diabetes_tratamiento_otro: splitPipeList(historiaData.diabetes_tratamiento).includes("otro")
+          ? String(historiaData.diabetes_tratamiento_otro ?? "").trim()
+          : "",
         trabajo_cerca_horas_dia: historiaData.trabajo_cerca_horas_dia,
         distancia_promedio_pantalla_cm: historiaData.distancia_promedio_pantalla_cm,
         iluminacion_trabajo: historiaData.iluminacion_trabajo,
@@ -3952,14 +4305,29 @@ export default function App() {
         flotadores_lateralidad: historiaData.flotadores_lateralidad,
         usa_lentes: historiaData.usa_lentes,
         tipo_lentes_actual: usaLentes ? (tipoLentesActual || null) : null,
+        lentes_actuales_detalle: usaLentes
+          ? JSON.stringify(parseLentesActualesDetalle(historiaData.lentes_pares))
+          : null,
         tiempo_uso_lentes: usaLentes ? (tiempoUsoLentesPayload || null) : null,
         lentes_contacto_horas_dia: usaLentes ? historiaData.lentes_contacto_horas_dia : null,
         lentes_contacto_dias_semana: null,
         uso_lentes_proteccion_uv: historiaData.uso_lentes_proteccion_uv,
         uso_lentes_sol_frecuencia: historiaData.uso_lentes_sol_frecuencia,
         horas_exterior_dia: historiaData.horas_exterior_dia,
+        uso_lentes_sol_horas_dia: historiaData.uso_lentes_sol_horas_dia,
+        usa_lentes_manejar_dia: historiaData.usa_lentes_manejar_dia,
+        tipo_lentes_manejar_dia: historiaData.usa_lentes_manejar_dia ? historiaData.tipo_lentes_manejar_dia : "",
+        tratamientos_lentes_manejar_dia: historiaData.usa_lentes_manejar_dia
+          ? joinPipeList(splitPipeList(historiaData.tratamientos_lentes_manejar_dia))
+          : "",
+        usa_lentes_manejar_noche: historiaData.usa_lentes_manejar_noche,
+        tipo_lentes_manejar_noche: historiaData.usa_lentes_manejar_noche ? historiaData.tipo_lentes_manejar_noche : "",
+        tratamientos_lentes_manejar_noche: historiaData.usa_lentes_manejar_noche
+          ? joinPipeList(splitPipeList(historiaData.tratamientos_lentes_manejar_noche))
+          : "",
         nivel_educativo: historiaData.nivel_educativo,
         horas_lectura_dia: historiaData.horas_lectura_dia,
+        lee_libros: historiaData.lee_libros,
         horas_sueno_promedio: historiaData.horas_sueno_promedio,
         estres_nivel: historiaData.estres_nivel,
         peso_kg: historiaData.peso_kg === "" || historiaData.peso_kg == null ? null : Number(historiaData.peso_kg),
@@ -4082,6 +4450,7 @@ export default function App() {
   if (!me) {
     return (
       <div
+        className="olm-login-page"
         style={{
           minHeight: "100vh",
           width: "100vw",
@@ -4089,7 +4458,7 @@ export default function App() {
           alignItems: "center",
           justifyContent: "center",
           padding: 20,
-          background: "linear-gradient(180deg, #f7efe4 0%, #efe3d4 100%)",
+          background: "linear-gradient(145deg, #eef7f6 0%, #f8fafc 48%, #edf3fa 100%)",
           ...LOGIN_SCALE_STYLE,
         }}
       >
@@ -4110,7 +4479,7 @@ export default function App() {
             <div style={{ opacity: 0.8 }}>Inicia sesión</div>
           </div>
 
-          <form onSubmit={doLogin} style={{ border: "1px solid #e7d7c7", borderRadius: 16, background: "#fffaf4", padding: 20 }}>
+          <form className="olm-login-card" onSubmit={doLogin} style={{ border: "1px solid #dbe7ec", borderRadius: 24, background: "rgba(255,255,255,.92)", padding: 28 }}>
             <label style={{ display: "block", marginBottom: 10 }}>
               Usuario
               <input
@@ -4138,10 +4507,11 @@ export default function App() {
                 width: "100%",
                 padding: 12,
                 borderRadius: 12,
-                border: "1px solid #111",
-                background: loggingIn ? "#eee" : "#111",
-                color: loggingIn ? "#111" : "#fff",
-                fontWeight: 700,
+                border: "1px solid #0f766e",
+                background: loggingIn ? "#dfe9e8" : "linear-gradient(135deg, #0f766e, #15978d)",
+                color: loggingIn ? "#526b7b" : "#fff",
+                fontWeight: 800,
+                boxShadow: loggingIn ? "none" : "0 10px 24px rgba(15, 118, 110, .24)",
                 cursor: loggingIn ? "not-allowed" : "pointer",
               }}
             >
@@ -4284,17 +4654,19 @@ export default function App() {
 
   return (
     <div
+      className="olm-app-shell"
       style={{
         maxWidth: "none",
-        width: "calc(100vw - 24px)",
-        margin: "12px auto",
-        padding: 22,
-        fontFamily: "Avenir Next, Avenir, Nunito Sans, Segoe UI, sans-serif",
-        minHeight: "calc(100vh - 24px)",
-        color: "#2f241a",
-        background: "linear-gradient(180deg, #fff8ef 0%, #fff4e8 100%)",
-        border: "1px solid #e6d5c3",
-        borderRadius: 20,
+        width: "calc(100vw - 28px)",
+        margin: "14px auto",
+        padding: "18px clamp(18px, 2vw, 34px) 34px",
+        fontFamily: "Inter, Avenir Next, Avenir, Segoe UI, sans-serif",
+        minHeight: "calc(100vh - 28px)",
+        color: "#172b3a",
+        background: "rgba(248, 251, 252, .96)",
+        border: "1px solid rgba(203, 216, 224, .8)",
+        borderRadius: 22,
+        boxShadow: "0 28px 80px rgba(24, 50, 71, .13)",
         ...MAIN_SCALE_STYLE,
       }}
     >
@@ -4303,16 +4675,16 @@ export default function App() {
           box-sizing: border-box;
         }
         button {
-          transition: transform 0.14s ease, box-shadow 0.18s ease, filter 0.18s ease, background-color 0.18s ease, border-color 0.18s ease;
+          transition: transform 0.16s ease, box-shadow 0.2s ease, filter 0.2s ease, background-color 0.2s ease, border-color 0.2s ease;
         }
         button:hover:not(:disabled) {
-          transform: translateY(-1px);
-          box-shadow: 0 10px 20px rgba(86, 63, 40, 0.2);
-          filter: brightness(0.98);
+          transform: translateY(-2px);
+          box-shadow: 0 12px 28px rgba(24, 50, 71, 0.16);
+          filter: saturate(1.04);
         }
         button:active:not(:disabled) {
           transform: translateY(0);
-          box-shadow: 0 4px 10px rgba(86, 63, 40, 0.18);
+          box-shadow: 0 4px 12px rgba(24, 50, 71, 0.14);
         }
       `}</style>
 
@@ -4322,15 +4694,15 @@ export default function App() {
           justifyItems: "center",
           textAlign: "center",
           gap: 4,
-          marginBottom: 2,
-          padding: "2px 20px 0",
+          marginBottom: 8,
+          padding: "0 20px",
         }}
       >
         <img
           src={logoOlm}
           alt="Óptica OLM"
           style={{
-            height: "clamp(84px, 8vw, 130px)",
+            height: "clamp(72px, 6vw, 104px)",
             width: "auto",
             maxWidth: "62vw",
             objectFit: "contain",
@@ -4339,18 +4711,19 @@ export default function App() {
           }}
         />
 
-        <div style={{ textAlign: "center", fontWeight: 900, fontSize: "clamp(16px, 1.9vw, 28px)", letterSpacing: 2.6, color: "#5f4a32", marginTop: -2 }}>
-          BASE DE DATOS
+        <div style={{ textAlign: "center", fontWeight: 900, fontSize: "clamp(13px, 1.2vw, 17px)", letterSpacing: 4, color: "#638092", marginTop: -4 }}>
+          GESTIÓN CLÍNICA
         </div>
       </div>
 
       {/* Barra superior: sesión */}
       <div
+        className="olm-session-bar"
         style={{
           display: "flex",
           justifyContent: "space-between",
           alignItems: "center",
-          marginBottom: 14,
+          marginBottom: 16,
         }}
       >
         <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
@@ -4361,9 +4734,10 @@ export default function App() {
               gap: 8,
               padding: "6px 10px",
               borderRadius: 999,
-              border: "1px solid #ddc9b4",
-              background: "#fff8ef",
-              fontWeight: 700,
+              border: "1px solid #d7e5e8",
+              background: "#edf8f6",
+              color: "#176b65",
+              fontWeight: 800,
             }}
           >
             ✅ Sesión: {me.username} ({me.rol})
@@ -4377,9 +4751,10 @@ export default function App() {
           style={{
             padding: "10px 14px",
             borderRadius: 12,
-            border: "1px solid #d2bca7",
-            background: "#fff6ea",
-            fontWeight: 700,
+            border: "1px solid #d9e3e8",
+            background: "#fff",
+            color: "#526b7b",
+            fontWeight: 800,
             cursor: "pointer",
           }}
         >
@@ -4392,8 +4767,8 @@ export default function App() {
 
 
 
-      <div style={{ marginBottom: 14, display: "flex", gap: 10, alignItems: "center" }}>
-        <div style={{ fontWeight: 700 }}>Sucursal:</div>
+      <div className="olm-branch-row" style={{ marginBottom: 16, display: "flex", gap: 12, alignItems: "center" }}>
+        <div style={{ fontWeight: 800, color: "#526b7b" }}>Sucursal</div>
         <select
           value={sucursalActivaId}
           disabled={me?.rol !== "admin"}
@@ -4401,7 +4776,7 @@ export default function App() {
           style={{
             padding: 10,
             borderRadius: 10,
-            border: "1px solid #ddd",
+            border: "1px solid #d6e1e6",
             background: "#fff",
             minWidth: 280,
           }}
@@ -4419,7 +4794,7 @@ export default function App() {
       </div>
 
 
-      <div style={{ display: "flex", gap: 10, marginBottom: 18 }}>
+      <div className="olm-main-tabs" style={{ display: "flex", gap: 6, marginBottom: 22 }}>
         <TabButton variant="pacientes" active={tab === "pacientes"} onClick={() => setTab("pacientes")}>
           Pacientes
         </TabButton>
@@ -4638,6 +5013,162 @@ export default function App() {
 
       {/* ========================= PACIENTES ========================= */}
       {tab === "pacientes" && (
+        pacientePerfil ? (
+          <div style={{ display: "grid", gap: 16, width: "100%" }}>
+            <div style={{ ...softCard, padding: 18 }}>
+              <button
+                type="button"
+                onClick={() => {
+                  setPacientePerfil(null);
+                  setPerfilConsultas([]);
+                  setPerfilVentas([]);
+                  setError(null);
+                }}
+                style={{ ...actionBtnStyle, marginBottom: 16 }}
+              >
+                ← Volver a pacientes
+              </button>
+
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 16, flexWrap: "wrap" }}>
+                <div>
+                  <div style={{ fontSize: 12, fontWeight: 800, color: "#64748b", textTransform: "uppercase", letterSpacing: 1 }}>
+                    Perfil del paciente #{pacientePerfil.paciente_id}
+                  </div>
+                  <h2 style={{ margin: "5px 0 4px" }}>
+                    {[pacientePerfil.primer_nombre, pacientePerfil.segundo_nombre, pacientePerfil.apellido_paterno, pacientePerfil.apellido_materno]
+                      .filter(Boolean)
+                      .join(" ")}
+                  </h2>
+                  <span
+                    style={{
+                      display: "inline-flex",
+                      padding: "5px 10px",
+                      borderRadius: 999,
+                      fontSize: 12,
+                      fontWeight: 800,
+                      ...estadoPacienteBadgeStyle(pacientePerfil.estado_paciente),
+                    }}
+                  >
+                    {formatEstadoPacienteLabel(pacientePerfil.estado_paciente)}
+                  </span>
+                </div>
+                <div style={{ display: "flex", gap: 8, alignItems: "flex-start", flexWrap: "wrap" }}>
+                  {canEditPaciente && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        startEditPaciente(pacientePerfil);
+                        setPacientePerfil(null);
+                      }}
+                      style={actionBtnStyle}
+                    >
+                      Editar datos
+                    </button>
+                  )}
+                  {(isDoctor || isAdmin) && (
+                    <button type="button" onClick={() => openHistoria(pacientePerfil)} style={actionBtnStyle}>
+                      Ver historia clínica completa
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: 12, marginTop: 18 }}>
+                {[
+                  ["Fecha de nacimiento", pacientePerfil.fecha_nacimiento || "Sin registrar"],
+                  ["Sexo", pacientePerfil.sexo || "Sin registrar"],
+                  ["Teléfono", pacientePerfil.telefono || "Sin registrar"],
+                  ["Correo", pacientePerfil.correo || "Sin registrar"],
+                  ["Cómo nos conoció", formatComoNosConocioLabel(pacientePerfil.como_nos_conocio)],
+                  ["Fecha de registro", formatDateTimePretty(pacientePerfil.creado_en)],
+                ].map(([label, value]) => (
+                  <div key={label} style={{ padding: 12, borderRadius: 12, background: "#f8fafc", border: "1px solid #e2e8f0" }}>
+                    <div style={{ fontSize: 12, color: "#64748b", fontWeight: 700 }}>{label}</div>
+                    <div style={{ marginTop: 4, fontWeight: 700 }}>{value}</div>
+                  </div>
+                ))}
+              </div>
+
+              <div style={{ marginTop: 14, padding: 12, borderRadius: 12, background: "#f8fafc", border: "1px solid #e2e8f0" }}>
+                <div style={{ fontSize: 12, color: "#64748b", fontWeight: 700 }}>Dirección</div>
+                <div style={{ marginTop: 4, fontWeight: 700 }}>
+                  {[
+                    [pacientePerfil.calle, pacientePerfil.numero].filter(Boolean).join(" "),
+                    pacientePerfil.colonia,
+                    pacientePerfil.municipio,
+                    pacientePerfil.estado_direccion,
+                    pacientePerfil.codigo_postal,
+                    pacientePerfil.pais,
+                  ].filter(Boolean).join(", ") || "Sin registrar"}
+                </div>
+              </div>
+            </div>
+
+            {loadingPacientePerfil ? (
+              <div style={{ ...softCard, padding: 18 }}>Cargando expediente del paciente...</div>
+            ) : (
+              <>
+                <div style={{ ...softCard, padding: 18, overflowX: "auto" }}>
+                  <h3 style={{ marginTop: 0 }}>Consultas ({perfilConsultas.length})</h3>
+                  {perfilConsultas.length === 0 ? (
+                    <div>Este paciente no tiene consultas registradas en esta sucursal.</div>
+                  ) : (
+                    <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 760 }}>
+                      <thead>
+                        <tr style={{ background: "#f8fafc" }}>
+                          <th align="left" style={{ padding: 10 }}>Fecha y hora</th>
+                          <th align="left" style={{ padding: 10 }}>Tipo</th>
+                          <th align="left" style={{ padding: 10 }}>Doctor</th>
+                          <th align="left" style={{ padding: 10 }}>Notas</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {perfilConsultas.map((consulta) => (
+                          <tr key={consulta.consulta_id} style={{ borderTop: "1px solid #e2e8f0" }}>
+                            <td style={{ padding: 10 }}>{formatDateTimePretty(consulta.agenda_inicio ?? consulta.fecha_hora)}</td>
+                            <td style={{ padding: 10 }}>{consultaTokensForUi(consulta).map(formatConsultaTokenLabel).join(" | ")}</td>
+                            <td style={{ padding: 10 }}>{[consulta.doctor_primer_nombre, consulta.doctor_apellido_paterno].filter(Boolean).join(" ") || "Sin registrar"}</td>
+                            <td style={{ padding: 10 }}>{consulta.notas?.trim() || "Sin notas"}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
+
+                <div style={{ ...softCard, padding: 18, overflowX: "auto" }}>
+                  <h3 style={{ marginTop: 0 }}>Compras ({perfilVentas.length})</h3>
+                  {perfilVentas.length === 0 ? (
+                    <div>Este paciente no tiene compras registradas en esta sucursal.</div>
+                  ) : (
+                    <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 760 }}>
+                      <thead>
+                        <tr style={{ background: "#f8fafc" }}>
+                          <th align="left" style={{ padding: 10 }}>Fecha y hora</th>
+                          <th align="left" style={{ padding: 10 }}>Compra</th>
+                          <th align="left" style={{ padding: 10 }}>Monto</th>
+                          <th align="left" style={{ padding: 10 }}>Método de pago</th>
+                          <th align="left" style={{ padding: 10 }}>Notas</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {perfilVentas.map((venta) => (
+                          <tr key={venta.venta_id} style={{ borderTop: "1px solid #e2e8f0" }}>
+                            <td style={{ padding: 10 }}>{formatDateTimePretty(venta.fecha_hora)}</td>
+                            <td style={{ padding: 10 }}>{venta.compra || "Sin detalle"}</td>
+                            <td style={{ padding: 10 }}>${Number(venta.monto_total || 0).toFixed(2)}</td>
+                            <td style={{ padding: 10 }}>{String(venta.metodo_pago || "").replaceAll("_", " ")}</td>
+                            <td style={{ padding: 10 }}>{venta.notas?.trim() || "Sin notas"}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
+              </>
+            )}
+          </div>
+        ) : (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(420px, 1fr))", gap: 16, alignItems: "start" }}>
           <form
             onSubmit={onSubmitPaciente}
@@ -4687,7 +5218,10 @@ export default function App() {
               Primer nombre *
               <input
                 value={formPaciente.primer_nombre ?? ""}
-                onChange={(e) => setFormPaciente({ ...formPaciente, primer_nombre: e.target.value })}
+                onChange={(e) => {
+                  setFormPaciente({ ...formPaciente, primer_nombre: e.target.value });
+                  if (error === "Primer nombre es obligatorio.") setError(null);
+                }}
                 required
                 style={{ width: "100%", padding: 10, borderRadius: 10, border: "1px solid #ddd" }}
               />
@@ -4771,7 +5305,7 @@ export default function App() {
                   onChange={(e) => setPacienteTelefonoLocal(onlyDigits(e.target.value).slice(0, PHONE_LOCAL_MAX_DIGITS))}
                   required
                   inputMode="numeric"
-                  pattern="[0-9]{7,15}"
+                  pattern="[0-9]{7,10}"
                   maxLength={PHONE_LOCAL_MAX_DIGITS}
                   style={{ width: "100%", padding: 10, borderRadius: 10, border: "1px solid #ddd" }}
                 />
@@ -4780,13 +5314,38 @@ export default function App() {
 
             <label style={{ display: "block", marginBottom: 8 }}>
               Correo
+              {pacienteEmailError && (
+                <div style={{ margin: "4px 0 5px", color: "#b42318", fontSize: 12, fontWeight: 800 }}>
+                  {pacienteEmailError}
+                </div>
+              )}
               <input
                 type="email"
                 value={formPaciente.correo ?? ""}
-                onChange={(e) => setFormPaciente({ ...formPaciente, correo: e.target.value })}
-                style={{ width: "100%", padding: 10, borderRadius: 10, border: "1px solid #ddd" }}
+                onChange={(e) => {
+                  const correo = e.target.value;
+                  setFormPaciente({ ...formPaciente, correo });
+                  if (pacienteEmailError) setPacienteEmailError(pacienteEmailErrorMessage(correo));
+                }}
+                onBlur={() => setPacienteEmailError(pacienteEmailErrorMessage(formPaciente.correo))}
+                aria-invalid={Boolean(pacienteEmailError)}
+                style={{
+                  width: "100%",
+                  padding: 10,
+                  borderRadius: 10,
+                  border: pacienteEmailError ? "1px solid #b42318" : "1px solid #ddd",
+                }}
               />
             </label>
+
+            <GoogleAddressFinder
+              onSelect={(address) =>
+                setFormPaciente((current) => ({
+                  ...current,
+                  ...address,
+                }))
+              }
+            />
 
             <div style={{ display: "grid", gridTemplateColumns: "1fr 160px", gap: 10 }}>
               <label style={{ display: "block", marginBottom: 8 }}>
@@ -4861,10 +5420,17 @@ export default function App() {
                 >
                   <option value="">Seleccionar</option>
                   <option value="instagram">Instagram</option>
-                  <option value="fb">FB</option>
-                  <option value="google">Google</option>
-                  <option value="linkedin">LinkedIn</option>
-                  <option value="referencia">Referencia</option>
+                  <option value="facebook">Facebook</option>
+                  <option value="tiktok">TikTok</option>
+                  <option value="google_maps">Google / Google Maps</option>
+                  <option value="whatsapp">WhatsApp</option>
+                  <option value="pagina_web">Página web</option>
+                  <option value="paso_sucursal">Pasó por la sucursal</option>
+                  <option value="referencia_familiar_amigo">Referencia de familiar o amigo</option>
+                  <option value="cliente_anterior">Cliente anterior</option>
+                  <option value="campana_evento">Campaña o evento</option>
+                  <option value="publicidad_impresa">Publicidad impresa</option>
+                  <option value="otro">Otro</option>
                 </select>
               </label>
             )}
@@ -4888,6 +5454,24 @@ export default function App() {
               }}
             >
               {savingPaciente ? "Guardando..." : "Guardar paciente"}
+            </button>
+
+            <button
+              type="button"
+              onClick={resetPacienteForm}
+              style={{
+                width: "100%",
+                padding: 12,
+                borderRadius: 12,
+                border: "1px solid #99c9c2",
+                background: "#f2fbf9",
+                color: "#0f6f66",
+                fontWeight: 800,
+                cursor: "pointer",
+                marginTop: 8,
+              }}
+            >
+              Resetear formato
             </button>
 
             {/* 👇 ESTE ES EL NUEVO BOTÓN (solo aparece si estás editando) */}
@@ -4998,7 +5582,12 @@ export default function App() {
 
               <tbody>
                 {pacientesFiltrados.map((p) => (
-                  <tr key={p.paciente_id} style={{ borderTop: "1px solid #eee" }}>
+                  <tr
+                    key={p.paciente_id}
+                    onClick={() => openPacientePerfil(p)}
+                    title="Abrir perfil completo del paciente"
+                    style={{ borderTop: "1px solid #eee", cursor: "pointer" }}
+                  >
                     <td style={{ padding: 10 }}>{p.paciente_id}</td>
 
                     <td style={{ padding: 10 }}>
@@ -5029,7 +5618,7 @@ export default function App() {
                     </td>
 
                     {/* ACCIONES */}
-                    <td style={{ padding: 10 }}>
+                    <td style={{ padding: 10 }} onClick={(event) => event.stopPropagation()}>
                       <div style={{ display: "flex", gap: 12, rowGap: 12, flexWrap: "wrap" }}>
                         {canEditPaciente && (
                           <button
@@ -5158,6 +5747,7 @@ export default function App() {
             )}
           </div>
         </div>
+        )
       )}
 
 
@@ -6513,10 +7103,18 @@ export default function App() {
                 <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                   <button type="button" onClick={() => setStatsPacientesModo("dia")} style={{ padding: "7px 11px", borderRadius: 10, border: "1px solid #ddd", background: statsPacientesModo === "dia" ? "#111" : "#fff", color: statsPacientesModo === "dia" ? "#fff" : "#111", fontWeight: 700, cursor: "pointer" }}>Día</button>
                   <button type="button" onClick={() => setStatsPacientesModo("mes")} style={{ padding: "7px 11px", borderRadius: 10, border: "1px solid #ddd", background: statsPacientesModo === "mes" ? "#111" : "#fff", color: statsPacientesModo === "mes" ? "#fff" : "#111", fontWeight: 700, cursor: "pointer" }}>Mes</button>
+                  <button type="button" onClick={() => setStatsPacientesModo("anio")} style={{ padding: "7px 11px", borderRadius: 10, border: "1px solid #ddd", background: statsPacientesModo === "anio" ? "#111" : "#fff", color: statsPacientesModo === "anio" ? "#fff" : "#111", fontWeight: 700, cursor: "pointer" }}>Año</button>
                   <button type="button" onClick={() => setStatsPacientesModo("rango")} style={{ padding: "7px 11px", borderRadius: 10, border: "1px solid #ddd", background: statsPacientesModo === "rango" ? "#111" : "#fff", color: statsPacientesModo === "rango" ? "#fff" : "#111", fontWeight: 700, cursor: "pointer" }}>Rango</button>
                 </div>
-                <div style={{ display: "grid", gridTemplateColumns: statsPacientesModo === "mes" ? "1fr auto" : statsPacientesModo === "dia" ? "1fr auto" : "1fr 1fr auto", gap: 10, alignItems: "end" }}>
+                <div style={{ display: "grid", gridTemplateColumns: statsPacientesModo === "mes" ? "1fr 1fr auto" : statsPacientesModo === "anio" || statsPacientesModo === "dia" ? "1fr auto" : "1fr 1fr auto", gap: 10, alignItems: "end" }}>
                   {statsPacientesModo === "mes" && (
+                    <select value={statsPacientesMes} onChange={(e) => setStatsPacientesMes(e.target.value)} style={{ padding: 10, borderRadius: 10, border: "1px solid #ddd", background: "#fff" }}>
+                      {["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"].map((label, idx) => (
+                        <option key={label} value={String(idx + 1)}>{label}</option>
+                      ))}
+                    </select>
+                  )}
+                  {(statsPacientesModo === "mes" || statsPacientesModo === "anio") && (
                     <input type="number" min={2020} max={2100} value={statsPacientesAnio} onChange={(e) => setStatsPacientesAnio(e.target.value)} placeholder="Año" style={{ padding: 10, borderRadius: 10, border: "1px solid #ddd" }} />
                   )}
                   {statsPacientesModo === "dia" && (
@@ -6543,6 +7141,7 @@ export default function App() {
                       loadStats({
                         pacientesModo: statsPacientesModo,
                         pacientesAnio: statsPacientesAnio,
+                        pacientesMes: statsPacientesMes,
                         pacientesFecha: statsPacientesFecha,
                         pacientesFechaDesde: statsPacientesFechaDesde,
                         pacientesFechaHasta: statsPacientesFechaHasta,
@@ -6833,7 +7432,7 @@ export default function App() {
                             </div>
                           ))}
                         </div>
-                        <div style={{ display: "grid", gridTemplateColumns: "repeat(12, minmax(28px, 1fr))", gap: 10, alignItems: "end", minHeight: 220 }}>
+                        <div style={{ display: "grid", gridTemplateColumns: "repeat(12, minmax(52px, 1fr))", gap: 10, alignItems: "end", minHeight: 280, padding: "18px 10px 8px", borderRadius: 14, background: "repeating-linear-gradient(to top, #f8fafc 0, #f8fafc 49px, #e2e8f0 50px)" }}>
                           {(() => {
                             const maxValue = Math.max(
                               1,
@@ -6841,7 +7440,7 @@ export default function App() {
                             );
                             return Array.from({ length: 12 }, (_, monthIdx) => (
                               <div key={`comparativo-ventas-mes-${monthIdx + 1}`} style={{ display: "grid", gap: 6, justifyItems: "center" }}>
-                                <div style={{ display: "flex", gap: 3, alignItems: "end", width: "100%", justifyContent: "center" }}>
+                                <div style={{ display: "flex", gap: 5, alignItems: "end", width: "100%", justifyContent: "center", height: 215 }}>
                                   {statsVentasComparativo.map((s, sIdx) => {
                                     const value = Number(s.serie[monthIdx]?.total || 0);
                                     return (
@@ -6849,16 +7448,32 @@ export default function App() {
                                         key={`comparativo-ventas-${s.sucursal_id}-${monthIdx + 1}`}
                                         title={`${s.sucursal_nombre}: $${value.toFixed(2)}`}
                                         style={{
-                                          width: Math.max(8, Math.floor(42 / Math.max(statsVentasComparativo.length, 1))),
-                                          height: Math.max(6, Math.round((value / maxValue) * 145)),
-                                          borderRadius: 6,
-                                          background: statsComparativoColors[sIdx % statsComparativoColors.length],
+                                          width: Math.max(18, Math.floor(58 / Math.max(statsVentasComparativo.length, 1))),
+                                          height: "100%",
+                                          display: "flex",
+                                          flexDirection: "column",
+                                          justifyContent: "flex-end",
+                                          alignItems: "center",
                                         }}
-                                      />
+                                      >
+                                        <span style={{ fontSize: 10, fontWeight: 900, color: "#334155", whiteSpace: "nowrap", marginBottom: 4 }}>
+                                          ${value.toLocaleString("es-MX", { maximumFractionDigits: 0 })}
+                                        </span>
+                                        <span
+                                          style={{
+                                            display: "block",
+                                            width: "100%",
+                                            height: Math.max(6, Math.round((value / maxValue) * 170)),
+                                            borderRadius: "7px 7px 3px 3px",
+                                            background: `linear-gradient(180deg, ${statsComparativoColors[sIdx % statsComparativoColors.length]}, ${statsComparativoColors[sIdx % statsComparativoColors.length]}cc)`,
+                                            boxShadow: "0 4px 10px rgba(15, 23, 42, .12)",
+                                          }}
+                                        />
+                                      </div>
                                     );
                                   })}
                                 </div>
-                                <div style={{ fontSize: 10, opacity: 0.85 }}>{statsVentasComparativo[0]?.serie[monthIdx]?.etiqueta ?? "-"}</div>
+                                <div style={{ fontSize: 11, fontWeight: 800, color: "#475569" }}>{statsVentasComparativo[0]?.serie[monthIdx]?.etiqueta ?? "-"}</div>
                               </div>
                             ));
                           })()}
@@ -6883,7 +7498,7 @@ export default function App() {
                             </div>
                           ))}
                         </div>
-                        <div style={{ display: "grid", gridTemplateColumns: "repeat(12, minmax(28px, 1fr))", gap: 10, alignItems: "end", minHeight: 220 }}>
+                        <div style={{ display: "grid", gridTemplateColumns: "repeat(12, minmax(52px, 1fr))", gap: 10, alignItems: "end", minHeight: 280, padding: "18px 10px 8px", borderRadius: 14, background: "repeating-linear-gradient(to top, #f8fafc 0, #f8fafc 49px, #e2e8f0 50px)" }}>
                           {(() => {
                             const maxValue = Math.max(
                               1,
@@ -6891,7 +7506,7 @@ export default function App() {
                             );
                             return Array.from({ length: 12 }, (_, monthIdx) => (
                               <div key={`comparativo-pacientes-mes-${monthIdx + 1}`} style={{ display: "grid", gap: 6, justifyItems: "center" }}>
-                                <div style={{ display: "flex", gap: 3, alignItems: "end", width: "100%", justifyContent: "center" }}>
+                                <div style={{ display: "flex", gap: 5, alignItems: "end", width: "100%", justifyContent: "center", height: 215 }}>
                                   {statsPacientesComparativo.map((s, sIdx) => {
                                     const value = Number(s.serie[monthIdx]?.total || 0);
                                     return (
@@ -6899,16 +7514,30 @@ export default function App() {
                                         key={`comparativo-pacientes-${s.sucursal_id}-${monthIdx + 1}`}
                                         title={`${s.sucursal_nombre}: ${value}`}
                                         style={{
-                                          width: Math.max(8, Math.floor(42 / Math.max(statsPacientesComparativo.length, 1))),
-                                          height: Math.max(6, Math.round((value / maxValue) * 145)),
-                                          borderRadius: 6,
-                                          background: statsComparativoColors[sIdx % statsComparativoColors.length],
+                                          width: Math.max(18, Math.floor(58 / Math.max(statsPacientesComparativo.length, 1))),
+                                          height: "100%",
+                                          display: "flex",
+                                          flexDirection: "column",
+                                          justifyContent: "flex-end",
+                                          alignItems: "center",
                                         }}
-                                      />
+                                      >
+                                        <span style={{ fontSize: 11, fontWeight: 900, color: "#334155", marginBottom: 4 }}>{value}</span>
+                                        <span
+                                          style={{
+                                            display: "block",
+                                            width: "100%",
+                                            height: Math.max(6, Math.round((value / maxValue) * 170)),
+                                            borderRadius: "7px 7px 3px 3px",
+                                            background: `linear-gradient(180deg, ${statsComparativoColors[sIdx % statsComparativoColors.length]}, ${statsComparativoColors[sIdx % statsComparativoColors.length]}cc)`,
+                                            boxShadow: "0 4px 10px rgba(15, 23, 42, .12)",
+                                          }}
+                                        />
+                                      </div>
                                     );
                                   })}
                                 </div>
-                                <div style={{ fontSize: 10, opacity: 0.85 }}>{statsPacientesComparativo[0]?.serie[monthIdx]?.etiqueta ?? "-"}</div>
+                                <div style={{ fontSize: 11, fontWeight: 800, color: "#475569" }}>{statsPacientesComparativo[0]?.serie[monthIdx]?.etiqueta ?? "-"}</div>
                               </div>
                             ));
                           })()}
@@ -7483,7 +8112,7 @@ export default function App() {
                   Registro clínico integral
                 </div>
               </div>
-              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <div className="historia-header-actions" style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", justifyContent: "flex-end" }}>
                 {canEditPaciente && historiaPacienteInfo && historiaData && (
                   <button
                     type="button"
@@ -7579,6 +8208,28 @@ export default function App() {
               .historia-main-scroll select,
               .historia-main-scroll textarea,
               .historia-main-scroll button { font-size: 11px; }
+              .historia-header-actions button {
+                min-height: 36px;
+                padding-left: 14px !important;
+                padding-right: 14px !important;
+                border-radius: 12px !important;
+                box-shadow: 0 5px 14px rgba(63, 45, 29, .12);
+                transition: transform .16s ease, box-shadow .16s ease, filter .16s ease;
+              }
+              .historia-header-actions button:hover:not(:disabled) {
+                transform: translateY(-1px);
+                box-shadow: 0 8px 18px rgba(63, 45, 29, .18);
+                filter: saturate(1.08);
+              }
+              .historia-header-actions button:active:not(:disabled) {
+                transform: translateY(0);
+                box-shadow: 0 3px 8px rgba(63, 45, 29, .14);
+              }
+              .historia-main-scroll input[type="checkbox"] {
+                width: 16px;
+                height: 16px;
+                accent-color: #5f7734;
+              }
               .historia-paciente-grid { display: grid; gap: 10px; grid-template-columns: repeat(6, minmax(0, 1fr)); }
               @media (max-width: 1700px) {
                 .historia-paciente-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
@@ -7823,6 +8474,119 @@ export default function App() {
 
                 <section data-hist-section="antecedentes" style={{ display: "grid", gap: 12, order: 2 }}>
                   {/* Antecedentes */}
+                  <div style={{ background: "linear-gradient(180deg, #fffdf9 0%, #fff8ef 100%)", border: "1px solid #dfc8ae", padding: 14, borderRadius: 14, display: "grid", gap: 12 }}>
+                    <div style={{ fontWeight: 800, color: "#5f4a32", fontSize: 16 }}>Lentes actuales</div>
+                    <label style={{ display: "grid", gap: 4 }}>
+                      <span>¿Usa lentes actualmente?</span>
+                      <select
+                        style={historiaInputStyle}
+                        value={String(historiaData.usa_lentes ?? "")}
+                        onChange={(e) => {
+                          const usa = parseBoolSelect(e.target.value);
+                          setHistoriaData({
+                            ...historiaData,
+                            usa_lentes: usa,
+                            ...(usa === true ? {} : {
+                              tipo_lentes_actual: "",
+                              tiempo_uso_lentes: "",
+                              tiempo_uso_lentes_anios: "",
+                              lentes_contacto_horas_dia: null,
+                              lentes_contacto_dias_semana: null,
+                              uso_lentes_proteccion_uv: "",
+                              lentes_pares: [],
+                            }),
+                          });
+                        }}
+                      >
+                        <option value="">Seleccionar</option>
+                        <option value="true">Sí</option>
+                        <option value="false">No</option>
+                      </select>
+                    </label>
+
+                    {historiaData.usa_lentes === true && (
+                      <>
+                        <label style={{ display: "grid", gap: 4 }}>
+                          <span>Uso de lentes con micas antiblueray al día</span>
+                          <select
+                            style={historiaInputStyle}
+                            value={historiaData.uso_lentes_proteccion_uv ?? ""}
+                            onChange={(e) => setHistoriaData({ ...historiaData, uso_lentes_proteccion_uv: e.target.value })}
+                          >
+                            <option value="">Seleccionar</option>
+                            {TIEMPO_USO_ANTIBLUERAY_DIA_OPTIONS.map((opt) => (
+                              <option key={`antiblueray-dia-${opt.value}`} value={opt.value}>{opt.label}</option>
+                            ))}
+                          </select>
+                        </label>
+
+                        <label style={{ display: "grid", gap: 4, maxWidth: 320 }}>
+                          <span>¿Cuántos pares de lentes tiene actualmente?</span>
+                          <input
+                            type="number"
+                            min={1}
+                            max={10}
+                            step={1}
+                            style={historiaInputStyle}
+                            value={Math.max(1, parseLentesActualesDetalle(historiaData.lentes_pares).length)}
+                            onChange={(e) => {
+                              const count = Math.max(1, Math.min(10, Number(e.target.value) || 1));
+                              const current = parseLentesActualesDetalle(historiaData.lentes_pares);
+                              const next = Array.from({ length: count }, (_, idx) => current[idx] ?? { tipo: "", tratamientos: [] });
+                              setHistoriaData({ ...historiaData, lentes_pares: next });
+                            }}
+                          />
+                        </label>
+
+                        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 10 }}>
+                          {(parseLentesActualesDetalle(historiaData.lentes_pares).length
+                            ? parseLentesActualesDetalle(historiaData.lentes_pares)
+                            : [{ tipo: "", tratamientos: [] }]
+                          ).map((par, idx, pares) => (
+                            <div key={`lentes-par-${idx}`} style={{ border: "1px solid #ead9c8", background: "#fff", borderRadius: 12, padding: 12 }}>
+                              <div style={{ fontWeight: 800, color: "#5f4a32", marginBottom: 8 }}>Par de lentes #{idx + 1}</div>
+                              <label style={{ display: "grid", gap: 4 }}>
+                                <span>Tipo</span>
+                                <select
+                                  style={historiaInputStyle}
+                                  value={par.tipo}
+                                  onChange={(e) => {
+                                    const next = pares.map((item, itemIdx) => itemIdx === idx ? { ...item, tipo: e.target.value } : item);
+                                    setHistoriaData({ ...historiaData, lentes_pares: next });
+                                  }}
+                                >
+                                  <option value="">Seleccionar</option>
+                                  <option value="armazon">Armazón</option>
+                                  <option value="contacto">Contacto</option>
+                                  <option value="sol">Lentes de sol</option>
+                                </select>
+                              </label>
+                              <div style={{ fontWeight: 700, margin: "10px 0 6px" }}>Tratamientos de este par</div>
+                              <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
+                                {TRATAMIENTOS_LENTES_MANEJAR_OPTIONS.map((opt) => (
+                                  <label key={`par-${idx}-${opt.value}`} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                                    <input
+                                      type="checkbox"
+                                      checked={par.tratamientos.includes(opt.value)}
+                                      onChange={(e) => {
+                                        const tratamientos = e.target.checked
+                                          ? Array.from(new Set([...par.tratamientos, opt.value]))
+                                          : par.tratamientos.filter((value) => value !== opt.value);
+                                        const next = pares.map((item, itemIdx) => itemIdx === idx ? { ...item, tratamientos } : item);
+                                        setHistoriaData({ ...historiaData, lentes_pares: next });
+                                      }}
+                                    />
+                                    <span>{opt.label}</span>
+                                  </label>
+                                ))}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </>
+                    )}
+                  </div>
+
                   <label style={{ display: "grid", gap: 6 }}>
                     <span style={{ fontWeight: 700, color: "#5f4a32" }}>Puestos laborales</span>
                     <div style={{ display: "flex", alignItems: "center", gap: 8, maxWidth: 220 }}>
@@ -8248,10 +9012,18 @@ export default function App() {
                                   })
                                 }
                               />
-                              <span>{opt}</span>
+                              <span>{DIABETES_TRATAMIENTO_LABELS[opt] ?? opt}</span>
                             </label>
                           ))}
                         </div>
+                        {splitPipeList(historiaData.diabetes_tratamiento).includes("otro") && (
+                          <input
+                            style={{ ...historiaInputStyle, marginTop: 10 }}
+                            placeholder="Especifica otro tratamiento"
+                            value={historiaData.diabetes_tratamiento_otro ?? ""}
+                            onChange={(e) => setHistoriaData({ ...historiaData, diabetes_tratamiento_otro: e.target.value })}
+                          />
+                        )}
                       </div>
                     )}
                   </div>
@@ -8359,6 +9131,19 @@ export default function App() {
                           </select>
                         </label>
                         <label style={{ display: "grid", gap: 4 }}>
+                          <span>Uso de lentes de sol (horas al día)</span>
+                          <select
+                            style={historiaInputStyle}
+                            value={historiaData.uso_lentes_sol_horas_dia ?? ""}
+                            onChange={(e) => setHistoriaData({ ...historiaData, uso_lentes_sol_horas_dia: e.target.value })}
+                          >
+                            <option value="">Seleccionar</option>
+                            {USO_LENTES_SOL_HORAS_DIA_OPTIONS.map((opt) => (
+                              <option key={`sol-horas-${opt.value}`} value={opt.value}>{opt.label}</option>
+                            ))}
+                          </select>
+                        </label>
+                        <label style={{ display: "grid", gap: 4 }}>
                           <span>Uso de lentes de sol (días por semana)</span>
                           <select
                             style={historiaInputStyle}
@@ -8372,7 +9157,7 @@ export default function App() {
                           </select>
                         </label>
                         <label style={{ display: "grid", gap: 4 }}>
-                          <span>Conducción nocturna</span>
+                          <span>Conducción nocturna (al día)</span>
                           <select
                             style={historiaInputStyle}
                             value={historiaData.conduccion_nocturna_horas ?? ""}
@@ -8385,6 +9170,74 @@ export default function App() {
                           </select>
                         </label>
                       </div>
+
+                      {[
+                        { key: "dia", label: "¿Usa lentes al manejar de día?" },
+                        { key: "noche", label: "¿Usa lentes al manejar de noche?" },
+                      ].map(({ key, label }) => {
+                        const usaKey = `usa_lentes_manejar_${key}`;
+                        const tipoKey = `tipo_lentes_manejar_${key}`;
+                        const tratamientosKey = `tratamientos_lentes_manejar_${key}`;
+                        const usaLentes = historiaData[usaKey] === true;
+                        return (
+                          <div key={key} style={{ padding: 12, borderRadius: 12, background: "#fffaf4", border: "1px solid #ead9c8" }}>
+                            <label style={{ display: "grid", gap: 4 }}>
+                              <span>{label}</span>
+                              <select
+                                style={historiaInputStyle}
+                                value={historiaData[usaKey] === true ? "si" : historiaData[usaKey] === false ? "no" : ""}
+                                onChange={(e) => {
+                                  const next = e.target.value === "" ? null : e.target.value === "si";
+                                  setHistoriaData({
+                                    ...historiaData,
+                                    [usaKey]: next,
+                                    ...(next ? {} : { [tipoKey]: "", [tratamientosKey]: "" }),
+                                  });
+                                }}
+                              >
+                                <option value="">Seleccionar</option>
+                                <option value="si">Sí</option>
+                                <option value="no">No</option>
+                              </select>
+                            </label>
+                            {usaLentes && (
+                              <div style={{ display: "grid", gap: 10, marginTop: 10 }}>
+                                <label style={{ display: "grid", gap: 4 }}>
+                                  <span>¿Qué tipo de lentes?</span>
+                                  <select
+                                    style={historiaInputStyle}
+                                    value={historiaData[tipoKey] ?? ""}
+                                    onChange={(e) => setHistoriaData({ ...historiaData, [tipoKey]: e.target.value })}
+                                  >
+                                    <option value="">Seleccionar</option>
+                                    {TIPO_LENTES_MANEJAR_OPTIONS.map((opt) => (
+                                      <option key={`${key}-tipo-${opt.value}`} value={opt.value}>{opt.label}</option>
+                                    ))}
+                                  </select>
+                                </label>
+                                <div>
+                                  <div style={{ fontWeight: 700, marginBottom: 6 }}>¿Tienen tratamiento?</div>
+                                  <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
+                                    {TRATAMIENTOS_LENTES_MANEJAR_OPTIONS.map((opt) => (
+                                      <label key={`${key}-trat-${opt.value}`} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                                        <input
+                                          type="checkbox"
+                                          checked={splitPipeList(historiaData[tratamientosKey]).includes(opt.value)}
+                                          onChange={(e) => setHistoriaData({
+                                            ...historiaData,
+                                            [tratamientosKey]: togglePipeValue(historiaData[tratamientosKey], opt.value, e.target.checked),
+                                          })}
+                                        />
+                                        <span>{opt.label}</span>
+                                      </label>
+                                    ))}
+                                  </div>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
                     </div>
 
                     <div style={{ border: "1px solid #f0e1cf", borderRadius: 10, padding: 10, display: "grid", gap: 10 }}>
@@ -8437,7 +9290,7 @@ export default function App() {
                           />
                         </label>
                         <label style={{ display: "grid", gap: 4 }}>
-                          <span>Cafeína (bebidas con cafeína al día)</span>
+                          <span>Cafeína (bebidas con cafeína a la semana)</span>
                           <select
                             style={historiaInputStyle}
                             value={historiaData.cafeina_por_dia ?? ""}
@@ -8450,18 +9303,35 @@ export default function App() {
                           </select>
                         </label>
                         <label style={{ display: "grid", gap: 4 }}>
-                          <span>Horas de lectura al día</span>
+                          <span>¿Lees libros?</span>
                           <select
                             style={historiaInputStyle}
-                            value={historiaData.horas_lectura_dia ?? ""}
-                            onChange={(e) => setHistoriaData({ ...historiaData, horas_lectura_dia: e.target.value })}
+                            value={historiaData.lee_libros === true ? "si" : historiaData.lee_libros === false ? "no" : ""}
+                            onChange={(e) => {
+                              const next = e.target.value === "" ? null : e.target.value === "si";
+                              setHistoriaData({ ...historiaData, lee_libros: next, ...(next ? {} : { horas_lectura_dia: "" }) });
+                            }}
                           >
                             <option value="">Seleccionar</option>
-                            {TIEMPO_USO_DIARIO_RANGO_OPTIONS.map((opt) => (
-                              <option key={`lectura-${opt.value}`} value={opt.value}>{opt.label}</option>
-                            ))}
+                            <option value="si">Sí</option>
+                            <option value="no">No</option>
                           </select>
                         </label>
+                        {historiaData.lee_libros === true && (
+                          <label style={{ display: "grid", gap: 4 }}>
+                            <span>Horas de lectura a la semana</span>
+                            <select
+                              style={historiaInputStyle}
+                              value={historiaData.horas_lectura_dia ?? ""}
+                              onChange={(e) => setHistoriaData({ ...historiaData, horas_lectura_dia: e.target.value })}
+                            >
+                              <option value="">Seleccionar</option>
+                              {HORAS_LECTURA_SEMANA_OPTIONS.map((opt) => (
+                                <option key={`lectura-${opt.value}`} value={opt.value}>{opt.label}</option>
+                              ))}
+                            </select>
+                          </label>
+                        )}
                         <label style={{ display: "grid", gap: 4 }}>
                           <span>Nivel educativo</span>
                           <select
@@ -8639,7 +9509,7 @@ export default function App() {
                         {["ex_fumador", "fumador_actual"].includes(String(historiaData.tabaquismo_estado ?? "")) && (
                           <>
                             <label style={{ display: "grid", gap: 4 }}>
-                              <span>Intensidad (cigarros/día)</span>
+                              <span>Intensidad (cigarros a la semana)</span>
                               <input
                                 type="number"
                                 min={0}
@@ -8721,6 +9591,7 @@ export default function App() {
                                     ...historiaData,
                                     alcohol_estado: estado,
                                     alcohol_bebidas_dia: "",
+                                    alcohol_frecuencia_nivel: "",
                                     alcohol_tiempo_valor: "",
                                     alcohol_tiempo_unidad: "anios",
                                   });
@@ -8737,7 +9608,20 @@ export default function App() {
                           {String(historiaData.alcohol_estado ?? "nunca") !== "nunca" && (
                             <>
                               <label style={{ display: "grid", gap: 4 }}>
-                                <span>Bebidas al día</span>
+                                <span>Frecuencia a la semana</span>
+                                <select
+                                  style={historiaInputStyle}
+                                  value={historiaData.alcohol_frecuencia_nivel ?? ""}
+                                  onChange={(e) => setHistoriaData({ ...historiaData, alcohol_frecuencia_nivel: e.target.value })}
+                                >
+                                  <option value="">Seleccionar</option>
+                                  <option value="baja">Baja</option>
+                                  <option value="media">Media</option>
+                                  <option value="alta">Alta</option>
+                                </select>
+                              </label>
+                              <label style={{ display: "grid", gap: 4 }}>
+                                <span>Bebidas a la semana</span>
                                 <input
                                   type="number"
                                   min={0}
@@ -8804,7 +9688,7 @@ export default function App() {
                               ))}
                             </select>
                           </label>
-                          {String(historiaData.marihuana_estado ?? "nunca") !== "nunca" && (
+                          {true && (
                             <>
                               <label style={{ display: "grid", gap: 4 }}>
                                 <span>Veces por semana</span>
@@ -8888,7 +9772,7 @@ export default function App() {
                               ))}
                             </select>
                           </label>
-                          {String(historiaData.drogas_consumo_estado ?? "nunca") !== "nunca" && (
+                          {true && (
                             <>
                               <div>
                                 <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 4 }}>Tipo</div>
@@ -9092,7 +9976,7 @@ export default function App() {
                       </label>
                     </div>
 
-                    <div style={{ borderTop: "1px solid #f0e1cf", paddingTop: 10 }}>
+                    <div style={{ display: "none", borderTop: "1px solid #f0e1cf", paddingTop: 10 }}>
                       <div style={{ fontWeight: 700, marginBottom: 8 }}>Lentes</div>
                       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 10 }}>
                         <label style={{ display: "grid", gap: 4 }}>

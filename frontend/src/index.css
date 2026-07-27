@@ -1,8 +1,14 @@
 :root {
-  font-family: system-ui, Avenir, Helvetica, Arial, sans-serif;
+  font-family: Inter, "Avenir Next", Avenir, "Segoe UI", sans-serif;
   line-height: 1.5;
   font-weight: 400;
   color-scheme: light;
+  --olm-ink: #172b3a;
+  --olm-muted: #647b8a;
+  --olm-line: #dbe5e9;
+  --olm-primary: #0f766e;
+  --olm-primary-strong: #0b5f59;
+  --olm-danger: #b42318;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
@@ -19,12 +25,17 @@ body,
   margin: 0;
   width: 100%;
   min-height: 100%;
-  background: #fff8ef;
-  color: #2f241a;
+  background: #eaf0f3;
+  color: var(--olm-ink);
 }
 
 body {
   min-width: 320px;
+  background:
+    radial-gradient(circle at 8% 0%, rgba(13, 148, 136, 0.11), transparent 29rem),
+    radial-gradient(circle at 92% 8%, rgba(59, 130, 246, 0.09), transparent 31rem),
+    linear-gradient(180deg, #f1f5f7 0%, #e8eef1 100%);
+  background-attachment: fixed;
 }
 
 input,
@@ -32,9 +43,32 @@ select,
 textarea {
   color-scheme: light;
   background: #ffffff !important;
-  color: #111111 !important;
-  -webkit-text-fill-color: #111111 !important;
-  caret-color: #111111;
+  color: var(--olm-ink) !important;
+  -webkit-text-fill-color: var(--olm-ink) !important;
+  caret-color: var(--olm-primary);
+  border-color: #d6e1e6 !important;
+  border-radius: 11px !important;
+  min-height: 42px;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.03);
+  transition: border-color 160ms ease, box-shadow 160ms ease, background-color 160ms ease;
+}
+
+textarea {
+  min-height: 88px;
+}
+
+input:hover,
+select:hover,
+textarea:hover {
+  border-color: #b9cbd2 !important;
+}
+
+input:focus,
+select:focus,
+textarea:focus {
+  outline: none;
+  border-color: #4aa99f !important;
+  box-shadow: 0 0 0 4px rgba(13, 148, 136, 0.12) !important;
 }
 
 select option {
@@ -43,13 +77,160 @@ select option {
 }
 
 button {
-  color: #2f241a;
+  color: var(--olm-ink);
   color-scheme: light;
+  min-height: 40px;
+  border-radius: 11px !important;
+  letter-spacing: -0.01em;
+  font-family: inherit;
 }
 
 input::placeholder,
 textarea::placeholder {
-  color: #6b6b6b;
+  color: #8ba0ac;
+}
+
+button:focus-visible,
+a:focus-visible {
+  outline: 3px solid rgba(13, 148, 136, 0.27);
+  outline-offset: 2px;
+}
+
+button:disabled {
+  cursor: not-allowed !important;
+  filter: grayscale(0.25);
+}
+
+table {
+  border-collapse: separate !important;
+  border-spacing: 0;
+  overflow: hidden;
+  border: 1px solid var(--olm-line);
+  border-radius: 16px;
+  background: #fff;
+}
+
+thead tr {
+  background: #f2f7f8 !important;
+}
+
+th {
+  color: #526b7b;
+  font-size: 0.78rem;
+  letter-spacing: 0.055em;
+  text-transform: uppercase;
+  font-weight: 850;
+  border-bottom: 1px solid var(--olm-line);
+}
+
+tbody tr {
+  transition: background-color 150ms ease;
+}
+
+tbody tr:hover {
+  background: #f7fbfb;
+}
+
+tbody td {
+  border-bottom: 1px solid #edf2f4;
+}
+
+tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.olm-login-card {
+  box-shadow: 0 28px 70px rgba(24, 50, 71, 0.15);
+  backdrop-filter: blur(18px);
+}
+
+.olm-app-shell > div:not(.olm-session-bar):not(.olm-branch-row):not(.olm-main-tabs) {
+  scroll-margin-top: 18px;
+}
+
+.olm-session-bar {
+  padding: 12px 14px;
+  border: 1px solid var(--olm-line);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.76);
+}
+
+.olm-branch-row {
+  padding: 0 4px;
+}
+
+.olm-main-tabs {
+  width: fit-content;
+  max-width: 100%;
+  overflow-x: auto;
+  padding: 6px;
+  border: 1px solid var(--olm-line);
+  border-radius: 18px;
+  background: #edf3f5;
+  scrollbar-width: thin;
+}
+
+.olm-address-finder {
+  margin: 4px 0 14px;
+  padding: 14px;
+  border: 1px solid #cfe3e2;
+  border-radius: 15px;
+  background: linear-gradient(135deg, #f2fbfa 0%, #f7fafc 100%);
+}
+
+.olm-google-address {
+  display: block;
+  width: 100%;
+  color-scheme: light;
+}
+
+.olm-address-status {
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: #dff6f1;
+  color: #0f766e;
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+
+.olm-address-help {
+  margin-top: 7px;
+  color: #6b8190;
+  font-size: 0.76rem;
+}
+
+.olm-address-help-error {
+  color: #a33a31;
+}
+
+@media (max-width: 760px) {
+  .olm-app-shell {
+    width: calc(100vw - 16px) !important;
+    min-height: calc(100vh - 16px) !important;
+    margin: 8px auto !important;
+    padding: 14px 12px 24px !important;
+    border-radius: 20px !important;
+  }
+
+  .olm-session-bar {
+    align-items: flex-start !important;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+
+  .olm-branch-row {
+    align-items: stretch !important;
+    flex-direction: column;
+  }
+
+  .olm-branch-row select {
+    min-width: 0 !important;
+    width: 100%;
+  }
+
+  .olm-main-tabs {
+    width: 100%;
+  }
 }
 
 input:-webkit-autofill,
