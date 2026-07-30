@@ -92,15 +92,35 @@ type ConsultaCreate = {
   agenda_fin?: string | null;
 };
 
+type VentaMetodoPago =
+  | "efectivo"
+  | "tarjeta_credito"
+  | "tarjeta_debito"
+  | "transferencia_spei"
+  | "deposito_bancario"
+  | "cheque";
+
+type VentaFormaLiquidacion =
+  | "pago_completo"
+  | "adelanto_apartado"
+  | "pago_mixto"
+  | "meses_sin_intereses"
+  | "meses_con_intereses";
+
 type Venta = {
   venta_id: number;
   fecha_hora: string | null;
   compra: string | null;
+  subtotal?: number;
+  descuento_porcentaje?: number;
+  descuento_motivo?: string | null;
+  cupon_tipo?: string | null;
   monto_total: number;
-  metodo_pago: "efectivo" | "tarjeta_credito" | "tarjeta_debito";
+  metodo_pago: string;
+  forma_liquidacion?: VentaFormaLiquidacion;
   adelanto_aplica?: boolean;
   adelanto_monto?: number | null;
-  adelanto_metodo?: "efectivo" | "tarjeta_credito" | "tarjeta_debito" | null;
+  adelanto_metodo?: VentaMetodoPago | null;
   como_nos_conocio?: string | null;
   notas: string | null;
   paciente_id: number;
@@ -114,13 +134,48 @@ type VentaCreate = {
   paciente_id: number;
   sucursal_id?: number | null;
   compra: string;
+  subtotal?: number;
+  descuento_porcentaje?: number;
+  descuento_motivo?: string | null;
+  cupon_tipo?: string | null;
   monto_total: number;
-  metodo_pago: "efectivo" | "tarjeta_credito" | "tarjeta_debito";
+  metodo_pago: string;
+  forma_liquidacion?: VentaFormaLiquidacion;
   adelanto_aplica?: boolean;
   adelanto_monto?: number | null;
-  adelanto_metodo?: "efectivo" | "tarjeta_credito" | "tarjeta_debito" | null;
+  adelanto_metodo?: VentaMetodoPago | null;
   como_nos_conocio?: string | null;
   notas?: string | null;
+  productos?: Array<{
+    producto_id: number;
+    cantidad: number;
+  }>;
+};
+
+type InventarioProducto = {
+  producto_id: number;
+  sucursal_id: number;
+  sku: string;
+  categoria: string;
+  subcategoria: string | null;
+  nombre: string;
+  modelo: string | null;
+  color: string | null;
+  tipo_mica: string | null;
+  descripcion: string | null;
+  imagen_url: string | null;
+  precio: number;
+  costo_unitario: number | null;
+  stock: number;
+  stock_minimo: number;
+  activo: boolean;
+  controla_stock: boolean;
+  orden_catalogo: number;
+};
+
+type VentaCarritoItem = {
+  producto_id: number;
+  cantidad: number;
 };
 
 type StatsSerie = {
@@ -646,7 +701,7 @@ function TabButton({
   onClick,
 }: {
   active: boolean;
-  variant: "pacientes" | "consultas" | "ventas" | "estadisticas" | "historia_clinica";
+  variant: "pacientes" | "consultas" | "ventas" | "estadisticas" | "historia_clinica" | "inventario";
   children: ReactNode;
   onClick: () => void;
 }) {
@@ -657,6 +712,8 @@ function TabButton({
         ? "#f59e0b"
         : variant === "ventas"
           ? "#3b82f6"
+          : variant === "inventario"
+            ? "#2563eb"
           : variant === "historia_clinica"
             ? "#0d9488"
             : "#8b5cf6";
@@ -667,6 +724,8 @@ function TabButton({
         ? "◷"
         : variant === "ventas"
           ? "⊕"
+          : variant === "inventario"
+            ? "▦"
           : variant === "historia_clinica"
             ? "✦"
             : "⌁";
@@ -884,16 +943,32 @@ function parseBoolSelect(v: string): boolean | null {
   return null;
 }
 
-function wordCount(value: string | null | undefined): number {
-  if (!value) return 0;
-  return value.trim().split(/\s+/).filter(Boolean).length;
-}
-
 function formatMetodoPagoLabel(value: string | null | undefined): string {
   if (!value) return "";
-  if (value === "tarjeta_credito") return "tarjeta de credito";
-  if (value === "tarjeta_debito") return "tarjeta de debito";
-  return value;
+  const labels: Record<string, string> = {
+    efectivo: "Efectivo",
+    tarjeta_credito: "Tarjeta de crédito",
+    tarjeta_debito: "Tarjeta de débito",
+    transferencia_spei: "Transferencia bancaria / SPEI",
+    deposito_bancario: "Depósito bancario",
+    cheque: "Cheque",
+  };
+  return value
+    .split("|")
+    .map((token) => labels[token] ?? token.replace(/_/g, " "))
+    .join(" + ");
+}
+
+function formatFormaLiquidacionLabel(value: string | null | undefined): string {
+  if (!value) return "";
+  const labels: Record<string, string> = {
+    pago_completo: "Pago completo",
+    adelanto_apartado: "Adelanto / apartado",
+    pago_mixto: "Pago mixto",
+    meses_sin_intereses: "Meses sin intereses",
+    meses_con_intereses: "Meses con intereses",
+  };
+  return labels[value] ?? value.replace(/_/g, " ");
 }
 
 function formatComoNosConocioLabel(value: string | null | undefined): string {
@@ -1090,6 +1165,12 @@ const TRATAMIENTOS_LENTES_MANEJAR_OPTIONS = [
   { value: "fotocromaticos", label: "Fotocromáticos" },
   { value: "antiblueray", label: "Antiblueray" },
   { value: "progresivos", label: "Progresivos" },
+  { value: "monofocal", label: "Monofocal" },
+  { value: "bifocal", label: "Bifocal" },
+  { value: "sin_graduacion", label: "Sin graduación" },
+  { value: "polarizados", label: "Polarizados" },
+  { value: "espejeados", label: "Espejeados" },
+  { value: "tintados", label: "Tintados" },
 ] as const;
 const HORAS_LECTURA_SEMANA_OPTIONS = [
   { value: "0", label: "0" },
@@ -1192,24 +1273,42 @@ const CONSULTA_ETAPA_OPTIONS = [
   "seguimiento",
 ] as const;
 const CONSULTA_MOTIVO_OPTIONS = [
-  "revision_general",
-  "graduacion_lentes",
+  "revision_visual_general",
+  "cambio_actualizacion_graduacion",
+  "sintomas_visuales",
+  "molestia_ocular",
+  "accidente_lesion_ocular",
   "lentes_contacto",
-  "molestia",
+  "seguimiento_revaloracion",
   "otro",
 ] as const;
 const CONSULTA_LABELS: Record<string, string> = {
   primera_vez_en_clinica: "Primera vez en clínica",
   seguimiento: "Seguimiento",
+  revision_visual_general: "Revisión visual general",
+  cambio_actualizacion_graduacion: "Cambio o actualización de graduación",
+  sintomas_visuales: "Síntomas visuales",
+  molestia_ocular: "Molestia ocular",
+  accidente_lesion_ocular: "Accidente o lesión ocular",
+  lentes_contacto: "Lentes de contacto",
+  seguimiento_revaloracion: "Seguimiento o revaloración",
+  otro: "Otro",
   revision_general: "Revisión general",
   graduacion_lentes: "Graduación de lentes",
-  lentes_contacto: "Lentes de contacto",
   molestia: "Molestia",
-  otro: "Otro",
 };
 const VENTA_COMPRA_OPTIONS = [
   "examen_de_la_vista",
   "armazon_solo",
+  "micas_base",
+  "micas_monofocales",
+  "micas_bifocales",
+  "micas_progresivas",
+  "micas_sin_graduacion",
+  "micas_tinte",
+  "tinte_grado_1",
+  "tinte_grado_2",
+  "tinte_grado_3",
   "micas_solas_sin_tratamiento",
   "micas_antirreflejante",
   "micas_fotocromaticas",
@@ -1224,13 +1323,141 @@ const VENTA_COMPRA_OPTIONS = [
   "lentes_de_sol_sin_graduacion",
   "lentes_de_sol_con_graduacion",
   "soluciones_y_cuidado",
-  "otro",
 ] as const;
 const VENTA_COMPRA_OPTION_ALIASES: Record<string, string> = {
   armazon: "armazon_solo",
   micas: "micas_solas_sin_tratamiento",
   lentes_contacto: "lentes_de_contacto",
 };
+
+type VentaCategoria =
+  | "lentes_opticos"
+  | "lentes_de_sol"
+  | "micas"
+  | "examen_de_la_vista"
+  | "lentes_de_contacto"
+  | "estuche_accesorios"
+  | "soluciones_y_cuidado";
+
+const VENTA_COMPRA_LABELS: Record<string, string> = {
+  examen_de_la_vista: "Examen de la vista",
+  armazon_solo: "Armazón solo",
+  micas_base: "Par de micas estándar",
+  micas_monofocales: "Diseño monofocal",
+  micas_bifocales: "Diseño bifocal",
+  micas_progresivas: "Diseño progresivo",
+  micas_sin_graduacion: "Micas sin graduación",
+  micas_tinte: "Micas con tinte",
+  tinte_grado_1: "Tinte grado 1",
+  tinte_grado_2: "Tinte grado 2",
+  tinte_grado_3: "Tinte grado 3",
+  micas_solas_sin_tratamiento: "Micas solas sin tratamiento",
+  micas_antirreflejante: "Micas antirreflejantes",
+  micas_fotocromaticas: "Micas fotocromáticas",
+  micas_antiblueray: "Micas antiblueray",
+  lentes_de_contacto: "Lentes de contacto",
+  armazon_con_micas_sin_tratamiento: "Armazón con micas sin tratamiento",
+  armazon_con_micas_antirreflejante: "Armazón con micas antirreflejantes",
+  armazon_con_micas_fotocromaticas: "Armazón con micas fotocromáticas",
+  armazon_con_micas_antiblueray: "Armazón con micas antiblueray",
+  estuche_para_armazon: "Estuche para armazón",
+  accesorios_y_refacciones: "Accesorios y refacciones",
+  lentes_de_sol_sin_graduacion: "Lentes de sol sin graduación",
+  lentes_de_sol_con_graduacion: "Lentes de sol con graduación",
+  soluciones_y_cuidado: "Soluciones y cuidado",
+  otro: "Otro",
+};
+
+const VENTA_METODO_PAGO_OPTIONS: Array<{ value: VentaMetodoPago; label: string }> = [
+  { value: "efectivo", label: "Efectivo" },
+  { value: "tarjeta_credito", label: "Tarjeta de crédito" },
+  { value: "tarjeta_debito", label: "Tarjeta de débito" },
+  { value: "transferencia_spei", label: "Transferencia bancaria / SPEI" },
+  { value: "deposito_bancario", label: "Depósito bancario" },
+  { value: "cheque", label: "Cheque" },
+];
+
+const VENTA_FORMA_LIQUIDACION_OPTIONS: Array<{ value: VentaFormaLiquidacion; label: string }> = [
+  { value: "pago_completo", label: "Pago completo" },
+  { value: "adelanto_apartado", label: "Adelanto / apartado" },
+  { value: "pago_mixto", label: "Pago mixto" },
+  { value: "meses_sin_intereses", label: "Meses sin intereses" },
+  { value: "meses_con_intereses", label: "Meses con intereses" },
+];
+
+const VENTA_DESCUENTO_MOTIVO_OPTIONS = [
+  { value: "familiar", label: "Familiar" },
+  { value: "cliente_referido", label: "Cliente referido" },
+  { value: "promocion_especial", label: "Promoción especial" },
+  { value: "convenio_empresa_escuela_otra", label: "Convenio con empresa / escuela u otra" },
+  { value: "cortesia", label: "Cortesía" },
+] as const;
+
+const VENTA_CUPON_TIPO_OPTIONS = [
+  { value: "cupon_online", label: "Cupón online" },
+  { value: "cupon_fisico", label: "Cupón físico" },
+  { value: "sin_cupon", label: "Sin cupón" },
+] as const;
+
+function formatDescuentoMotivoLabel(value: string | null | undefined): string {
+  return VENTA_DESCUENTO_MOTIVO_OPTIONS.find((opcion) => opcion.value === value)?.label || "—";
+}
+
+function formatCuponTipoLabel(value: string | null | undefined): string {
+  return VENTA_CUPON_TIPO_OPTIONS.find((opcion) => opcion.value === value)?.label || "—";
+}
+
+const VENTA_TINTE_COLORES: Record<string, string> = {
+  Gris: "#737b86",
+  Café: "#7a4d32",
+  Verde: "#317a55",
+  Azul: "#316cb8",
+  Rosa: "#d87d9d",
+  Ámbar: "#c98a21",
+  Vino: "#7b2944",
+  Morado: "#704c9b",
+  Negro: "#20242a",
+  Naranja: "#df6d24",
+};
+
+type VentaTinteGrado = "" | "grado_1" | "grado_2" | "grado_3";
+
+const VENTA_CATEGORIAS: Array<{
+  value: VentaCategoria;
+  label: string;
+  detail: string;
+  icon: string;
+}> = [
+  { value: "lentes_opticos", label: "Lentes ópticos", detail: "Armazón y tipo de micas", icon: "◉" },
+  { value: "lentes_de_sol", label: "Lentes de sol", detail: "Modelos reales y graduación", icon: "☀" },
+  { value: "micas", label: "Micas", detail: "Diseño, tratamiento y color", icon: "◌" },
+  { value: "examen_de_la_vista", label: "Examen de la vista", detail: "Servicio de revisión visual", icon: "◎" },
+  { value: "lentes_de_contacto", label: "Lentes de contacto", detail: "Productos con precio", icon: "◍" },
+  { value: "estuche_accesorios", label: "Accesorios", detail: "Estuches, taza y refacciones", icon: "▣" },
+  { value: "soluciones_y_cuidado", label: "Soluciones y cuidado", detail: "Limpieza y mantenimiento", icon: "✦" },
+];
+
+function formatVentaCompraLabel(value: string): string {
+  const clean = String(value ?? "").trim();
+  if (!clean) return "";
+  if (clean.toLowerCase().startsWith("otro:")) {
+    return `Otro: ${clean.slice(5).trim()}`;
+  }
+  const canonical = canonicalVentaCompraOption(clean);
+  return VENTA_COMPRA_LABELS[canonical] ?? clean.replace(/_/g, " ");
+}
+
+function inferVentaCategoria(tokens: string[]): VentaCategoria | "" {
+  if (tokens.some((x) => x.startsWith("armazon_con_micas_"))) return "lentes_opticos";
+  if (tokens.includes("armazon_solo")) return "lentes_opticos";
+  if (tokens.some((x) => x.startsWith("micas_"))) return "micas";
+  if (tokens.some((x) => x.startsWith("lentes_de_sol_"))) return "lentes_de_sol";
+  if (tokens.includes("examen_de_la_vista")) return "examen_de_la_vista";
+  if (tokens.includes("lentes_de_contacto")) return "lentes_de_contacto";
+  if (tokens.includes("estuche_para_armazon") || tokens.includes("accesorios_y_refacciones")) return "estuche_accesorios";
+  if (tokens.includes("soluciones_y_cuidado")) return "soluciones_y_cuidado";
+  return "";
+}
 
 function canonicalVentaCompraOption(value: string): string {
   const clean = String(value ?? "").trim().toLowerCase();
@@ -1462,21 +1689,27 @@ function tryParseJsonObject(value: unknown): Record<string, any> | null {
 type LentesActualesDetalle = {
   tipo: string;
   tratamientos: string[];
+  color_tinte: string;
+  grado_tinte: string;
 };
 
 function parseLentesActualesDetalle(value: unknown): LentesActualesDetalle[] {
   if (Array.isArray(value)) {
     return value.map((item) => ({
-      tipo: String(item?.tipo ?? ""),
+      tipo: String(item?.tipo ?? "") === "armazon" ? "opticos" : String(item?.tipo ?? ""),
       tratamientos: Array.isArray(item?.tratamientos) ? item.tratamientos.map(String) : [],
+      color_tinte: String(item?.color_tinte ?? ""),
+      grado_tinte: String(item?.grado_tinte ?? ""),
     }));
   }
   try {
     const parsed = JSON.parse(String(value ?? ""));
     if (!Array.isArray(parsed)) return [];
     return parsed.map((item) => ({
-      tipo: String(item?.tipo ?? ""),
+      tipo: String(item?.tipo ?? "") === "armazon" ? "opticos" : String(item?.tipo ?? ""),
       tratamientos: Array.isArray(item?.tratamientos) ? item.tratamientos.map(String) : [],
+      color_tinte: String(item?.color_tinte ?? ""),
+      grado_tinte: String(item?.grado_tinte ?? ""),
     }));
   } catch {
     return [];
@@ -2119,7 +2352,7 @@ function normalizeHistoriaForUi(data: any, fallbackDoctor: string) {
 }
 
 export default function App() {
-  const [tab, setTab] = useState<"pacientes" | "consultas" | "ventas" | "estadisticas" | "historia_clinica">("pacientes");
+  const [tab, setTab] = useState<"pacientes" | "consultas" | "ventas" | "estadisticas" | "historia_clinica" | "inventario">("pacientes");
 
   // ---- Estado de sesión y búsqueda ----
   const [pacientes, setPacientes] = useState<Paciente[]>([]);
@@ -2209,6 +2442,26 @@ export default function App() {
   const [savingVenta, setSavingVenta] = useState(false);
   const [successVentaMsg, setSuccessVentaMsg] = useState<string | null>(null);
   const [editingVentaId, setEditingVentaId] = useState<number | null>(null);
+  const [inventario, setInventario] = useState<InventarioProducto[]>([]);
+  const [loadingInventario, setLoadingInventario] = useState(false);
+  const [inventarioError, setInventarioError] = useState<string | null>(null);
+  const [inventarioStockDraft, setInventarioStockDraft] = useState<Record<number, number>>({});
+  const [inventarioPrecioDraft, setInventarioPrecioDraft] = useState<Record<number, number>>({});
+  const [inventarioCostoDraft, setInventarioCostoDraft] = useState<Record<number, number>>({});
+  const [savingInventarioId, setSavingInventarioId] = useState<number | null>(null);
+  const [inventarioBusqueda, setInventarioBusqueda] = useState("");
+  const [inventarioCategoriaFiltro, setInventarioCategoriaFiltro] = useState("todos");
+  const [inventarioVista, setInventarioVista] = useState<"existencias" | "costos">("existencias");
+  const [inventarioMetricaAyuda, setInventarioMetricaAyuda] = useState<"valor" | "ganancia" | null>(null);
+  const [inventarioImagenAmpliada, setInventarioImagenAmpliada] = useState<InventarioProducto | null>(null);
+  const [ventaCategoria, setVentaCategoria] = useState<VentaCategoria | "">("");
+  const [ventaCarrito, setVentaCarrito] = useState<VentaCarritoItem[]>([]);
+  const [ventaDescuentoPorcentaje, setVentaDescuentoPorcentaje] = useState(0);
+  const [ventaMetodosPago, setVentaMetodosPago] = useState<VentaMetodoPago[]>(["efectivo"]);
+  const [ventaLentesPaso, setVentaLentesPaso] = useState(1);
+  const [ventaAgregarTinte, setVentaAgregarTinte] = useState(false);
+  const [ventaMostrarAntiblue, setVentaMostrarAntiblue] = useState(false);
+  const [ventaTinteGrado, setVentaTinteGrado] = useState<VentaTinteGrado>("");
   const [successConsultaMsg, setSuccessConsultaMsg] = useState<string | null>(null);
   const [successHistoriaMsg, setSuccessHistoriaMsg] = useState<string | null>(null);
   const [editingConsultaId, setEditingConsultaId] = useState<number | null>(null);
@@ -2290,13 +2543,17 @@ export default function App() {
   const [loadingPacienteVenta, setLoadingPacienteVenta] = useState(false);
   const [pacientesVentaOpciones, setPacientesVentaOpciones] = useState<Array<{ id: number; label: string }>>([]);
   const [ventasSeleccionadas, setVentasSeleccionadas] = useState<string[]>([]);
-  const [ventaCompraOtro, setVentaCompraOtro] = useState("");
   const [formVenta, setFormVenta] = useState<VentaCreate>({
     paciente_id: 0,
     sucursal_id: 1,
     compra: "",
+    subtotal: 0,
+    descuento_porcentaje: 0,
+    descuento_motivo: null,
+    cupon_tipo: null,
     monto_total: 0,
     metodo_pago: "efectivo",
+    forma_liquidacion: "pago_completo",
     adelanto_aplica: false,
     adelanto_monto: null,
     adelanto_metodo: null,
@@ -2596,6 +2853,291 @@ export default function App() {
       })
       .then(setVentas)
       .catch((e) => setError(e?.message ?? String(e)));
+  }
+
+  async function loadInventario() {
+    if (!me) return;
+    setLoadingInventario(true);
+    setInventarioError(null);
+    try {
+      const r = await apiFetch(`/inventario?sucursal_id=${sucursalActivaId}`);
+      if (!r.ok) throw new Error(await readErrorMessage(r));
+      const data: InventarioProducto[] = await r.json();
+      setInventario(data);
+      setInventarioStockDraft(
+        Object.fromEntries(data.map((producto) => [producto.producto_id, Number(producto.stock || 0)]))
+      );
+      setInventarioPrecioDraft(
+        Object.fromEntries(data.map((producto) => [producto.producto_id, Number(producto.precio || 0)]))
+      );
+      setInventarioCostoDraft(
+        Object.fromEntries(data.map((producto) => [producto.producto_id, Number(producto.costo_unitario || 0)]))
+      );
+    } catch (e: any) {
+      setInventario([]);
+      setInventarioError(e?.message ?? String(e));
+    } finally {
+      setLoadingInventario(false);
+    }
+  }
+
+  async function guardarStockInventario(producto: InventarioProducto) {
+    const stock = Math.max(0, Math.trunc(Number(inventarioStockDraft[producto.producto_id] ?? producto.stock)));
+    setSavingInventarioId(producto.producto_id);
+    setInventarioError(null);
+    try {
+      const r = await apiFetch(
+        `/inventario/${producto.producto_id}/stock?sucursal_id=${sucursalActivaId}`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({ stock, expected_stock: producto.stock }),
+        }
+      );
+      if (!r.ok) throw new Error(await readErrorMessage(r));
+      setInventario((prev) =>
+        prev.map((item) =>
+          item.producto_id === producto.producto_id ? { ...item, stock } : item
+        )
+      );
+      setInventarioStockDraft((prev) => ({ ...prev, [producto.producto_id]: stock }));
+    } catch (e: any) {
+      setInventarioError(e?.message ?? String(e));
+    } finally {
+      setSavingInventarioId(null);
+    }
+  }
+
+  async function guardarProductoInventario(producto: InventarioProducto) {
+    const stock = producto.controla_stock
+      ? Math.max(0, Math.trunc(Number(inventarioStockDraft[producto.producto_id] ?? producto.stock)))
+      : null;
+    const precio = Math.max(0, Number(inventarioPrecioDraft[producto.producto_id] ?? producto.precio));
+    const costoUnitario = Math.max(0, Number(inventarioCostoDraft[producto.producto_id] ?? producto.costo_unitario ?? 0));
+    if (!Number.isFinite(precio) || !Number.isFinite(costoUnitario)) {
+      setInventarioError("Precio de venta y costo unitario deben ser números válidos.");
+      return;
+    }
+    setSavingInventarioId(producto.producto_id);
+    setInventarioError(null);
+    try {
+      const r = await apiFetch(
+        `/inventario/${producto.producto_id}?sucursal_id=${sucursalActivaId}`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({
+            stock,
+            expected_stock: stock === null ? null : producto.stock,
+            precio,
+            costo_unitario: costoUnitario,
+          }),
+        },
+      );
+      if (!r.ok) throw new Error(await readErrorMessage(r));
+      const actualizado = await r.json();
+      setInventario((prev) =>
+        prev.map((item) =>
+          item.producto_id === producto.producto_id
+            ? {
+                ...item,
+                stock: Number(actualizado.stock || 0),
+                precio: Number(actualizado.precio || 0),
+                costo_unitario: Number(actualizado.costo_unitario || 0),
+              }
+            : item
+        )
+      );
+      setInventarioStockDraft((prev) => ({ ...prev, [producto.producto_id]: Number(actualizado.stock || 0) }));
+      setInventarioPrecioDraft((prev) => ({ ...prev, [producto.producto_id]: Number(actualizado.precio || 0) }));
+      setInventarioCostoDraft((prev) => ({ ...prev, [producto.producto_id]: Number(actualizado.costo_unitario || 0) }));
+    } catch (e: any) {
+      setInventarioError(e?.message ?? String(e));
+    } finally {
+      setSavingInventarioId(null);
+    }
+  }
+
+  function resetVentaWizard() {
+    setVentaCategoria("");
+    setVentaCarrito([]);
+    setVentaDescuentoPorcentaje(0);
+    setVentaMetodosPago(["efectivo"]);
+    setVentaLentesPaso(1);
+    setVentaAgregarTinte(false);
+    setVentaMostrarAntiblue(false);
+    setVentaTinteGrado("");
+    setVentasSeleccionadas([]);
+  }
+
+  function seleccionarVentaCategoria(categoria: VentaCategoria) {
+    setVentaCategoria(categoria);
+  }
+
+  function agregarProductoCarrito(
+    producto: InventarioProducto,
+    modo: "sumar" | "unico" | "reemplazar_subcategoria" = "sumar",
+  ) {
+    if (producto.controla_stock && producto.stock <= 0) return;
+    setVentaCarrito((prev) => {
+      if (prev.some((item) => item.producto_id === producto.producto_id)) {
+        return prev.filter((item) => item.producto_id !== producto.producto_id);
+      }
+
+      let next = [...prev];
+      if (modo === "reemplazar_subcategoria") {
+        const idsMismoGrupo = new Set(
+          inventario
+            .filter(
+              (item) =>
+                item.categoria === producto.categoria
+                && item.subcategoria === producto.subcategoria,
+            )
+            .map((item) => item.producto_id),
+        );
+        next = next.filter((item) => !idsMismoGrupo.has(item.producto_id));
+      }
+
+      const existente = next.find((item) => item.producto_id === producto.producto_id);
+      if (existente) {
+        if (modo !== "sumar") return next;
+        const maximo = producto.controla_stock ? producto.stock : 99;
+        return next.map((item) =>
+          item.producto_id === producto.producto_id
+            ? { ...item, cantidad: Math.min(maximo, item.cantidad + 1) }
+            : item,
+        );
+      }
+      return [...next, { producto_id: producto.producto_id, cantidad: 1 }];
+    });
+  }
+
+  function prepararMicasConDefaults() {
+    const productosDefault = [
+      inventario.find((item) => item.sku === "MIC-BASE-001"),
+      inventario.find((item) => item.sku === "MIC-MONO-001"),
+      inventario.find((item) => item.sku === "MIC-SINTRAT-001"),
+    ].filter((item): item is InventarioProducto => Boolean(item));
+    productosDefault.forEach((producto) =>
+      agregarProductoCarrito(producto, "reemplazar_subcategoria"),
+    );
+  }
+
+  function seleccionarArmazonFlujoOptico(producto: InventarioProducto) {
+    const yaSeleccionado = ventaCarrito.some((item) => item.producto_id === producto.producto_id);
+    const idsFlujoOptico = new Set(
+      inventario
+        .filter((item) => item.categoria === "lentes_opticos" || item.categoria === "micas")
+        .map((item) => item.producto_id),
+    );
+    if (yaSeleccionado) {
+      setVentaCarrito((prev) => prev.filter((item) => !idsFlujoOptico.has(item.producto_id)));
+      setVentaLentesPaso(1);
+      setVentaAgregarTinte(false);
+      setVentaMostrarAntiblue(false);
+      setVentaTinteGrado("");
+      return;
+    }
+
+    const micaBase = inventario.find((item) => item.sku === "MIC-BASE-001");
+    setVentaCarrito((prev) => [
+      ...prev.filter((item) => !idsFlujoOptico.has(item.producto_id)),
+      { producto_id: producto.producto_id, cantidad: 1 },
+      ...(micaBase ? [{ producto_id: micaBase.producto_id, cantidad: 1 }] : []),
+    ]);
+    setVentaLentesPaso(2);
+    setVentaAgregarTinte(false);
+    setVentaMostrarAntiblue(false);
+    setVentaTinteGrado("");
+  }
+
+  function seleccionarDisenoFlujoOptico(producto: InventarioProducto) {
+    const yaSeleccionado = ventaCarrito.some((item) => item.producto_id === producto.producto_id);
+    agregarProductoCarrito(producto, "reemplazar_subcategoria");
+    setVentaLentesPaso(yaSeleccionado ? 2 : 3);
+  }
+
+  function seleccionarTratamientoFlujoOptico(
+    producto: InventarioProducto,
+    opciones?: { mantenerAbierto?: boolean; esTinte?: boolean },
+  ) {
+    const yaSeleccionado = ventaCarrito.some((item) => item.producto_id === producto.producto_id);
+    agregarProductoCarrito(producto, "reemplazar_subcategoria");
+    if (yaSeleccionado) {
+      setVentaLentesPaso(3);
+      if (producto.tipo_mica === "tinte") setVentaTinteGrado("");
+      return;
+    }
+    setVentaMostrarAntiblue(false);
+    setVentaAgregarTinte(Boolean(opciones?.esTinte));
+    if (!opciones?.esTinte) setVentaTinteGrado("");
+    setVentaLentesPaso(opciones?.mantenerAbierto ? 3 : 0);
+  }
+
+  function actualizarCantidadCarrito(producto: InventarioProducto, cantidad: number) {
+    const maximo = producto.controla_stock ? Math.max(1, producto.stock) : 99;
+    const cantidadSegura = Math.min(Math.max(1, Math.trunc(cantidad || 1)), maximo);
+    setVentaCarrito((prev) =>
+      prev.map((item) =>
+        item.producto_id === producto.producto_id
+          ? { ...item, cantidad: cantidadSegura }
+          : item,
+      ),
+    );
+  }
+
+  function quitarProductoCarrito(productoId: number) {
+    setVentaCarrito((prev) => prev.filter((item) => item.producto_id !== productoId));
+  }
+
+  function compraTokensDesdeCarrito(carrito: VentaCarritoItem[]): string[] {
+    const productos = carrito
+      .map((item) => inventario.find((producto) => producto.producto_id === item.producto_id))
+      .filter((item): item is InventarioProducto => Boolean(item));
+    const tokens = new Set<string>();
+    const solarConGraduacion = productos.some(
+      (producto) =>
+        producto.categoria === "lentes_de_sol"
+        && producto.subcategoria === "graduacion",
+    );
+
+    productos.forEach((producto) => {
+      if (producto.categoria === "lentes_opticos") {
+        tokens.add("armazon_solo");
+      } else if (producto.categoria === "micas") {
+        const tokenPorTipo: Record<string, string> = {
+          base: "micas_base",
+          monofocal: "micas_monofocales",
+          bifocal: "micas_bifocales",
+          progresivo: "micas_progresivas",
+          sin_graduacion: "micas_sin_graduacion",
+          sin_tratamiento: "micas_solas_sin_tratamiento",
+          antirreflejante: "micas_antirreflejante",
+          fotocromatico: "micas_fotocromaticas",
+          antiblueray: "micas_antiblueray",
+          tinte: "micas_tinte",
+        };
+        const token = tokenPorTipo[producto.tipo_mica || ""];
+        if (token) tokens.add(token);
+      } else if (producto.categoria === "lentes_de_sol") {
+        tokens.add(
+          solarConGraduacion
+            ? "lentes_de_sol_con_graduacion"
+            : "lentes_de_sol_sin_graduacion",
+        );
+      } else if (producto.categoria === "examen_de_la_vista") {
+        tokens.add("examen_de_la_vista");
+      } else if (producto.categoria === "lentes_de_contacto") {
+        tokens.add("lentes_de_contacto");
+      } else if (producto.categoria === "accesorios_y_refacciones") {
+        tokens.add(
+          producto.subcategoria === "estuche"
+            ? "estuche_para_armazon"
+            : "accesorios_y_refacciones",
+        );
+      } else if (producto.categoria === "soluciones_y_cuidado") {
+        tokens.add("soluciones_y_cuidado");
+      }
+    });
+    return Array.from(tokens);
   }
 
   function loadStats(override?: {
@@ -2935,7 +3477,7 @@ export default function App() {
       const params = new URLSearchParams();
       params.set("fecha", agendaFecha);
       params.set("sucursal_id", String(sucursalActivaId));
-      params.set("duracion_min", "30");
+      params.set("duracion_min", "45");
       const r = await apiFetch(`/agenda/disponibilidad?${params.toString()}`);
       if (!r.ok) throw new Error(await readErrorMessage(r));
       const data = await r.json();
@@ -3229,6 +3771,7 @@ export default function App() {
     setFormVenta((prev) => ({ ...prev, sucursal_id: sucursalActivaId, paciente_id: 0 }));
     setEditingVentaId(null);
     setSuccessVentaMsg(null);
+    resetVentaWizard();
     loadPacientes();
     loadConsultas();
     loadVentas();
@@ -3240,6 +3783,10 @@ export default function App() {
   }, [me]);
 
   useEffect(() => {
+    if (me?.rol !== "admin") setInventarioVista("existencias");
+  }, [me?.rol]);
+
+  useEffect(() => {
     if (!me || tab !== "consultas") return;
     if (editingConsultaId !== null) return;
     loadAgendaDisponibilidad();
@@ -3248,6 +3795,13 @@ export default function App() {
   useEffect(() => {
     if (!me || tab !== "estadisticas") return;
     loadStats();
+  }, [me, tab, sucursalActivaId]);
+
+  useEffect(() => {
+    if (!me) return;
+    if (tab === "ventas" && me.rol !== "admin") return;
+    if (tab !== "ventas" && tab !== "inventario") return;
+    loadInventario();
   }, [me, tab, sucursalActivaId]);
 
   useEffect(() => {
@@ -3289,6 +3843,9 @@ export default function App() {
   useEffect(() => {
     if (!me) return;
     if ((me.rol === "recepcion") && tab === "historia_clinica") {
+      setTab("pacientes");
+    }
+    if (me.rol !== "admin" && tab === "inventario") {
       setTab("pacientes");
     }
   }, [me, tab]);
@@ -3667,6 +4224,9 @@ export default function App() {
       const r = await apiFetch(`/ventas/${venta_id}?sucursal_id=${sucursalActivaId}`, { method: "DELETE" });
       if (!r.ok) throw new Error(await readErrorMessage(r));
       loadVentas();
+      if (me?.rol === "admin") {
+        loadInventario();
+      }
     } catch (e: any) {
       setError(e?.message ?? String(e));
     }
@@ -3790,6 +4350,34 @@ export default function App() {
     setPacientesConsultaOpciones(pacientesOpciones);
   }
 
+  function resetConsultaForm() {
+    setEditingConsultaId(null);
+    setMotivosConsultaSeleccionados([]);
+    setTipoConsultaOtro("");
+    setFormConsulta({
+      paciente_id: 0,
+      sucursal_id: sucursalActivaId,
+      tipo_consulta: "",
+      etapa_consulta: "",
+      motivo_consulta: "",
+      doctor_primer_nombre: "",
+      doctor_apellido_paterno: "",
+      motivo: "",
+      diagnostico: "",
+      notas: "",
+    });
+    setQPacienteConsulta("");
+    setPacientesConsultaOpciones(pacientesOpciones);
+    setAgendaFecha(formatDateYYYYMMDD(new Date()));
+    setAgendaSlots([]);
+    setAgendaSlotSeleccionado(null);
+    setAgendaTimezone("");
+    setAgendaCalendarError("");
+    setSuccessConsultaMsg(null);
+    setError(null);
+    window.setTimeout(() => loadAgendaDisponibilidad(), 0);
+  }
+
 
 
 
@@ -3827,10 +4415,6 @@ export default function App() {
         const razon = `Razon (otro): ${tipoConsultaOtro.trim()}`;
         notasFinal = notasFinal ? `${razon} | ${notasFinal}` : razon;
       }
-      if (wordCount(notasFinal) > 50) {
-        throw new Error("Notas no puede superar 50 palabras (incluyendo la razón de 'otro').");
-      }
-
       const usarAgenda = editingConsultaId === null;
       if (usarAgenda && !agendaSlotSeleccionado) {
         throw new Error("Selecciona un horario disponible para agendar la consulta.");
@@ -3894,18 +4478,36 @@ export default function App() {
       .split("|")
       .map((x) => x.trim())
       .filter(Boolean);
-    const otroItem = comprasRaw.find((x) => x.toLowerCase().startsWith("otro:"));
     const compras = comprasRaw
       .map((x) => (x.toLowerCase().startsWith("otro:") ? "otro" : canonicalVentaCompraOption(x)))
       .filter(Boolean);
+    const metodosPago = String(v.metodo_pago || "efectivo")
+      .split("|")
+      .map((item) => item.trim())
+      .filter((item): item is VentaMetodoPago =>
+        VENTA_METODO_PAGO_OPTIONS.some((opcion) => opcion.value === item),
+      );
+    const gradoTinte = compras.find((item) => /^tinte_grado_[123]$/.test(item));
     setVentasSeleccionadas(Array.from(new Set(compras)));
-    setVentaCompraOtro(otroItem ? otroItem.slice(5).trim() : "");
+    setVentaCategoria(inferVentaCategoria(compras));
+    setVentaCarrito([]);
+    setVentaDescuentoPorcentaje(Number(v.descuento_porcentaje || 0));
+    setVentaMetodosPago(metodosPago.length > 0 ? metodosPago : ["efectivo"]);
+    setVentaTinteGrado((gradoTinte?.replace("tinte_", "") || "") as VentaTinteGrado);
+    setVentaAgregarTinte(compras.includes("micas_tinte"));
+    setVentaMostrarAntiblue(compras.includes("micas_antiblueray"));
+    setVentaLentesPaso(0);
     setFormVenta({
       paciente_id: v.paciente_id,
       sucursal_id: sucursalActivaId,
       compra: v.compra ?? "",
+      subtotal: Number(v.subtotal ?? v.monto_total ?? 0),
+      descuento_porcentaje: Number(v.descuento_porcentaje || 0),
+      descuento_motivo: v.descuento_motivo ?? null,
+      cupon_tipo: v.cupon_tipo ?? null,
       monto_total: Number(v.monto_total ?? 0),
       metodo_pago: v.metodo_pago ?? "efectivo",
+      forma_liquidacion: v.forma_liquidacion ?? "pago_completo",
       adelanto_aplica: Boolean(v.adelanto_aplica),
       adelanto_monto: v.adelanto_monto ?? null,
       adelanto_metodo: v.adelanto_metodo ?? null,
@@ -3918,14 +4520,18 @@ export default function App() {
 
   function cancelEditVenta() {
     setEditingVentaId(null);
-    setVentasSeleccionadas([]);
-    setVentaCompraOtro("");
+    resetVentaWizard();
     setFormVenta({
       paciente_id: 0,
       sucursal_id: sucursalActivaId,
       compra: "",
+      subtotal: 0,
+      descuento_porcentaje: 0,
+      descuento_motivo: null,
+      cupon_tipo: null,
       monto_total: 0,
       metodo_pago: "efectivo",
+      forma_liquidacion: "pago_completo",
       adelanto_aplica: false,
       adelanto_monto: null,
       adelanto_metodo: null,
@@ -3944,17 +4550,12 @@ export default function App() {
 
     try {
       if (!formVenta.paciente_id || formVenta.paciente_id === 0) throw new Error("Selecciona un paciente.");
-      if (ventasSeleccionadas.length === 0) throw new Error("Selecciona al menos un tipo de compra.");
-      if (ventasSeleccionadas.includes("otro") && !ventaCompraOtro.trim()) {
-        throw new Error("Escribe el detalle para 'otro'.");
+      if (ventaMetodosPago.length === 0) {
+        throw new Error("Selecciona al menos un método de pago.");
       }
-      if (!formVenta.monto_total || Number(formVenta.monto_total) <= 0) {
-        throw new Error("Monto total debe ser mayor a 0.");
-      }
-      if (!formVenta.metodo_pago) {
-        throw new Error("Selecciona método de pago.");
-      }
-      if (formVenta.adelanto_aplica) {
+      const formaLiquidacion = formVenta.forma_liquidacion ?? "pago_completo";
+      const requiereAdelanto = ["adelanto_apartado", "pago_mixto"].includes(formaLiquidacion);
+      if (requiereAdelanto) {
         if (!formVenta.adelanto_monto || Number(formVenta.adelanto_monto) <= 0) {
           throw new Error("Adelanto debe ser mayor a 0.");
         }
@@ -3962,51 +4563,111 @@ export default function App() {
           throw new Error("Selecciona método de pago del adelanto.");
         }
       }
-      if (wordCount(formVenta.notas ?? "") > 50) {
-        throw new Error("Notas no puede superar 50 palabras.");
+      const carritoDetalle = ventaCarrito
+        .map((item) => {
+          const producto = inventario.find((row) => row.producto_id === item.producto_id);
+          return producto ? { ...item, producto } : null;
+        })
+        .filter((item): item is VentaCarritoItem & { producto: InventarioProducto } => Boolean(item));
+      if (editingVentaId === null && me?.rol === "admin" && carritoDetalle.length === 0) {
+        throw new Error("Agrega al menos un producto al carrito.");
+      }
+      carritoDetalle.forEach(({ producto, cantidad }) => {
+        if (producto.controla_stock && cantidad > producto.stock) {
+          throw new Error(`Solo quedan ${producto.stock} unidades de ${producto.nombre}.`);
+        }
+      });
+      const tieneMicasBase = carritoDetalle.some(({ producto }) => producto.sku === "MIC-BASE-001");
+      if (tieneMicasBase) {
+        const tieneDiseno = carritoDetalle.some(({ producto }) => producto.categoria === "micas" && producto.subcategoria === "diseno");
+        const tieneTratamiento = carritoDetalle.some(({ producto }) => producto.categoria === "micas" && producto.subcategoria === "tratamiento");
+        if (!tieneDiseno || !tieneTratamiento) {
+          throw new Error("Completa el diseño y tratamiento de las micas.");
+        }
+      }
+      const tieneTinte = carritoDetalle.some(({ producto }) => producto.tipo_mica === "tinte")
+        || ventasSeleccionadas.includes("micas_tinte");
+      if (tieneTinte && !ventaTinteGrado) {
+        throw new Error("Selecciona el grado del tinte.");
       }
 
-      const compraFinal = ventasSeleccionadas
-        .map((x) => (x === "otro" ? `otro:${ventaCompraOtro.trim()}` : x))
-        .join("|");
+      const compraTokensBase = editingVentaId === null && me?.rol === "admin"
+        ? compraTokensDesdeCarrito(ventaCarrito)
+        : ventasSeleccionadas;
+      const compraTokens = [
+        ...compraTokensBase.filter((token) => !token.startsWith("tinte_grado_")),
+        ...(tieneTinte && ventaTinteGrado ? [`tinte_${ventaTinteGrado}`] : []),
+      ];
+      if (compraTokens.length === 0) throw new Error("Selecciona al menos un producto.");
+
+      const subtotalCarrito = carritoDetalle.reduce(
+        (total, { producto, cantidad }) => total + Number(producto.precio || 0) * cantidad,
+        0,
+      );
+      const subtotalVenta = editingVentaId === null && me?.rol === "admin"
+        ? subtotalCarrito
+        : Number(formVenta.subtotal || formVenta.monto_total || 0);
+      const descuento = editingVentaId === null && me?.rol === "admin"
+        ? ventaDescuentoPorcentaje
+        : Number(formVenta.descuento_porcentaje || 0);
+      if (descuento > 0 && !formVenta.descuento_motivo) {
+        throw new Error("Selecciona el motivo del descuento.");
+      }
+      if (descuento > 0 && !formVenta.cupon_tipo) {
+        throw new Error("Selecciona el tipo de cupón.");
+      }
+      const montoTotal = Number((subtotalVenta * (1 - descuento / 100)).toFixed(2));
+      if (subtotalVenta <= 0) throw new Error("El carrito debe tener un subtotal mayor a 0.");
+      if (requiereAdelanto && Number(formVenta.adelanto_monto || 0) > montoTotal) {
+        throw new Error("El adelanto no puede ser mayor al total.");
+      }
 
       const payload = cleanPayload({
         ...formVenta,
         sucursal_id: sucursalActivaId,
-        compra: compraFinal,
-        monto_total: Number(formVenta.monto_total),
-        adelanto_aplica: Boolean(formVenta.adelanto_aplica),
-        adelanto_monto: formVenta.adelanto_aplica ? Number(formVenta.adelanto_monto) : null,
-        adelanto_metodo: formVenta.adelanto_aplica ? formVenta.adelanto_metodo : null,
+        compra: compraTokens.join("|"),
+        subtotal: subtotalVenta,
+        descuento_porcentaje: descuento,
+        monto_total: montoTotal,
+        metodo_pago: ventaMetodosPago.join("|"),
+        forma_liquidacion: formaLiquidacion,
+        adelanto_aplica: requiereAdelanto,
+        adelanto_monto: requiereAdelanto ? Number(formVenta.adelanto_monto) : null,
+        adelanto_metodo: requiereAdelanto ? formVenta.adelanto_metodo : null,
+        ...(editingVentaId === null && me?.rol === "admin"
+          ? {
+              productos: ventaCarrito,
+            }
+          : {}),
       });
 
       const endpoint = editingVentaId === null ? "/ventas" : `/ventas/${editingVentaId}`;
       const method = editingVentaId === null ? "POST" : "PUT";
-      let r = await apiFetch(endpoint, { method, body: JSON.stringify(payload) });
-
-      // Si estaba en edición pero la venta ya no existe en esta sucursal,
-      // caemos automáticamente a creación para no bloquear operación.
-      if (method === "PUT" && r.status === 404) {
-        setEditingVentaId(null);
-        r = await apiFetch("/ventas", { method: "POST", body: JSON.stringify(payload) });
-      }
+      const r = await apiFetch(endpoint, { method, body: JSON.stringify(payload) });
       if (!r.ok) throw new Error(await readErrorMessage(r));
 
       setFormVenta((prev) => ({
         ...prev,
         compra: "",
+        subtotal: 0,
+        descuento_porcentaje: 0,
+        descuento_motivo: null,
+        cupon_tipo: null,
         monto_total: 0,
         metodo_pago: "efectivo",
+        forma_liquidacion: "pago_completo",
         adelanto_aplica: false,
         adelanto_monto: null,
         adelanto_metodo: null,
         como_nos_conocio: "",
         notas: "",
       }));
-      setVentasSeleccionadas([]);
-      setVentaCompraOtro("");
+      resetVentaWizard();
       setEditingVentaId(null);
       loadVentas();
+      if (me?.rol === "admin") {
+        loadInventario();
+      }
       setTab("ventas");
       setSuccessVentaMsg(editingVentaId === null ? "Venta guardada con éxito." : "Venta actualizada con éxito.");
       setTimeout(() => setSuccessVentaMsg(null), 3500);
@@ -4306,7 +4967,11 @@ export default function App() {
         usa_lentes: historiaData.usa_lentes,
         tipo_lentes_actual: usaLentes ? (tipoLentesActual || null) : null,
         lentes_actuales_detalle: usaLentes
-          ? JSON.stringify(parseLentesActualesDetalle(historiaData.lentes_pares))
+          ? JSON.stringify(
+              parseLentesActualesDetalle(historiaData.lentes_pares).length
+                ? parseLentesActualesDetalle(historiaData.lentes_pares)
+                : [{ tipo: "", tratamientos: [], color_tinte: "", grado_tinte: "" }]
+            )
           : null,
         tiempo_uso_lentes: usaLentes ? (tiempoUsoLentesPayload || null) : null,
         lentes_contacto_horas_dia: usaLentes ? historiaData.lentes_contacto_horas_dia : null,
@@ -4558,6 +5223,766 @@ export default function App() {
   const canCreateVenta = canViewVentasTab && (isAdmin || isDoctor || isRecep);
   const canEditVenta = canViewVentasTab && (isAdmin || isDoctor || isRecep);
   const canDeleteVenta = canViewVentasTab && isAdmin;
+  const productosPor = (categoria: string, subcategoria?: string) =>
+    inventario.filter(
+      (producto) =>
+        producto.categoria === categoria
+        && (subcategoria === undefined || producto.subcategoria === subcategoria),
+    );
+  const ventaArmazonesOpticos = productosPor("lentes_opticos", "armazon");
+  const ventaLentesSol = productosPor("lentes_de_sol", "armazon");
+  const ventaGraduacionSol = productosPor("lentes_de_sol", "graduacion");
+  const ventaMicasBase = productosPor("micas", "base");
+  const ventaMicasDisenos = productosPor("micas", "diseno");
+  const ventaMicasTratamientos = productosPor("micas", "tratamiento");
+  const ventaTratamientoSin = ventaMicasTratamientos.find((producto) => producto.tipo_mica === "sin_tratamiento");
+  const ventaTratamientoAntirreflejante = ventaMicasTratamientos.find((producto) => producto.tipo_mica === "antirreflejante");
+  const ventaTratamientoFotocromatico = ventaMicasTratamientos.find((producto) => producto.tipo_mica === "fotocromatico");
+  const ventaTratamientosAntiblue = ventaMicasTratamientos.filter((producto) => producto.tipo_mica === "antiblueray");
+  const ventaTratamientosTinte = ventaMicasTratamientos.filter((producto) => producto.tipo_mica === "tinte");
+  const ventaExamenes = productosPor("examen_de_la_vista");
+  const ventaContactos = productosPor("lentes_de_contacto");
+  const ventaAccesorios = productosPor("accesorios_y_refacciones");
+  const ventaCuidados = productosPor("soluciones_y_cuidado");
+  const ventaCarritoDetalle = ventaCarrito
+    .map((item) => {
+      const producto = inventario.find((row) => row.producto_id === item.producto_id);
+      return producto ? { ...item, producto } : null;
+    })
+    .filter((item): item is VentaCarritoItem & { producto: InventarioProducto } => Boolean(item));
+  const ventaCarritoIds = new Set(ventaCarrito.map((item) => item.producto_id));
+  const ventaArmazonSeleccionado = ventaArmazonesOpticos.find((producto) => ventaCarritoIds.has(producto.producto_id));
+  const ventaDisenoSeleccionado = ventaMicasDisenos.find((producto) => ventaCarritoIds.has(producto.producto_id));
+  const ventaTratamientoSeleccionado = ventaMicasTratamientos.find((producto) => ventaCarritoIds.has(producto.producto_id));
+  const ventaTinteSeleccionado = ventaTratamientoSeleccionado?.tipo_mica === "tinte"
+    ? ventaTratamientoSeleccionado
+    : undefined;
+  const ventaAntiblueSeleccionado = ventaTratamientoSeleccionado?.tipo_mica === "antiblueray"
+    ? ventaTratamientoSeleccionado
+    : undefined;
+  const ventaSubtotalCarrito = ventaCarritoDetalle.reduce(
+    (total, item) => total + Number(item.producto.precio || 0) * item.cantidad,
+    0,
+  );
+  const ventaSubtotalResumen = editingVentaId !== null
+    ? Number(formVenta.subtotal ?? formVenta.monto_total ?? 0)
+    : ventaSubtotalCarrito;
+  const ventaDescuentoMonto = Number(
+    (ventaSubtotalResumen * ventaDescuentoPorcentaje / 100).toFixed(2),
+  );
+  const ventaTotalCarrito = Number(
+    Math.max(0, ventaSubtotalResumen - ventaDescuentoMonto).toFixed(2),
+  );
+  const ventaDeposito = formVenta.adelanto_aplica
+    ? Math.max(0, Number(formVenta.adelanto_monto || 0))
+    : 0;
+  const ventaSaldo = Math.max(0, ventaTotalCarrito - ventaDeposito);
+  const inventarioVisible = inventario.filter(
+    (producto) => producto.categoria !== "micas",
+  );
+  const inventarioStockBajo = inventarioVisible.filter(
+    (producto) => producto.controla_stock && producto.stock <= producto.stock_minimo
+  ).length;
+  const inventarioCategorias = Array.from(
+    new Set(inventarioVisible.map((producto) => producto.categoria)),
+  );
+  const inventarioFiltrado = inventarioVisible.filter((producto) => {
+    if (
+      inventarioCategoriaFiltro !== "todos"
+      && producto.categoria !== inventarioCategoriaFiltro
+    ) return false;
+    const q = normalizeForSearch(inventarioBusqueda);
+    if (!q) return true;
+    return normalizeForSearch(
+      [
+        producto.producto_id,
+        producto.sku,
+        producto.nombre,
+        producto.modelo,
+        producto.color,
+        producto.categoria,
+        producto.subcategoria,
+        producto.tipo_mica,
+      ].join(" "),
+    ).includes(q);
+  });
+  const inventarioGrupos = inventarioCategorias
+    .map((categoria) => ({
+      categoria,
+      productos: inventarioFiltrado.filter((producto) => producto.categoria === categoria),
+    }))
+    .filter((grupo) => grupo.productos.length > 0);
+
+  const renderVentaProductoButton = (
+    producto: InventarioProducto,
+    onClick: () => void,
+    selected = ventaCarritoIds.has(producto.producto_id),
+  ) => {
+    const agotado = producto.controla_stock && producto.stock <= 0;
+    const esMica = producto.categoria === "micas";
+    return (
+      <button
+        key={producto.producto_id}
+        type="button"
+        disabled={agotado || editingVentaId !== null}
+        onClick={onClick}
+        aria-pressed={selected}
+        style={{
+          display: "grid",
+          gridTemplateColumns: esMica ? "minmax(0, 1fr)" : "82px minmax(0, 1fr)",
+          gap: 10,
+          alignItems: "center",
+          minHeight: esMica ? 70 : 102,
+          padding: esMica ? "10px 12px" : 9,
+          border: selected ? "2px solid #1677d2" : "1px solid #cdddeb",
+          background: selected ? "#edf6ff" : agotado ? "#f4f5f6" : "#fff",
+          textAlign: "left",
+          cursor: agotado || editingVentaId !== null ? "not-allowed" : "pointer",
+          opacity: agotado ? 0.62 : 1,
+          boxShadow: selected ? "0 8px 20px rgba(37,99,235,.12)" : "none",
+        }}
+      >
+        {!esMica && (
+          <span style={{ width: 82, height: 82, overflow: "hidden", background: "#f5f7f9", border: "1px solid #e2e8ee" }}>
+            {producto.imagen_url ? (
+              <img
+                src={producto.imagen_url}
+                alt={producto.nombre}
+                style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
+              />
+            ) : (
+              <span style={{ width: "100%", height: "100%", display: "grid", placeItems: "center", color: "#8aa0b2", fontSize: 26 }}>◇</span>
+            )}
+          </span>
+        )}
+        <span style={{ minWidth: 0 }}>
+          <strong style={{ display: "block", color: "#173b61", lineHeight: 1.2 }}>{producto.nombre}</strong>
+          <span style={{ display: "block", marginTop: 3, color: "#6b7f93", fontSize: 11 }}>
+            {producto.modelo || producto.sku}
+            {producto.color ? ` · ${producto.color}` : ""}
+          </span>
+          <strong style={{ display: "block", marginTop: 6, color: "#0e5fa8" }}>
+            {Number(producto.precio || 0) === 0 ? "+$0" : `+$${Number(producto.precio).toFixed(2)}`}
+          </strong>
+          {!esMica && (
+            <span style={{ display: "block", marginTop: 3, fontSize: 10, fontWeight: 800, color: agotado ? "#991b1b" : "#547087" }}>
+              {producto.controla_stock
+                ? (agotado ? "AGOTADO" : `${producto.stock} EN EXISTENCIA`)
+                : "SERVICIO / ADICIONAL"}
+            </span>
+          )}
+        </span>
+      </button>
+    );
+  };
+
+  const renderVentaPagoLiquidacion = () => (
+    <section style={{ display: "grid", gap: 12, marginTop: 12, padding: 12, border: "1px solid #cbdcf0", background: "#fff" }}>
+      <div>
+        <div style={{ marginBottom: 7, fontWeight: 900, color: "#16385d" }}>Método de pago *</div>
+        <div role="group" aria-label="Métodos de pago" style={{ display: "flex", gap: 7, flexWrap: "wrap" }}>
+          {VENTA_METODO_PAGO_OPTIONS.map((opcion) => {
+            const seleccionado = ventaMetodosPago.includes(opcion.value);
+            return (
+              <button
+                key={opcion.value}
+                type="button"
+                aria-pressed={seleccionado}
+                onClick={() => {
+                  setVentaMetodosPago((prev) => {
+                    const next = seleccionado
+                      ? prev.filter((item) => item !== opcion.value)
+                      : [...prev, opcion.value];
+                    setFormVenta((curr) => ({ ...curr, metodo_pago: next.join("|") }));
+                    return next;
+                  });
+                }}
+                style={{
+                  padding: "8px 11px",
+                  borderRadius: 999,
+                  border: seleccionado ? "1px solid #1667ba" : "1px solid #cbd8e4",
+                  background: seleccionado ? "#1677d2" : "#f7fafc",
+                  color: seleccionado ? "#fff" : "#31475d",
+                  fontWeight: 800,
+                  cursor: "pointer",
+                }}
+              >
+                {seleccionado ? "✓ " : ""}{opcion.label}
+              </button>
+            );
+          })}
+        </div>
+        <div style={{ marginTop: 5, color: "#718397", fontSize: 11 }}>
+          Puedes seleccionar más de un método.
+        </div>
+      </div>
+
+      <label style={{ display: "block" }}>
+        <span style={{ display: "block", marginBottom: 6, fontWeight: 900, color: "#16385d" }}>Forma de liquidación *</span>
+        <select
+          value={formVenta.forma_liquidacion ?? "pago_completo"}
+          onChange={(e) => {
+            const forma = e.target.value as VentaFormaLiquidacion;
+            const aplica = forma === "adelanto_apartado" || forma === "pago_mixto";
+            setFormVenta({
+              ...formVenta,
+              forma_liquidacion: forma,
+              adelanto_aplica: aplica,
+              adelanto_monto: aplica ? formVenta.adelanto_monto ?? null : null,
+              adelanto_metodo: aplica ? formVenta.adelanto_metodo ?? "efectivo" : null,
+            });
+          }}
+          style={{ width: "100%", padding: 10, border: "1px solid #b9cce0", background: "#fff" }}
+        >
+          {VENTA_FORMA_LIQUIDACION_OPTIONS.map((opcion) => (
+            <option key={opcion.value} value={opcion.value}>{opcion.label}</option>
+          ))}
+        </select>
+      </label>
+
+      {formVenta.adelanto_aplica && (
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+          <label style={{ display: "block" }}>
+            <span style={{ display: "block", marginBottom: 6, fontWeight: 800, color: "#40566c" }}>Monto adelanto (MXN) *</span>
+            <input
+              type="number"
+              min={0}
+              step="0.01"
+              value={formVenta.adelanto_monto ?? ""}
+              onChange={(e) =>
+                setFormVenta({
+                  ...formVenta,
+                  adelanto_monto: e.target.value === "" ? null : Number(e.target.value),
+                })
+              }
+              style={{ width: "100%", padding: 10, border: "1px solid #b9cce0" }}
+            />
+          </label>
+          <label style={{ display: "block" }}>
+            <span style={{ display: "block", marginBottom: 6, fontWeight: 800, color: "#40566c" }}>Método adelanto *</span>
+            <select
+              value={formVenta.adelanto_metodo ?? "efectivo"}
+              onChange={(e) =>
+                setFormVenta({
+                  ...formVenta,
+                  adelanto_metodo: e.target.value as VentaMetodoPago,
+                })
+              }
+              style={{ width: "100%", padding: 10, border: "1px solid #b9cce0", background: "#fff" }}
+            >
+              {VENTA_METODO_PAGO_OPTIONS.map((opcion) => (
+                <option key={opcion.value} value={opcion.value}>{opcion.label}</option>
+              ))}
+            </select>
+          </label>
+        </div>
+      )}
+    </section>
+  );
+
+  const renderVentaResumenProductos = () => (
+    <section style={{ position: "sticky", top: 12, padding: 14, border: "1px solid #b8d3ec", background: "#f8fbff" }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginBottom: 10 }}>
+        <div>
+          <div style={{ fontWeight: 900, color: "#16385d" }}>Resumen de productos</div>
+          <div style={{ fontSize: 12, color: "#6b7f93" }}>{ventaCarritoDetalle.length} producto(s) diferente(s)</div>
+        </div>
+        {ventaCarritoDetalle.length > 0 && (
+          <button
+            type="button"
+            onClick={() => setVentaCarrito([])}
+            style={{ ...actionBtnStyle, padding: "7px 10px" }}
+          >
+            Vaciar carrito
+          </button>
+        )}
+      </div>
+
+      {(ventaArmazonSeleccionado || ventaDisenoSeleccionado || ventaTratamientoSeleccionado) && (
+        <div style={{ display: "grid", gap: 5, marginBottom: 10, padding: 10, border: "1px solid #dbe6ef", background: "#fff" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 10, fontSize: 12 }}>
+            <span style={{ color: "#6b7f93" }}>Armazón</span>
+            <strong style={{ textAlign: "right", color: "#31475d" }}>
+              {ventaArmazonSeleccionado
+                ? `${ventaArmazonSeleccionado.nombre} · $${Number(ventaArmazonSeleccionado.precio).toFixed(2)}`
+                : "Pendiente"}
+            </strong>
+          </div>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 10, fontSize: 12 }}>
+            <span style={{ color: "#6b7f93" }}>Diseño</span>
+            <strong style={{ textAlign: "right", color: "#31475d" }}>
+              {ventaDisenoSeleccionado
+                ? `${ventaDisenoSeleccionado.nombre} · +$${Number(ventaDisenoSeleccionado.precio).toFixed(2)}`
+                : "Pendiente"}
+            </strong>
+          </div>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 10, fontSize: 12 }}>
+            <span style={{ color: "#6b7f93" }}>Tratamiento / tinte</span>
+            <strong style={{ textAlign: "right", color: "#31475d" }}>
+              {ventaTratamientoSeleccionado
+                ? `${ventaTratamientoSeleccionado.nombre}${ventaTinteGrado ? ` · ${ventaTinteGrado.replace("_", " ")}` : ""} · +$${Number(ventaTratamientoSeleccionado.precio).toFixed(2)}`
+                : "Pendiente"}
+            </strong>
+          </div>
+        </div>
+      )}
+
+      {ventaCarritoDetalle.length === 0 ? (
+        <div style={{ padding: 18, border: "1px dashed #b9cde0", background: "#fff", color: "#6b7f93", textAlign: "center" }}>
+          Selecciona productos del catálogo para comenzar.
+        </div>
+      ) : (
+        <div style={{ display: "grid", gap: 7 }}>
+          {ventaCarritoDetalle.map(({ producto, cantidad }) => {
+            const esMica = producto.categoria === "micas";
+            return (
+              <div
+                key={producto.producto_id}
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: esMica
+                    ? "minmax(0, 1fr) 66px 92px 32px"
+                    : "52px minmax(0, 1fr) 66px 92px 32px",
+                  gap: 8,
+                  alignItems: "center",
+                  padding: 8,
+                  border: "1px solid #dbe6ef",
+                  background: "#fff",
+                }}
+              >
+                {!esMica && (
+                  <div style={{ width: 52, height: 46, overflow: "hidden", border: "1px solid #e3e9ee", background: "#f5f7f9" }}>
+                    {producto.imagen_url ? (
+                      <img src={producto.imagen_url} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                    ) : (
+                      <span style={{ width: "100%", height: "100%", display: "grid", placeItems: "center", color: "#8aa0b2" }}>◇</span>
+                    )}
+                  </div>
+                )}
+                <div style={{ minWidth: 0 }}>
+                  <strong style={{ display: "block", color: "#173b61", lineHeight: 1.2 }}>{producto.nombre}</strong>
+                  <span style={{ display: "block", marginTop: 2, fontSize: 11, color: "#6b7f93" }}>{producto.sku}</span>
+                </div>
+                <input
+                  type="number"
+                  min={1}
+                  max={producto.controla_stock ? producto.stock : 99}
+                  value={cantidad}
+                  onChange={(e) => actualizarCantidadCarrito(producto, Number(e.target.value))}
+                  aria-label={`Cantidad de ${producto.nombre}`}
+                  style={{ width: "100%", padding: 7, border: "1px solid #b9cce0" }}
+                />
+                <strong style={{ textAlign: "right", color: "#174ea6" }}>
+                  ${(Number(producto.precio || 0) * cantidad).toFixed(2)}
+                </strong>
+                <button
+                  type="button"
+                  onClick={() => quitarProductoCarrito(producto.producto_id)}
+                  aria-label={`Quitar ${producto.nombre}`}
+                  title="Quitar"
+                  style={{ width: 30, height: 30, border: "1px solid #fecaca", background: "#fff5f5", color: "#b91c1c", cursor: "pointer", fontWeight: 900 }}
+                >
+                  ×
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {renderVentaPagoLiquidacion()}
+
+      <div style={{ marginTop: 12, display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: 12, alignItems: "end" }}>
+        <label style={{ display: "block", fontWeight: 800, color: "#31475d" }}>
+          Cupón / descuento (%)
+          <input
+            type="number"
+            min={0}
+            max={100}
+            step="0.01"
+            value={ventaDescuentoPorcentaje}
+            onChange={(e) => {
+              const next = Math.min(100, Math.max(0, Number(e.target.value) || 0));
+              setVentaDescuentoPorcentaje(next);
+              setFormVenta((curr) => ({
+                ...curr,
+                descuento_porcentaje: next,
+                descuento_motivo: next > 0 ? curr.descuento_motivo : null,
+                cupon_tipo: next > 0 ? curr.cupon_tipo : null,
+              }));
+            }}
+            style={{ width: "100%", marginTop: 5, padding: 9, border: "1px solid #b9cce0" }}
+          />
+          <span style={{ display: "flex", gap: 5, flexWrap: "wrap", marginTop: 6 }}>
+            {[0, 5, 10, 15, 20, 25, 50].map((porcentaje) => (
+              <button
+                key={porcentaje}
+                type="button"
+                onClick={() => {
+                  setVentaDescuentoPorcentaje(porcentaje);
+                  setFormVenta((curr) => ({
+                    ...curr,
+                    descuento_porcentaje: porcentaje,
+                    descuento_motivo: porcentaje > 0 ? curr.descuento_motivo : null,
+                    cupon_tipo: porcentaje > 0 ? curr.cupon_tipo : null,
+                  }));
+                }}
+                style={{
+                  padding: "5px 8px",
+                  border: ventaDescuentoPorcentaje === porcentaje ? "1px solid #1677d2" : "1px solid #cfdbe6",
+                  background: ventaDescuentoPorcentaje === porcentaje ? "#ddebff" : "#fff",
+                  color: "#174ea6",
+                  cursor: "pointer",
+                  fontWeight: 800,
+                }}
+              >
+                {porcentaje}%
+              </button>
+            ))}
+          </span>
+          {ventaDescuentoPorcentaje > 0 && (
+            <span style={{ display: "grid", gap: 10, marginTop: 12 }}>
+              <span>
+                <span style={{ display: "block", marginBottom: 6, color: "#40566c", fontSize: 12 }}>
+                  Motivo del descuento *
+                </span>
+                <span style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                  {VENTA_DESCUENTO_MOTIVO_OPTIONS.map((opcion) => {
+                    const activo = formVenta.descuento_motivo === opcion.value;
+                    return (
+                      <button
+                        key={opcion.value}
+                        type="button"
+                        aria-pressed={activo}
+                        onClick={() => setFormVenta((curr) => ({ ...curr, descuento_motivo: opcion.value }))}
+                        style={{
+                          padding: "7px 10px",
+                          border: activo ? "1px solid #1565c0" : "1px solid #cbd8e4",
+                          background: activo ? "#1565c0" : "#fff",
+                          color: activo ? "#fff" : "#40566c",
+                          fontWeight: 800,
+                          cursor: "pointer",
+                        }}
+                      >
+                        {opcion.label}
+                      </button>
+                    );
+                  })}
+                </span>
+              </span>
+              <span>
+                <span style={{ display: "block", marginBottom: 6, color: "#40566c", fontSize: 12 }}>
+                  Tipo de cupón *
+                </span>
+                <span style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                  {VENTA_CUPON_TIPO_OPTIONS.map((opcion) => {
+                    const activo = formVenta.cupon_tipo === opcion.value;
+                    return (
+                      <button
+                        key={opcion.value}
+                        type="button"
+                        aria-pressed={activo}
+                        onClick={() => setFormVenta((curr) => ({ ...curr, cupon_tipo: opcion.value }))}
+                        style={{
+                          padding: "7px 10px",
+                          border: activo ? "1px solid #0f766e" : "1px solid #cbd8e4",
+                          background: activo ? "#0f766e" : "#fff",
+                          color: activo ? "#fff" : "#40566c",
+                          fontWeight: 800,
+                          cursor: "pointer",
+                        }}
+                      >
+                        {opcion.label}
+                      </button>
+                    );
+                  })}
+                </span>
+              </span>
+            </span>
+          )}
+        </label>
+        <div style={{ padding: 12, background: "#102f50", color: "#fff" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 10, fontSize: 13 }}>
+            <span>Subtotal</span><strong>${ventaSubtotalResumen.toFixed(2)}</strong>
+          </div>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 10, marginTop: 5, fontSize: 13, color: "#a9d5ff" }}>
+            <span>Descuento ({ventaDescuentoPorcentaje}%)</span><strong>−${ventaDescuentoMonto.toFixed(2)}</strong>
+          </div>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 10, marginTop: 5, fontSize: 13, color: "#cbdff3" }}>
+            <span>Adelanto</span><strong>−${ventaDeposito.toFixed(2)}</strong>
+          </div>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 10, marginTop: 5, fontSize: 13, color: "#fff" }}>
+            <span>Saldo pendiente</span><strong>${ventaSaldo.toFixed(2)}</strong>
+          </div>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 10, marginTop: 9, paddingTop: 9, borderTop: "1px solid rgba(255,255,255,.22)", fontSize: 19 }}>
+            <span>Total</span><strong>${ventaTotalCarrito.toFixed(2)} MXN</strong>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+
+  const renderFlujoLentesOpticos = () => {
+    const precioTratamientoAzul = Number(ventaTratamientosAntiblue[0]?.precio || 0);
+    const tratamientoEsSinOTinte = ventaTratamientoSeleccionado?.tipo_mica === "sin_tratamiento"
+      || ventaTratamientoSeleccionado?.tipo_mica === "tinte";
+    const resumenPaso = (
+      etiqueta: string,
+      producto: InventarioProducto | undefined,
+      paso: number,
+      detalle?: string,
+    ) => (
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, padding: 10, background: "#f4f8fc" }}>
+        <div style={{ minWidth: 0 }}>
+          <span style={{ display: "block", color: "#6b7f93", fontSize: 11, fontWeight: 900 }}>{etiqueta}</span>
+          <strong style={{ display: "block", marginTop: 2, color: "#173b61" }}>
+            {producto?.nombre || "Pendiente"}
+          </strong>
+          {producto && (
+            <span style={{ display: "block", marginTop: 2, color: "#0e5fa8", fontSize: 12 }}>
+              {Number(producto.precio || 0) === 0 ? "+$0" : `+$${Number(producto.precio).toFixed(2)}`}
+              {detalle ? ` · ${detalle}` : ""}
+            </span>
+          )}
+        </div>
+        <button
+          type="button"
+          onClick={() => setVentaLentesPaso(paso)}
+          style={{ ...actionBtnStyle, padding: "7px 10px", flex: "0 0 auto" }}
+        >
+          Editar
+        </button>
+      </div>
+    );
+
+    return (
+      <div style={{ display: "grid", gap: 8 }}>
+        <section style={{ border: ventaLentesPaso === 1 ? "2px solid #1677d2" : "1px solid #cbd8e4", background: "#fff" }}>
+          {ventaLentesPaso === 1 ? (
+            <div style={{ padding: 11 }}>
+              <div style={{ marginBottom: 8, fontWeight: 900, color: "#173b61" }}>1. Selecciona el armazón</div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(205px, 1fr))", gap: 7 }}>
+                {ventaArmazonesOpticos.map((producto) =>
+                  renderVentaProductoButton(
+                    producto,
+                    () => seleccionarArmazonFlujoOptico(producto),
+                  ),
+                )}
+              </div>
+            </div>
+          ) : (
+            resumenPaso("PASO 1 · ARMAZÓN", ventaArmazonSeleccionado, 1)
+          )}
+        </section>
+
+        {ventaArmazonSeleccionado && (
+          <section style={{ border: ventaLentesPaso === 2 ? "2px solid #1677d2" : "1px solid #cbd8e4", background: "#fff" }}>
+            {ventaLentesPaso === 2 ? (
+              <div style={{ padding: 11 }}>
+                <div style={{ marginBottom: 8, fontWeight: 900, color: "#173b61" }}>2. Selecciona el diseño de la mica</div>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(165px, 1fr))", gap: 7 }}>
+                  {ventaMicasDisenos.map((producto) =>
+                    renderVentaProductoButton(
+                      producto,
+                      () => seleccionarDisenoFlujoOptico(producto),
+                    ),
+                  )}
+                </div>
+              </div>
+            ) : (
+              resumenPaso("PASO 2 · DISEÑO", ventaDisenoSeleccionado, 2)
+            )}
+          </section>
+        )}
+
+        {ventaDisenoSeleccionado && (
+          <section style={{ border: ventaLentesPaso === 3 ? "2px solid #1677d2" : "1px solid #cbd8e4", background: "#fff" }}>
+            {ventaLentesPaso === 3 ? (
+              <div style={{ padding: 11 }}>
+                <div style={{ marginBottom: 3, fontWeight: 900, color: "#173b61" }}>3. Selecciona un tratamiento</div>
+                <div style={{ marginBottom: 9, color: "#718397", fontSize: 11 }}>Solo puedes seleccionar una opción.</div>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(165px, 1fr))", gap: 7 }}>
+                  {ventaTratamientoSin && renderVentaProductoButton(
+                    ventaTratamientoSin,
+                    () => {
+                      seleccionarTratamientoFlujoOptico(ventaTratamientoSin);
+                      setVentaAgregarTinte(false);
+                      setVentaTinteGrado("");
+                    },
+                    tratamientoEsSinOTinte,
+                  )}
+                  {ventaTratamientoAntirreflejante && renderVentaProductoButton(
+                    ventaTratamientoAntirreflejante,
+                    () => seleccionarTratamientoFlujoOptico(ventaTratamientoAntirreflejante),
+                  )}
+                  {ventaTratamientoFotocromatico && renderVentaProductoButton(
+                    ventaTratamientoFotocromatico,
+                    () => seleccionarTratamientoFlujoOptico(ventaTratamientoFotocromatico),
+                  )}
+                  {ventaTratamientosAntiblue[0] && renderVentaProductoButton(
+                    {
+                      ...ventaTratamientosAntiblue[0],
+                      nombre: "Filtro de luz azul",
+                      color: null,
+                    },
+                    () => {
+                      const idsTratamientos = new Set(
+                        ventaMicasTratamientos.map((producto) => producto.producto_id),
+                      );
+                      setVentaCarrito((prev) =>
+                        prev.filter((item) => !idsTratamientos.has(item.producto_id)),
+                      );
+                      setVentaMostrarAntiblue(true);
+                      setVentaAgregarTinte(false);
+                      setVentaTinteGrado("");
+                      setVentaLentesPaso(3);
+                    },
+                    ventaMostrarAntiblue || Boolean(ventaAntiblueSeleccionado),
+                  )}
+                </div>
+
+                {(ventaMostrarAntiblue || ventaAntiblueSeleccionado) && (
+                  <div style={{ marginTop: 10, padding: 10, border: "1px solid #cfe0f0", background: "#f7fbff" }}>
+                    <div style={{ marginBottom: 7, fontWeight: 900, color: "#31475d" }}>Color del reflejo</div>
+                    <div style={{ display: "flex", gap: 7, flexWrap: "wrap" }}>
+                      {ventaTratamientosAntiblue.map((producto) => {
+                        const selected = ventaCarritoIds.has(producto.producto_id);
+                        return (
+                          <button
+                            key={producto.producto_id}
+                            type="button"
+                            onClick={() => {
+                              seleccionarTratamientoFlujoOptico(producto);
+                              setVentaMostrarAntiblue(false);
+                            }}
+                            style={{
+                              padding: "8px 12px",
+                              borderRadius: 999,
+                              border: selected ? "2px solid #1677d2" : "1px solid #cbd8e4",
+                              background: selected ? "#e7f2ff" : "#fff",
+                              color: "#173b61",
+                              fontWeight: 900,
+                              cursor: "pointer",
+                            }}
+                          >
+                            <span style={{ display: "inline-block", width: 12, height: 12, marginRight: 6, borderRadius: 999, background: producto.color === "Verde" ? "#35a56a" : "#3478cf", verticalAlign: -1 }} />
+                            {producto.color} · +${precioTratamientoAzul.toFixed(2)}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {tratamientoEsSinOTinte && (
+                  <div style={{ marginTop: 10 }}>
+                    {!ventaAgregarTinte && !ventaTinteSeleccionado ? (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setVentaAgregarTinte(true);
+                          setVentaLentesPaso(3);
+                        }}
+                        style={{ padding: "9px 13px", border: "1px solid #8a5a24", background: "#fff8ed", color: "#784718", fontWeight: 900, cursor: "pointer" }}
+                      >
+                        + Agregar tinte
+                      </button>
+                    ) : (
+                      <div style={{ padding: 10, border: "1px solid #ead4b7", background: "#fffaf3" }}>
+                        <div style={{ marginBottom: 7, fontWeight: 900, color: "#5f4326" }}>Color del tinte</div>
+                        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(105px, 1fr))", gap: 6 }}>
+                          {ventaTratamientosTinte.map((producto) => {
+                            const selected = ventaCarritoIds.has(producto.producto_id);
+                            const color = VENTA_TINTE_COLORES[producto.color || ""] || "#8b95a1";
+                            return (
+                              <button
+                                key={producto.producto_id}
+                                type="button"
+                                onClick={() => {
+                                  seleccionarTratamientoFlujoOptico(
+                                    producto,
+                                    { mantenerAbierto: true, esTinte: true },
+                                  );
+                                  setVentaTinteGrado("");
+                                }}
+                                style={{
+                                  padding: 8,
+                                  border: selected ? "2px solid #1677d2" : "1px solid #d6c7b7",
+                                  background: selected ? "#edf6ff" : "#fff",
+                                  color: "#31475d",
+                                  fontWeight: 800,
+                                  cursor: "pointer",
+                                }}
+                              >
+                                <span style={{ display: "block", width: 22, height: 22, margin: "0 auto 5px", borderRadius: 999, background: color, boxShadow: "inset 0 0 0 1px rgba(0,0,0,.18)" }} />
+                                {producto.color}
+                              </button>
+                            );
+                          })}
+                        </div>
+
+                        {ventaTinteSeleccionado && (
+                          <div style={{ marginTop: 10 }}>
+                            <div style={{ marginBottom: 6, fontWeight: 900, color: "#5f4326" }}>Grado del tinte</div>
+                            <div style={{ display: "flex", gap: 7, flexWrap: "wrap" }}>
+                              {(["grado_1", "grado_2", "grado_3"] as VentaTinteGrado[]).map((grado) => (
+                                <button
+                                  key={grado}
+                                  type="button"
+                                  onClick={() => {
+                                    setVentaTinteGrado(grado);
+                                    setVentaLentesPaso(0);
+                                  }}
+                                  style={{
+                                    padding: "8px 13px",
+                                    borderRadius: 999,
+                                    border: ventaTinteGrado === grado ? "2px solid #1677d2" : "1px solid #cbd8e4",
+                                    background: ventaTinteGrado === grado ? "#1677d2" : "#fff",
+                                    color: ventaTinteGrado === grado ? "#fff" : "#31475d",
+                                    fontWeight: 900,
+                                    cursor: "pointer",
+                                  }}
+                                >
+                                  {grado.replace("_", " ")}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div>
+                {resumenPaso(
+                  ventaTinteSeleccionado ? "PASO 3 · TINTE" : "PASO 3 · TRATAMIENTO",
+                  ventaTratamientoSeleccionado,
+                  3,
+                  ventaTinteGrado ? ventaTinteGrado.replace("_", " ") : undefined,
+                )}
+                {ventaTratamientoSeleccionado?.tipo_mica === "sin_tratamiento" && (
+                  <div style={{ padding: "0 10px 10px", background: "#f4f8fc" }}>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setVentaAgregarTinte(true);
+                        setVentaLentesPaso(3);
+                      }}
+                      style={{ padding: "7px 10px", border: "1px solid #8a5a24", background: "#fff8ed", color: "#784718", fontWeight: 900, cursor: "pointer" }}
+                    >
+                      + Agregar tinte
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+          </section>
+        )}
+      </div>
+    );
+  };
 
   const softCard = {
     border: "1px solid #e7d7c7",
@@ -4579,7 +6004,7 @@ export default function App() {
   const historiaInputStyle = {
     width: "100%",
     padding: 8,
-    borderRadius: 8,
+    borderRadius: 0,
     border: "1px solid #d9c7b3",
     background: "#fff",
   } as const;
@@ -4818,6 +6243,11 @@ export default function App() {
         <TabButton variant="estadisticas" active={tab === "estadisticas"} onClick={() => setTab("estadisticas")}>
           Estadísticas
         </TabButton>
+        {(isAdmin || isDoctor || isRecep) && (
+          <TabButton variant="inventario" active={tab === "inventario"} onClick={() => setTab("inventario")}>
+            Inventario
+          </TabButton>
+        )}
       </div>
 
 
@@ -5779,7 +7209,7 @@ export default function App() {
                 )}
               </div>
               <div style={{ fontSize: 12, marginBottom: 12, color: "#715638" }}>
-                Agenda y captura clínica con validación de paciente por sucursal (Google Calendar obligatorio).
+                Agenda y captura clínica con validación de paciente por sucursal.
               </div>
               {editingConsultaId !== null && (
                 <div style={{ marginBottom: 12, padding: 10, borderRadius: 10, border: "1px solid #e8d3b8", background: "#fff8ef", color: "#6c4a2a", fontSize: 13 }}>
@@ -5840,7 +7270,7 @@ export default function App() {
               {editingConsultaId === null && (
                 <div style={{ marginBottom: 12, border: "1px solid #dfcfbd", borderRadius: 12, padding: 12, background: "#fff" }}>
                   <div style={{ fontWeight: 800, marginBottom: 8, color: "#4a2f14" }}>
-                    Agenda en Google Calendar (obligatoria)
+                    Agenda de consulta · duración de 45 minutos
                   </div>
                   <div style={{ display: "flex", gap: 8, alignItems: "end", marginBottom: 8, flexWrap: "wrap" }}>
                     <label style={{ display: "block" }}>
@@ -5982,30 +7412,10 @@ export default function App() {
                 Notas
                 <textarea
                   value={formConsulta.notas ?? ""}
-                  onChange={(e) => {
-                    const next = e.target.value;
-                    const razon = motivosConsultaSeleccionados.includes("otro") && tipoConsultaOtro.trim()
-                      ? `Razon (otro): ${tipoConsultaOtro.trim()}`
-                      : "";
-                    const merged = razon ? `${razon} | ${next}` : next;
-                    if (wordCount(merged) <= 50) {
-                      setFormConsulta({ ...formConsulta, notas: next });
-                    }
-                  }}
+                  onChange={(e) => setFormConsulta({ ...formConsulta, notas: e.target.value })}
                   rows={3}
                   style={{ width: "100%", padding: 10, borderRadius: 10, border: "1px solid #ddd" }}
                 />
-                <div style={{ marginTop: 4, fontSize: 12, opacity: 0.75 }}>
-                  {(() => {
-                    const razon = motivosConsultaSeleccionados.includes("otro") && tipoConsultaOtro.trim()
-                      ? `Razon (otro): ${tipoConsultaOtro.trim()}`
-                      : "";
-                    const merged = razon
-                      ? `${razon} | ${formConsulta.notas ?? ""}`
-                      : (formConsulta.notas ?? "");
-                    return `${wordCount(merged)}/50 palabras`;
-                  })()}
-                </div>
               </label>
 
               <button
@@ -6051,7 +7461,7 @@ export default function App() {
               <div style={{ marginTop: 10, display: "flex", gap: 10 }}>
                 <button
                   type="button"
-                  onClick={() => loadConsultas()}
+                  onClick={resetConsultaForm}
                   style={{
                     padding: "10px 14px",
                     borderRadius: 12,
@@ -6061,7 +7471,7 @@ export default function App() {
                     cursor: "pointer",
                   }}
                 >
-                  Actualizar lista
+                  Resetear consulta
                 </button>
 
                 <button
@@ -6355,44 +7765,240 @@ export default function App() {
               </select>
             </label>
 
-            <div style={{ display: "block", marginBottom: 10 }}>
-              <div style={{ marginBottom: 6, fontWeight: 700 }}>Compra *</div>
-              <div style={{ display: "grid", gap: 6, padding: 10, border: "1px solid #ddd", borderRadius: 10, background: "#fff" }}>
-                {[
-                  ...VENTA_COMPRA_OPTIONS,
-                ].map((opt) => (
-                  <label key={opt} style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                    <input
-                      type="checkbox"
-                      checked={ventasSeleccionadas.includes(opt)}
-                      onChange={(e) => {
-                        setVentasSeleccionadas((prev) => {
-                          const next = e.target.checked ? [...prev, opt] : prev.filter((x) => x !== opt);
-                          if (!next.includes("otro")) setVentaCompraOtro("");
-                          setFormVenta((curr) => ({ ...curr, compra: next.join("|") }));
-                          return next;
-                        });
-                      }}
-                    />
-                    <span>{opt}</span>
-                  </label>
-                ))}
-              </div>
+            <div style={{ display: "block", marginBottom: 12 }}>
+              {isAdmin ? (
+                <div style={{ display: "grid", gap: 12 }}>
+                  {editingVentaId !== null && (
+                    <div style={{ padding: 10, border: "1px solid #bfdbfe", background: "#eff6ff", color: "#1e40af", fontSize: 13, fontWeight: 700 }}>
+                      Estás editando la información de la venta. El inventario no se descuenta nuevamente.
+                    </div>
+                  )}
+
+                  <section style={{ padding: 14, border: "1px solid #dbe7f4", background: "#f8fbff" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 9, marginBottom: 10 }}>
+                      <span style={{ width: 26, height: 26, display: "inline-grid", placeItems: "center", borderRadius: 999, background: "#2563eb", color: "#fff", fontWeight: 900 }}>1</span>
+                      <div>
+                        <div style={{ fontWeight: 900, color: "#16385d" }}>¿Qué compró el cliente?</div>
+                        <div style={{ fontSize: 12, color: "#6b7f93" }}>Elige una categoría para continuar.</div>
+                      </div>
+                    </div>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(145px, 1fr))", gap: 8 }}>
+                      {VENTA_CATEGORIAS.map((categoria) => {
+                        const active = ventaCategoria === categoria.value;
+                        return (
+                          <button
+                            key={categoria.value}
+                            type="button"
+                            onClick={() => seleccionarVentaCategoria(categoria.value)}
+                            aria-pressed={active}
+                            style={{
+                              minHeight: 92,
+                              padding: 11,
+                              border: active ? "2px solid #2563eb" : "1px solid #d8e3ef",
+                              background: active ? "#eaf2ff" : "#fff",
+                              color: active ? "#174ea6" : "#31475d",
+                              textAlign: "left",
+                              cursor: "pointer",
+                              boxShadow: active ? "0 8px 20px rgba(37,99,235,.13)" : "none",
+                            }}
+                          >
+                            <span style={{ display: "block", color: "#2563eb", fontSize: 21, lineHeight: 1, marginBottom: 7 }}>{categoria.icon}</span>
+                            <span style={{ display: "block", fontWeight: 900, lineHeight: 1.15 }}>{categoria.label}</span>
+                            <span style={{ display: "block", marginTop: 4, fontSize: 11, color: "#718397", lineHeight: 1.25 }}>{categoria.detail}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </section>
+
+                  {ventaCategoria && (
+                    <section style={{ padding: 14, border: "1px solid #cbdcf0", background: "#fff" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 9, marginBottom: 12 }}>
+                        <span style={{ width: 26, height: 26, display: "inline-grid", placeItems: "center", borderRadius: 999, background: "#0f766e", color: "#fff", fontWeight: 900 }}>2</span>
+                        <div>
+                          <div style={{ fontWeight: 900, color: "#16385d" }}>Elige productos y opciones</div>
+                          <div style={{ fontSize: 12, color: "#6b7f93" }}>Cada selección se agrega al resumen de la venta.</div>
+                        </div>
+                      </div>
+
+                      {editingVentaId !== null ? (
+                        <div style={{ padding: 12, border: "1px dashed #9db6cf", color: "#526b7b", background: "#f8fafc" }}>
+                          Conservaremos los productos y el movimiento de inventario original de esta venta.
+                        </div>
+                      ) : loadingInventario ? (
+                        <div style={{ padding: 16, color: "#526b7b" }}>Cargando catálogo...</div>
+                      ) : inventarioError ? (
+                        <div style={{ padding: 12, border: "1px solid #fecaca", background: "#fef2f2", color: "#991b1b" }}>
+                          No se pudo cargar el inventario: {inventarioError}
+                        </div>
+                      ) : (
+                        <div style={{ display: "grid", gap: 14 }}>
+                          {ventaCategoria === "lentes_opticos" && (
+                            renderFlujoLentesOpticos()
+                          )}
+
+                          {ventaCategoria === "micas" && (
+                            <div>
+                              <div style={{ marginBottom: 8, fontWeight: 900, color: "#31475d" }}>1. Par de micas</div>
+                              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(230px, 1fr))", gap: 8 }}>
+                                {ventaMicasBase.map((producto) =>
+                                  renderVentaProductoButton(producto, () => {
+                                    const yaSeleccionado = ventaCarritoIds.has(producto.producto_id);
+                                    agregarProductoCarrito(producto, "reemplazar_subcategoria");
+                                    if (!yaSeleccionado) prepararMicasConDefaults();
+                                  }),
+                                )}
+                              </div>
+                            </div>
+                          )}
+
+                          {ventaCategoria === "micas" && (
+                            <>
+                              <div>
+                                <div style={{ marginBottom: 8, fontWeight: 900, color: "#31475d" }}>
+                                  2. Diseño de la mica
+                                </div>
+                                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 8 }}>
+                                  {ventaMicasDisenos.map((producto) =>
+                                    renderVentaProductoButton(
+                                      producto,
+                                      () => agregarProductoCarrito(producto, "reemplazar_subcategoria"),
+                                    ),
+                                  )}
+                                </div>
+                              </div>
+                              <div>
+                                <div style={{ marginBottom: 8, fontWeight: 900, color: "#31475d" }}>3. Tratamiento, antiblueray o tinte</div>
+                                <div style={{ marginBottom: 8, fontSize: 12, color: "#6b7f93" }}>
+                                  Antiblueray está disponible en verde o azul. Los tintes incluyen 10 colores.
+                                </div>
+                                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 8 }}>
+                                  {ventaMicasTratamientos.map((producto) =>
+                                    renderVentaProductoButton(
+                                      producto,
+                                      () => agregarProductoCarrito(producto, "reemplazar_subcategoria"),
+                                    ),
+                                  )}
+                                </div>
+                              </div>
+                            </>
+                          )}
+
+                          {ventaCategoria === "lentes_de_sol" && (
+                            <>
+                              <div>
+                                <div style={{ marginBottom: 8, fontWeight: 900, color: "#31475d" }}>1. Modelo de lentes de sol</div>
+                                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(230px, 1fr))", gap: 8 }}>
+                                  {ventaLentesSol.map((producto) =>
+                                    renderVentaProductoButton(
+                                      producto,
+                                      () => agregarProductoCarrito(producto, "reemplazar_subcategoria"),
+                                    ),
+                                  )}
+                                </div>
+                              </div>
+                              <div>
+                                <div style={{ marginBottom: 8, fontWeight: 900, color: "#31475d" }}>2. Graduación</div>
+                                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 8 }}>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      const idsGraduacion = new Set(ventaGraduacionSol.map((producto) => producto.producto_id));
+                                      setVentaCarrito((prev) => prev.filter((item) => !idsGraduacion.has(item.producto_id)));
+                                    }}
+                                    style={{
+                                      minHeight: 76,
+                                      padding: 12,
+                                      border: ventaGraduacionSol.some((producto) => ventaCarritoIds.has(producto.producto_id))
+                                        ? "1px solid #cdddeb"
+                                        : "2px solid #1677d2",
+                                      background: ventaGraduacionSol.some((producto) => ventaCarritoIds.has(producto.producto_id))
+                                        ? "#fff"
+                                        : "#edf6ff",
+                                      color: "#173b61",
+                                      fontWeight: 900,
+                                      cursor: "pointer",
+                                      textAlign: "left",
+                                    }}
+                                  >
+                                    Sin graduación
+                                    <span style={{ display: "block", marginTop: 6, color: "#0e5fa8" }}>+$0</span>
+                                  </button>
+                                  {ventaGraduacionSol.map((producto) =>
+                                    renderVentaProductoButton(
+                                      producto,
+                                      () => agregarProductoCarrito(producto, "reemplazar_subcategoria"),
+                                    ),
+                                  )}
+                                </div>
+                              </div>
+                            </>
+                          )}
+
+                          {ventaCategoria === "examen_de_la_vista" && (
+                            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(230px, 1fr))", gap: 8 }}>
+                              {ventaExamenes.map((producto) =>
+                                renderVentaProductoButton(producto, () => agregarProductoCarrito(producto, "unico")),
+                              )}
+                            </div>
+                          )}
+
+                          {ventaCategoria === "lentes_de_contacto" && (
+                            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(230px, 1fr))", gap: 8 }}>
+                              {ventaContactos.map((producto) =>
+                                renderVentaProductoButton(producto, () => agregarProductoCarrito(producto, "sumar")),
+                              )}
+                            </div>
+                          )}
+
+                          {ventaCategoria === "estuche_accesorios" && (
+                            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(230px, 1fr))", gap: 8 }}>
+                              {ventaAccesorios.map((producto) =>
+                                renderVentaProductoButton(producto, () => agregarProductoCarrito(producto, "sumar")),
+                              )}
+                            </div>
+                          )}
+
+                          {ventaCategoria === "soluciones_y_cuidado" && (
+                            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(230px, 1fr))", gap: 8 }}>
+                              {ventaCuidados.map((producto) =>
+                                renderVentaProductoButton(producto, () => agregarProductoCarrito(producto, "sumar")),
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </section>
+                  )}
+
+                </div>
+              ) : (
+                <>
+                  <div style={{ marginBottom: 6, fontWeight: 700 }}>Compra *</div>
+                  <div style={{ display: "grid", gap: 6, padding: 10, border: "1px solid #ddd", borderRadius: 10, background: "#fff" }}>
+                    {VENTA_COMPRA_OPTIONS.map((opt) => (
+                      <label key={opt} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        <input
+                          type="checkbox"
+                          checked={ventasSeleccionadas.includes(opt)}
+                          onChange={(e) => {
+                            setVentasSeleccionadas((prev) => {
+                              const next = e.target.checked ? [...prev, opt] : prev.filter((x) => x !== opt);
+                              setFormVenta((curr) => ({ ...curr, compra: next.join("|") }));
+                              return next;
+                            });
+                          }}
+                        />
+                        <span>{formatVentaCompraLabel(opt)}</span>
+                      </label>
+                    ))}
+                  </div>
+                </>
+              )}
             </div>
 
-            {ventasSeleccionadas.includes("otro") && (
+            {!isAdmin && (
               <label style={{ display: "block", marginBottom: 8 }}>
-                Detalle (otro) *
-                <input
-                  value={ventaCompraOtro}
-                  onChange={(e) => setVentaCompraOtro(e.target.value)}
-                  required
-                  style={{ width: "100%", padding: 10, borderRadius: 10, border: "1px solid #ddd" }}
-                />
-              </label>
-            )}
-
-            <label style={{ display: "block", marginBottom: 8 }}>
               Monto total (MXN) *
               <input
                 type="number"
@@ -6412,101 +8018,19 @@ export default function App() {
                 required
                 style={{ width: "100%", padding: 10, borderRadius: 10, border: "1px solid #ddd" }}
               />
-            </label>
-
-            <label style={{ display: "block", marginBottom: 8 }}>
-              Método de pago *
-              <select
-                value={formVenta.metodo_pago}
-                onChange={(e) =>
-                  setFormVenta({
-                    ...formVenta,
-                    metodo_pago: e.target.value as "efectivo" | "tarjeta_credito" | "tarjeta_debito",
-                  })
-                }
-                style={{ width: "100%", padding: 10, borderRadius: 10, border: "1px solid #ddd", background: "#fff" }}
-              >
-                <option value="efectivo">efectivo</option>
-                <option value="tarjeta_credito">tarjeta_credito</option>
-                <option value="tarjeta_debito">tarjeta_debito</option>
-              </select>
-            </label>
-
-            <label style={{ display: "block", marginBottom: 8 }}>
-              ¿Dejó adelanto? *
-              <select
-                value={formVenta.adelanto_aplica ? "si" : "no"}
-                onChange={(e) => {
-                  const aplica = e.target.value === "si";
-                  setFormVenta({
-                    ...formVenta,
-                    adelanto_aplica: aplica,
-                    adelanto_monto: aplica ? formVenta.adelanto_monto ?? null : null,
-                    adelanto_metodo: aplica ? formVenta.adelanto_metodo ?? "efectivo" : null,
-                  });
-                }}
-                style={{ width: "100%", padding: 10, borderRadius: 10, border: "1px solid #ddd", background: "#fff" }}
-              >
-                <option value="no">no</option>
-                <option value="si">si</option>
-              </select>
-            </label>
-
-            {formVenta.adelanto_aplica && (
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-                <label style={{ display: "block", marginBottom: 8 }}>
-                  Monto adelanto (MXN) *
-                  <input
-                    type="number"
-                    min={0}
-                    step="0.01"
-                    value={formVenta.adelanto_monto ?? ""}
-                    onChange={(e) =>
-                      setFormVenta({
-                        ...formVenta,
-                        adelanto_monto: e.target.value === "" ? null : Number(e.target.value),
-                      })
-                    }
-                    required
-                    style={{ width: "100%", padding: 10, borderRadius: 10, border: "1px solid #ddd" }}
-                  />
-                </label>
-                <label style={{ display: "block", marginBottom: 8 }}>
-                  Método adelanto *
-                  <select
-                    value={formVenta.adelanto_metodo ?? "efectivo"}
-                    onChange={(e) =>
-                      setFormVenta({
-                        ...formVenta,
-                        adelanto_metodo: e.target.value as "efectivo" | "tarjeta_credito" | "tarjeta_debito",
-                      })
-                    }
-                    style={{ width: "100%", padding: 10, borderRadius: 10, border: "1px solid #ddd", background: "#fff" }}
-                  >
-                    <option value="efectivo">efectivo</option>
-                    <option value="tarjeta_credito">tarjeta_credito</option>
-                    <option value="tarjeta_debito">tarjeta_debito</option>
-                  </select>
-                </label>
-              </div>
+              </label>
             )}
+
+            {!isAdmin && renderVentaPagoLiquidacion()}
 
             <label style={{ display: "block", marginBottom: 8 }}>
               Notas
               <textarea
                 value={formVenta.notas ?? ""}
-                onChange={(e) => {
-                  const next = e.target.value;
-                  if (wordCount(next) <= 50) {
-                    setFormVenta({ ...formVenta, notas: next });
-                  }
-                }}
+                onChange={(e) => setFormVenta({ ...formVenta, notas: e.target.value })}
                 rows={3}
                 style={{ width: "100%", padding: 10, borderRadius: 10, border: "1px solid #ddd" }}
               />
-              <div style={{ marginTop: 4, fontSize: 12, opacity: 0.75 }}>
-                {`${wordCount(formVenta.notas ?? "")}/50 palabras`}
-              </div>
             </label>
 
             <button
@@ -6524,6 +8048,25 @@ export default function App() {
               }}
             >
               {savingVenta ? "Guardando..." : editingVentaId === null ? "Guardar venta" : "Actualizar venta"}
+            </button>
+
+            <button
+              type="button"
+              onClick={cancelEditVenta}
+              disabled={savingVenta}
+              style={{
+                width: "100%",
+                padding: 12,
+                borderRadius: 12,
+                border: "1px solid #b9c9d8",
+                background: "#f8fafc",
+                color: "#40566c",
+                fontWeight: 800,
+                cursor: savingVenta ? "not-allowed" : "pointer",
+                marginTop: 8,
+              }}
+            >
+              Resetear venta
             </button>
 
             {editingVentaId !== null && (
@@ -6546,7 +8089,8 @@ export default function App() {
             )}
           </form>
 
-          <div style={{ ...softCard, overflowX: "auto" }}>
+          <div style={{ display: "grid", gap: 16, alignSelf: "start", minWidth: 0 }}>
+            <div style={{ ...softCard, overflowX: "auto" }}>
             <div
               style={{
                 padding: 14,
@@ -6651,13 +8195,18 @@ export default function App() {
                           .filter(Boolean)
                           .map((item) => (
                             <span key={`${v.venta_id}-${item}`} style={{ padding: "4px 8px", borderRadius: 999, border: "1px solid #d9c7b3", background: "#fff", fontSize: 12, fontWeight: 700, color: "#5a4633" }}>
-                              {item}
+                              {formatVentaCompraLabel(item)}
                             </span>
                           ))}
                       </div>
                     </td>
                     <td style={{ padding: 10 }}>${Number(v.monto_total || 0).toFixed(2)}</td>
-                    <td style={{ padding: 10 }}>{v.metodo_pago ?? ""}</td>
+                    <td style={{ padding: 10 }}>
+                      <div>{formatMetodoPagoLabel(v.metodo_pago)}</div>
+                      <div style={{ marginTop: 3, color: "#718397", fontSize: 11 }}>
+                        {formatFormaLiquidacionLabel(v.forma_liquidacion)}
+                      </div>
+                    </td>
                     <td style={{ padding: 10 }}>
                       {v.adelanto_aplica
                         ? `$${Number(v.adelanto_monto || 0).toFixed(2)} (${v.adelanto_metodo || ""})`
@@ -6699,7 +8248,510 @@ export default function App() {
                 )}
               </tbody>
             </table>
+            </div>
+
+            {isAdmin && renderVentaResumenProductos()}
           </div>
+        </div>
+      )}
+
+      {/* ========================= INVENTARIO ========================= */}
+      {(isAdmin || isDoctor || isRecep) && tab === "inventario" && (
+        <div style={{ display: "grid", gap: 16 }}>
+          <div style={{ ...softCard, padding: 18, background: "#f8fbff", borderColor: "#cfdef0" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 14, alignItems: "center", flexWrap: "wrap" }}>
+              <div>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                  <h2 style={{ margin: 0, color: "#173b61" }}>Inventario</h2>
+                  <span style={{ padding: "5px 10px", borderRadius: 999, background: "#dbeafe", color: "#1d4ed8", fontSize: 12, fontWeight: 900 }}>
+                    {isAdmin ? "Administrador" : "Consulta de existencias"}
+                  </span>
+                </div>
+                <div style={{ marginTop: 5, color: "#6b7f93" }}>
+                  Productos de la sucursal #{sucursalActivaId}, usando el mismo catálogo y las existencias actuales.
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={loadInventario}
+                disabled={loadingInventario}
+                style={{
+                  ...actionBtnStyle,
+                  padding: "10px 14px",
+                  borderColor: "#8fb1d5",
+                  color: "#174ea6",
+                  cursor: loadingInventario ? "wait" : "pointer",
+                }}
+              >
+                {loadingInventario ? "Cargando..." : "Actualizar inventario"}
+              </button>
+            </div>
+
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 16, paddingBottom: 14, borderBottom: "1px solid #d8e3ef" }}>
+              <button
+                type="button"
+                onClick={() => setInventarioVista("existencias")}
+                aria-pressed={inventarioVista === "existencias"}
+                style={{
+                  padding: "9px 14px",
+                  border: inventarioVista === "existencias" ? "1px solid #174ea6" : "1px solid #b9cce0",
+                  background: inventarioVista === "existencias" ? "#174ea6" : "#fff",
+                  color: inventarioVista === "existencias" ? "#fff" : "#40566c",
+                  fontWeight: 900,
+                  cursor: "pointer",
+                }}
+              >
+                Existencias
+              </button>
+              {isAdmin && (
+                <button
+                  type="button"
+                  onClick={() => setInventarioVista("costos")}
+                  aria-pressed={inventarioVista === "costos"}
+                  style={{
+                    padding: "9px 14px",
+                    border: inventarioVista === "costos" ? "1px solid #0f766e" : "1px solid #b9cce0",
+                    background: inventarioVista === "costos" ? "#0f766e" : "#fff",
+                    color: inventarioVista === "costos" ? "#fff" : "#40566c",
+                    fontWeight: 900,
+                    cursor: "pointer",
+                  }}
+                >
+                  Costos y rentabilidad
+                </button>
+              )}
+            </div>
+
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 14 }}>
+              <div style={{ minWidth: 150, padding: 12, border: "1px solid #d8e3ef", background: "#fff" }}>
+                <div style={{ fontSize: 12, color: "#6b7f93", fontWeight: 800 }}>PRODUCTOS</div>
+                <div style={{ marginTop: 2, fontSize: 25, fontWeight: 900, color: "#173b61" }}>{inventarioVisible.length}</div>
+              </div>
+              <div style={{ minWidth: 150, padding: 12, border: "1px solid #fed7aa", background: inventarioStockBajo > 0 ? "#fff7ed" : "#fff" }}>
+                <div style={{ fontSize: 12, color: "#9a4c0e", fontWeight: 800 }}>STOCK BAJO</div>
+                <div style={{ marginTop: 2, fontSize: 25, fontWeight: 900, color: inventarioStockBajo > 0 ? "#c2410c" : "#173b61" }}>{inventarioStockBajo}</div>
+              </div>
+              <div style={{ minWidth: 150, padding: 12, border: "1px solid #d8e3ef", background: "#fff" }}>
+                <div style={{ fontSize: 12, color: "#6b7f93", fontWeight: 800 }}>UNIDADES</div>
+                <div style={{ marginTop: 2, fontSize: 25, fontWeight: 900, color: "#173b61" }}>
+                  {inventarioVisible.reduce(
+                    (total, producto) => total + (producto.controla_stock ? Number(producto.stock || 0) : 0),
+                    0,
+                  )}
+                </div>
+              </div>
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "minmax(240px, 1fr) minmax(200px, .45fr)", gap: 10, marginTop: 14 }}>
+              <label style={{ display: "block", fontSize: 12, fontWeight: 900, color: "#40566c" }}>
+                BUSCAR PRODUCTO
+                <input
+                  value={inventarioBusqueda}
+                  onChange={(e) => setInventarioBusqueda(e.target.value)}
+                  placeholder="Nombre, ID, SKU, modelo, color..."
+                  style={{ width: "100%", marginTop: 5, padding: 10, border: "1px solid #b9cce0", background: "#fff" }}
+                />
+              </label>
+              <label style={{ display: "block", fontSize: 12, fontWeight: 900, color: "#40566c" }}>
+                CATEGORÍA
+                <select
+                  value={inventarioCategoriaFiltro}
+                  onChange={(e) => setInventarioCategoriaFiltro(e.target.value)}
+                  style={{ width: "100%", marginTop: 5, padding: 10, border: "1px solid #b9cce0", background: "#fff" }}
+                >
+                  <option value="todos">Todas</option>
+                  {inventarioCategorias.map((categoria) => (
+                    <option key={categoria} value={categoria}>{formatVentaCompraLabel(categoria)}</option>
+                  ))}
+                </select>
+              </label>
+            </div>
+            </div>
+
+          {inventarioError && (
+            <div style={{ padding: 12, border: "1px solid #fecaca", background: "#fef2f2", color: "#991b1b", fontWeight: 700 }}>
+              {inventarioError}
+            </div>
+          )}
+
+          {inventarioVista === "existencias" && (
+            <>
+          <div
+            style={{
+              position: "sticky",
+              top: 8,
+              zIndex: 5,
+              display: "flex",
+              gap: 7,
+              flexWrap: "wrap",
+              padding: 9,
+              border: "1px solid #c9daeb",
+              background: "rgba(248,251,255,.96)",
+              boxShadow: "0 5px 14px rgba(36,72,105,.08)",
+            }}
+          >
+            <label style={{ display: "flex", alignItems: "center", gap: 8, color: "#31475d", fontSize: 12, fontWeight: 900 }}>
+              IR A:
+              <select
+                defaultValue=""
+                aria-label="Ir a una categoría del inventario"
+                onChange={(e) => {
+                  const categoria = e.currentTarget.value;
+                  if (!categoria) return;
+                  document
+                    .getElementById(`inventario-seccion-${categoria}`)
+                    ?.scrollIntoView({ behavior: "smooth", block: "start" });
+                  e.currentTarget.value = "";
+                }}
+                style={{
+                  minWidth: 250,
+                  padding: "8px 34px 8px 10px",
+                  border: "1px solid #9ebbd7",
+                  background: "#fff",
+                  color: "#174ea6",
+                  fontWeight: 850,
+                  cursor: "pointer",
+                }}
+              >
+                <option value="">Seleccionar categoría...</option>
+                {inventarioGrupos.map((grupo) => (
+                  <option key={`nav-${grupo.categoria}`} value={grupo.categoria}>
+                    {formatVentaCompraLabel(grupo.categoria)}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+
+          {loadingInventario && inventarioVisible.length === 0 ? (
+            <div style={{ ...softCard, padding: 28, textAlign: "center", color: "#526b7b" }}>Cargando inventario...</div>
+          ) : inventarioVisible.length === 0 ? (
+            <div style={{ ...softCard, padding: 28, textAlign: "center" }}>
+              <div style={{ fontWeight: 900, color: "#31475d" }}>No hay productos registrados en esta sucursal.</div>
+              <div style={{ marginTop: 5, color: "#718397" }}>Cuando haya productos activos, aparecerán aquí con su imagen y existencias.</div>
+            </div>
+          ) : inventarioFiltrado.length === 0 ? (
+            <div style={{ ...softCard, padding: 28, textAlign: "center", color: "#526b7b" }}>
+              No hay productos que coincidan con la búsqueda.
+            </div>
+          ) : (
+            <div style={{ display: "grid", gap: 16 }}>
+              {inventarioGrupos.map((grupo) => (
+                <section
+                  key={grupo.categoria}
+                  id={`inventario-seccion-${grupo.categoria}`}
+                  style={{ scrollMarginTop: 86 }}
+                >
+                  <div style={{ padding: "9px 12px", background: "#dceaff", border: "1px solid #b8cfe8", color: "#173b61" }}>
+                    <strong style={{ fontSize: 15 }}>{formatVentaCompraLabel(grupo.categoria)}</strong>
+                    <span style={{ marginLeft: 8, color: "#5d7690", fontSize: 12 }}>
+                      {grupo.productos.length} producto(s)
+                    </span>
+                  </div>
+                  <div style={{ ...softCard, overflowX: "auto", borderColor: "#c6d8ea", borderTopLeftRadius: 0, borderTopRightRadius: 0 }}>
+                    <table style={{ width: "100%", minWidth: 1220, tableLayout: "fixed", borderCollapse: "collapse", background: "#fff", fontSize: 11 }}>
+                <colgroup>
+                  <col style={{ width: 390 }} />
+                  <col style={{ width: 140 }} />
+                  <col style={{ width: 130 }} />
+                  <col style={{ width: 120 }} />
+                  <col style={{ width: 95 }} />
+                  <col style={{ width: 105 }} />
+                  <col style={{ width: 240 }} />
+                </colgroup>
+                <thead>
+                  <tr style={{ color: "#fff" }}>
+                    <th align="left" style={{ padding: "9px 8px", background: "#173b61", color: "#fff", fontWeight: 900 }}>PRODUCTO</th>
+                    <th align="left" style={{ padding: "9px 8px", background: "#0f766e", color: "#fff", fontWeight: 900 }}>CATEGORÍA</th>
+                    <th align="left" style={{ padding: "9px 8px", background: "#315f89", color: "#fff", fontWeight: 900 }}>MODELO</th>
+                    <th align="left" style={{ padding: "9px 8px", background: "#6d4b9c", color: "#fff", fontWeight: 900 }}>COLOR</th>
+                    <th align="right" style={{ padding: "9px 8px", background: "#2563a6", color: "#fff", fontWeight: 900 }}>PRECIO</th>
+                    <th align="center" style={{ padding: "9px 8px", background: "#b46516", color: "#fff", fontWeight: 900 }}>STOCK</th>
+                    <th align="left" style={{ padding: "9px 8px", background: "#357d55", color: "#fff", fontWeight: 900 }}>{isAdmin ? "AJUSTAR STOCK" : "ACCESO"}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {grupo.productos.map((producto) => {
+                    const stockDraft = Math.max(
+                      0,
+                      Math.trunc(Number(inventarioStockDraft[producto.producto_id] ?? producto.stock)),
+                    );
+                    const stockBajo = producto.controla_stock && producto.stock <= producto.stock_minimo;
+                    const guardando = savingInventarioId === producto.producto_id;
+                    return (
+                      <tr key={producto.producto_id} style={{ borderTop: "1px solid #dce6ef", background: stockBajo ? "#fffaf4" : "#fff" }}>
+                        <td style={{ padding: 8 }}>
+                          <div style={{ display: "grid", gridTemplateColumns: "58px minmax(160px, 1fr)", gap: 8, alignItems: "center" }}>
+                            <button
+                              type="button"
+                              disabled={!producto.imagen_url}
+                              onClick={() => producto.imagen_url && setInventarioImagenAmpliada(producto)}
+                              title={producto.imagen_url ? "Ver imagen grande" : "Producto sin imagen"}
+                              aria-label={producto.imagen_url ? `Ampliar imagen de ${producto.nombre}` : undefined}
+                              style={{
+                                width: 58,
+                                height: 50,
+                                padding: 0,
+                                overflow: "hidden",
+                                border: "1px solid #dbe5ed",
+                                background: "#f5f7f9",
+                                cursor: producto.imagen_url ? "zoom-in" : "default",
+                              }}
+                            >
+                              {producto.imagen_url ? (
+                                <img src={producto.imagen_url} alt={producto.nombre} style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
+                              ) : (
+                                <span style={{ width: "100%", height: "100%", display: "grid", placeItems: "center", color: "#8aa0b2" }}>◇</span>
+                              )}
+                            </button>
+                            <div>
+                              <strong style={{ display: "block", color: "#173b61" }}>{producto.nombre}</strong>
+                              <span style={{ display: "block", marginTop: 3, color: "#6b7f93", fontSize: 11 }}>
+                                ID {producto.producto_id} · {producto.sku}
+                              </span>
+                              {producto.descripcion && (
+                                <span style={{ display: "block", marginTop: 3, maxWidth: 310, color: "#7b8da0", fontSize: 11, lineHeight: 1.25 }}>
+                                  {producto.descripcion}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        </td>
+                        <td style={{ padding: 8, background: "#effaf8" }}>
+                          <strong style={{ display: "block", color: "#31475d" }}>{formatVentaCompraLabel(producto.categoria)}</strong>
+                          <span style={{ display: "block", marginTop: 3, color: "#718397", fontSize: 11 }}>{producto.subcategoria || "—"}</span>
+                        </td>
+                        <td style={{ padding: 8, color: "#40566c", background: "#f1f7fb" }}>
+                          {producto.modelo || "—"}
+                        </td>
+                        <td style={{ padding: 8, color: "#4c3b65", background: "#f8f5ff" }}>
+                          {producto.color || producto.tipo_mica || "—"}
+                        </td>
+                        <td align="right" style={{ padding: 8, color: "#174ea6", background: "#eff6ff", fontWeight: 900, whiteSpace: "nowrap" }}>
+                          ${Number(producto.precio || 0).toFixed(2)}
+                        </td>
+                        <td align="center" style={{ padding: 8, background: "#fff8ed" }}>
+                          <span
+                            style={{
+                              display: "inline-block",
+                              minWidth: 92,
+                              padding: "6px 9px",
+                              borderRadius: 999,
+                              background: !producto.controla_stock ? "#eaf2ff" : producto.stock <= 0 ? "#fee2e2" : stockBajo ? "#ffedd5" : "#dcfce7",
+                              color: !producto.controla_stock ? "#174ea6" : producto.stock <= 0 ? "#991b1b" : stockBajo ? "#9a3412" : "#166534",
+                              fontSize: 11,
+                              fontWeight: 900,
+                            }}
+                          >
+                            {!producto.controla_stock ? "SERVICIO" : producto.stock <= 0 ? "AGOTADO" : `${producto.stock} UNIDADES`}
+                          </span>
+                        </td>
+                        <td style={{ padding: 8 }}>
+                          {isAdmin && producto.controla_stock ? (
+                            <div style={{ display: "grid", gridTemplateColumns: "32px 62px 32px auto", gap: 5, minWidth: 225 }}>
+                              <button
+                                type="button"
+                                onClick={() => setInventarioStockDraft((prev) => ({ ...prev, [producto.producto_id]: Math.max(0, stockDraft - 1) }))}
+                                style={{ border: "1px solid #b9c9d8", background: "#f8fafc", color: "#31475d", fontSize: 17, fontWeight: 900, cursor: "pointer" }}
+                              >
+                                −
+                              </button>
+                              <input
+                                type="number"
+                                min={0}
+                                value={stockDraft}
+                                onChange={(e) => setInventarioStockDraft((prev) => ({ ...prev, [producto.producto_id]: Math.max(0, Number(e.target.value || 0)) }))}
+                                style={{ width: "100%", padding: 7, border: "1px solid #b9c9d8", textAlign: "center", fontWeight: 900 }}
+                              />
+                              <button
+                                type="button"
+                                onClick={() => setInventarioStockDraft((prev) => ({ ...prev, [producto.producto_id]: stockDraft + 1 }))}
+                                style={{ border: "1px solid #b9c9d8", background: "#f8fafc", color: "#31475d", fontSize: 17, fontWeight: 900, cursor: "pointer" }}
+                              >
+                                +
+                              </button>
+                              <button
+                                type="button"
+                                disabled={guardando || stockDraft === producto.stock}
+                                onClick={() => guardarStockInventario(producto)}
+                                style={{
+                                  padding: "7px 10px",
+                                  border: "1px solid #1d4ed8",
+                                  background: guardando || stockDraft === producto.stock ? "#dbe4ee" : "#2563eb",
+                                  color: guardando || stockDraft === producto.stock ? "#60758a" : "#fff",
+                                  fontWeight: 900,
+                                  cursor: guardando || stockDraft === producto.stock ? "not-allowed" : "pointer",
+                                }}
+                              >
+                                {guardando ? "Guardando..." : "Guardar"}
+                              </button>
+                            </div>
+                          ) : producto.controla_stock ? (
+                            <span style={{ color: "#526b7b", fontSize: 12, fontWeight: 800 }}>Solo lectura</span>
+                          ) : (
+                            <span style={{ color: "#718397", fontSize: 12 }}>No descuenta existencias</span>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+                    </table>
+                  </div>
+                </section>
+              ))}
+            </div>
+          )}
+            </>
+          )}
+
+          {isAdmin && inventarioVista === "costos" && (
+            <>
+              {inventarioMetricaAyuda && (
+                <div style={{ padding: 12, border: "1px solid #c4b5d9", background: "#faf7ff", color: "#46325f", lineHeight: 1.45 }}>
+                  <strong>{inventarioMetricaAyuda === "valor" ? "Valor del inventario" : "Ganancia potencial total"}</strong>
+                  <div style={{ marginTop: 3 }}>
+                    {inventarioMetricaAyuda === "valor"
+                      ? "Es el dinero invertido en las unidades que tienes actualmente: costo unitario × stock. No representa ventas ni ganancias."
+                      : "Es la ganancia bruta estimada si vendieras todo el stock al precio actual: (precio de venta − costo unitario) × stock. No descuenta gastos, impuestos, cupones, devoluciones ni otros costos."}
+                  </div>
+                </div>
+              )}
+            <div style={{ ...softCard, overflowX: "auto", borderColor: "#b9d7d2" }}>
+              <table style={{ width: "100%", minWidth: 1540, tableLayout: "fixed", borderCollapse: "collapse", background: "#fff", fontSize: 11 }}>
+                <colgroup>
+                  <col style={{ width: 190 }} />
+                  <col style={{ width: 110 }} />
+                  <col style={{ width: 120 }} />
+                  <col style={{ width: 100 }} />
+                  <col style={{ width: 125 }} />
+                  <col style={{ width: 125 }} />
+                  <col style={{ width: 120 }} />
+                  <col style={{ width: 90 }} />
+                  <col style={{ width: 110 }} />
+                  <col style={{ width: 135 }} />
+                  <col style={{ width: 145 }} />
+                  <col style={{ width: 110 }} />
+                </colgroup>
+                <thead>
+                  <tr style={{ color: "#fff", whiteSpace: "nowrap" }}>
+                    <th align="left" style={{ padding: "10px 8px", background: "#173b61", color: "#fff" }}>PRODUCTO</th>
+                    <th align="left" style={{ padding: "10px 8px", background: "#244f78", color: "#fff" }}>SKU</th>
+                    <th align="left" style={{ padding: "10px 8px", background: "#315f89", color: "#fff" }}>MODELO</th>
+                    <th align="left" style={{ padding: "10px 8px", background: "#3f6f99", color: "#fff" }}>COLOR</th>
+                    <th align="right" style={{ padding: "10px 8px", background: "#2563a6", color: "#fff" }}>PRECIO VENTA</th>
+                    <th align="right" style={{ padding: "10px 8px", background: "#0f766e", color: "#fff" }}>COSTO UNITARIO</th>
+                    <th align="right" style={{ padding: "10px 8px", background: "#357d55", color: "#fff" }}>GANANCIA / UNIDAD</th>
+                    <th align="right" style={{ padding: "10px 8px", background: "#438b62", color: "#fff" }}>MARGEN</th>
+                    <th align="center" style={{ padding: "10px 8px", background: "#b46516", color: "#fff" }}>STOCK ACTUAL</th>
+                    <th align="right" style={{ padding: "7px 8px", background: "#6d4b9c", color: "#fff" }}>
+                      <button
+                        type="button"
+                        onClick={() => setInventarioMetricaAyuda((prev) => prev === "valor" ? null : "valor")}
+                        style={{ padding: 0, border: 0, background: "transparent", color: "#fff", font: "inherit", fontWeight: 900, cursor: "help", textDecoration: "underline dotted", textUnderlineOffset: 3 }}
+                      >
+                        VALOR INVENTARIO ?
+                      </button>
+                    </th>
+                    <th align="right" style={{ padding: "7px 8px", background: "#7c3c82", color: "#fff" }}>
+                      <button
+                        type="button"
+                        onClick={() => setInventarioMetricaAyuda((prev) => prev === "ganancia" ? null : "ganancia")}
+                        style={{ padding: 0, border: 0, background: "transparent", color: "#fff", font: "inherit", fontWeight: 900, cursor: "help", textDecoration: "underline dotted", textUnderlineOffset: 3 }}
+                      >
+                        GANANCIA POTENCIAL ?
+                      </button>
+                    </th>
+                    <th align="center" style={{ padding: "10px 8px", background: "#374151", color: "#fff" }}>GUARDAR</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {inventarioFiltrado.map((producto) => {
+                    const costo = Math.max(0, Number(inventarioCostoDraft[producto.producto_id] ?? producto.costo_unitario ?? 0));
+                    const precio = Math.max(0, Number(inventarioPrecioDraft[producto.producto_id] ?? producto.precio));
+                    const stock = producto.controla_stock
+                      ? Math.max(0, Math.trunc(Number(inventarioStockDraft[producto.producto_id] ?? producto.stock)))
+                      : 0;
+                    const ganancia = precio - costo;
+                    const margen = precio > 0 ? (ganancia / precio) * 100 : 0;
+                    const sinCambios =
+                      stock === Number(producto.stock || 0)
+                      && precio === Number(producto.precio || 0)
+                      && costo === Number(producto.costo_unitario || 0);
+                    const guardando = savingInventarioId === producto.producto_id;
+                    return (
+                      <tr key={`rentabilidad-${producto.producto_id}`} style={{ borderTop: "1px solid #dce6ef" }}>
+                        <td style={{ padding: "9px 8px", background: "#f7faff", fontWeight: 850, color: "#173b61" }}>{producto.nombre}</td>
+                        <td style={{ padding: "9px 8px", background: "#f4f8fc", color: "#40566c", whiteSpace: "nowrap" }}>{producto.sku}</td>
+                        <td style={{ padding: "9px 8px", background: "#f1f7fb", color: "#40566c" }}>{producto.modelo || "—"}</td>
+                        <td style={{ padding: "9px 8px", background: "#eef5fa", color: "#40566c" }}>{producto.color || "—"}</td>
+                        <td align="right" style={{ padding: "7px 6px", background: "#eff6ff" }}>
+                          <input
+                            type="number"
+                            min={0}
+                            step="0.01"
+                            value={precio}
+                            onChange={(e) => setInventarioPrecioDraft((prev) => ({ ...prev, [producto.producto_id]: Number(e.target.value || 0) }))}
+                            aria-label={`Precio de venta de ${producto.nombre}`}
+                            style={{ width: "100%", padding: "7px 6px", border: "1px solid #8cb4df", textAlign: "right", fontWeight: 850 }}
+                          />
+                        </td>
+                        <td align="right" style={{ padding: "7px 6px", background: "#effaf8" }}>
+                          <input
+                            type="number"
+                            min={0}
+                            step="0.01"
+                            value={costo}
+                            onChange={(e) => setInventarioCostoDraft((prev) => ({ ...prev, [producto.producto_id]: Number(e.target.value || 0) }))}
+                            aria-label={`Costo unitario de ${producto.nombre}`}
+                            style={{ width: "100%", padding: "7px 6px", border: "1px solid #75aaa3", textAlign: "right", fontWeight: 850 }}
+                          />
+                        </td>
+                        <td align="right" style={{ padding: "9px 8px", background: ganancia >= 0 ? "#f0fdf4" : "#fef2f2", color: ganancia >= 0 ? "#166534" : "#991b1b", fontWeight: 900, whiteSpace: "nowrap" }}>
+                          ${ganancia.toFixed(2)}
+                        </td>
+                        <td align="right" style={{ padding: "9px 8px", background: "#f2fbf5", color: margen >= 0 ? "#166534" : "#991b1b", fontWeight: 900, whiteSpace: "nowrap" }}>{margen.toFixed(1)}%</td>
+                        <td align="center" style={{ padding: "7px 6px", background: "#fff8ed", color: "#92400e", fontWeight: 900 }}>
+                          {producto.controla_stock ? (
+                            <input
+                              type="number"
+                              min={0}
+                              step={1}
+                              value={stock}
+                              onChange={(e) => setInventarioStockDraft((prev) => ({ ...prev, [producto.producto_id]: Math.max(0, Math.trunc(Number(e.target.value || 0))) }))}
+                              aria-label={`Stock de ${producto.nombre}`}
+                              style={{ width: "100%", padding: "7px 5px", border: "1px solid #d9a45e", textAlign: "center", fontWeight: 900 }}
+                            />
+                          ) : "Servicio"}
+                        </td>
+                        <td align="right" style={{ padding: "9px 8px", background: "#f8f5ff", fontWeight: 850, whiteSpace: "nowrap" }}>${(costo * stock).toFixed(2)}</td>
+                        <td align="right" style={{ padding: "9px 8px", background: "#fbf4fc", color: ganancia >= 0 ? "#5b2166" : "#991b1b", fontWeight: 900, whiteSpace: "nowrap" }}>${(ganancia * stock).toFixed(2)}</td>
+                        <td align="center" style={{ padding: "7px 6px", background: "#f9fafb" }}>
+                          <button
+                            type="button"
+                            disabled={guardando || sinCambios}
+                            onClick={() => guardarProductoInventario(producto)}
+                            style={{
+                              width: "100%",
+                              padding: "8px 7px",
+                              border: "1px solid #1d4ed8",
+                              background: guardando || sinCambios ? "#e2e8f0" : "#2563eb",
+                              color: guardando || sinCambios ? "#64748b" : "#fff",
+                              fontWeight: 900,
+                              cursor: guardando || sinCambios ? "not-allowed" : "pointer",
+                            }}
+                          >
+                            {guardando ? "Guardando..." : "Guardar"}
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+            </>
+          )}
         </div>
       )}
 
@@ -7653,6 +9705,73 @@ export default function App() {
         </div>
       )}
 
+      {inventarioImagenAmpliada && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label={`Imagen de ${inventarioImagenAmpliada.nombre}`}
+          onClick={() => setInventarioImagenAmpliada(null)}
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 1200,
+            display: "grid",
+            placeItems: "center",
+            padding: 24,
+            background: "rgba(8, 25, 43, .78)",
+            cursor: "zoom-out",
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              position: "relative",
+              width: "min(860px, 94vw)",
+              maxHeight: "92vh",
+              padding: 16,
+              background: "#fff",
+              boxShadow: "0 24px 70px rgba(0,0,0,.35)",
+              cursor: "default",
+            }}
+          >
+            <button
+              type="button"
+              onClick={() => setInventarioImagenAmpliada(null)}
+              aria-label="Cerrar imagen"
+              style={{
+                position: "absolute",
+                top: 10,
+                right: 10,
+                zIndex: 1,
+                width: 38,
+                height: 38,
+                border: "1px solid #cbd7e2",
+                borderRadius: 999,
+                background: "rgba(255,255,255,.94)",
+                color: "#173b61",
+                fontSize: 22,
+                fontWeight: 900,
+                cursor: "pointer",
+              }}
+            >
+              ×
+            </button>
+            <img
+              src={inventarioImagenAmpliada.imagen_url ?? ""}
+              alt={inventarioImagenAmpliada.nombre}
+              style={{ display: "block", width: "100%", maxHeight: "75vh", objectFit: "contain", background: "#f4f7f9" }}
+            />
+            <div style={{ paddingTop: 12 }}>
+              <strong style={{ display: "block", color: "#173b61", fontSize: 18 }}>{inventarioImagenAmpliada.nombre}</strong>
+              <span style={{ display: "block", marginTop: 3, color: "#6b7f93", fontSize: 12 }}>
+                {inventarioImagenAmpliada.modelo || inventarioImagenAmpliada.sku}
+                {inventarioImagenAmpliada.color ? ` · ${inventarioImagenAmpliada.color}` : ""}
+              </span>
+            </div>
+          </div>
+        </div>
+      )}
+
       {selectedVentaDetalle && (
         <div
           style={{
@@ -7687,8 +9806,17 @@ export default function App() {
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
               <div><b>Fecha:</b> {formatDateTimePretty(selectedVentaDetalle.fecha_hora)}</div>
               <div><b>Paciente:</b> {selectedVentaDetalle.paciente_nombre}</div>
+              <div><b>Subtotal:</b> ${Number(selectedVentaDetalle.subtotal ?? selectedVentaDetalle.monto_total ?? 0).toFixed(2)}</div>
+              <div><b>Descuento:</b> {Number(selectedVentaDetalle.descuento_porcentaje || 0).toFixed(2)}%</div>
+              {Number(selectedVentaDetalle.descuento_porcentaje || 0) > 0 && (
+                <>
+                  <div><b>Motivo del descuento:</b> {formatDescuentoMotivoLabel(selectedVentaDetalle.descuento_motivo)}</div>
+                  <div><b>Tipo de cupón:</b> {formatCuponTipoLabel(selectedVentaDetalle.cupon_tipo)}</div>
+                </>
+              )}
               <div><b>Monto total:</b> ${Number(selectedVentaDetalle.monto_total || 0).toFixed(2)}</div>
               <div><b>Método de pago:</b> {formatMetodoPagoLabel(selectedVentaDetalle.metodo_pago)}</div>
+              <div><b>Forma de liquidación:</b> {formatFormaLiquidacionLabel(selectedVentaDetalle.forma_liquidacion)}</div>
               <div><b>Cómo nos conoció:</b> {formatComoNosConocioLabel(selectedVentaDetalle.como_nos_conocio)}</div>
               <div style={{ gridColumn: "1 / -1" }}>
                 <b>Compra:</b>
@@ -8094,6 +10222,7 @@ export default function App() {
             }}
           >
             <div
+              className="historia-modal-header"
               style={{
                 padding: "10px 12px",
                 background: "linear-gradient(180deg, #fffdf9 0%, #fff7ed 100%)",
@@ -8101,10 +10230,13 @@ export default function App() {
                 justifyContent: "space-between",
                 alignItems: "center",
                 gap: 12,
+                flexWrap: "wrap",
                 borderBottom: "1px solid #ead9c8",
+                position: "relative",
+                zIndex: 20,
               }}
             >
-              <div>
+              <div style={{ flex: "1 1 360px", minWidth: 0 }}>
                 <h2 style={{ margin: 0, fontSize: 23, lineHeight: 1.05, color: "#3f2d1d", letterSpacing: 0.2 }}>
                   Historia clínica paciente {historiaPacienteNombreCompleto || `#${historiaPacienteId}`}
                 </h2>
@@ -8112,7 +10244,7 @@ export default function App() {
                   Registro clínico integral
                 </div>
               </div>
-              <div className="historia-header-actions" style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", justifyContent: "flex-end" }}>
+              <div className="historia-header-actions" style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", justifyContent: "flex-end", flex: "0 1 auto", maxWidth: "100%" }}>
                 {canEditPaciente && historiaPacienteInfo && historiaData && (
                   <button
                     type="button"
@@ -8197,8 +10329,15 @@ export default function App() {
               </div>
             </div>
             <style>{`
-              .historia-layout { min-height: 0; height: 100%; width: min(100%, 1680px); margin: 0 auto; padding: 8px 8px 10px; font-size: 12px; box-sizing: border-box; }
-              .historia-main-scroll { min-height: 0; height: 100%; overflow-y: auto; overflow-x: auto; padding: 0 32px calc(84px + env(safe-area-inset-bottom, 0px)) 12px; scroll-behavior: smooth; scrollbar-gutter: stable both-edges; }
+              .historia-layout { position: relative; min-height: 0; height: 100%; width: min(100%, 1680px); margin: 0 auto; padding: 8px 8px 10px; font-size: 12px; box-sizing: border-box; }
+              .historia-modal-header {
+                box-shadow: 0 4px 14px rgba(63, 45, 29, .08);
+              }
+              .historia-header-actions {
+                visibility: visible !important;
+                opacity: 1 !important;
+              }
+              .historia-main-scroll { min-height: 0; height: 100%; overflow-y: auto; overflow-x: auto; padding: 0 32px calc(84px + env(safe-area-inset-bottom, 0px)) 196px; scroll-behavior: smooth; scrollbar-gutter: stable both-edges; }
               .historia-main-scroll,
               .historia-main-scroll * { box-sizing: border-box; min-width: 0; }
               .historia-main-scroll section[data-hist-section] { scroll-margin-top: 16px; }
@@ -8208,6 +10347,55 @@ export default function App() {
               .historia-main-scroll select,
               .historia-main-scroll textarea,
               .historia-main-scroll button { font-size: 11px; }
+              .historia-main-scroll input:not([type="checkbox"]),
+              .historia-main-scroll textarea {
+                border-radius: 0 !important;
+              }
+              .historia-section-nav {
+                position: absolute;
+                z-index: 4;
+                top: 8px;
+                bottom: 18px;
+                left: 8px;
+                width: 172px;
+                padding: 12px;
+                overflow-y: auto;
+                border: 1px solid #dfd1c1;
+                border-radius: 12px;
+                background: rgba(255, 253, 249, .97);
+                box-shadow: 0 10px 24px rgba(63, 45, 29, .1);
+                backdrop-filter: blur(8px);
+              }
+              .historia-section-nav-title {
+                margin: 0 0 10px;
+                color: #5f4a32;
+                font-size: 12px;
+                font-weight: 900;
+                letter-spacing: .06em;
+                text-transform: uppercase;
+              }
+              .historia-section-nav button {
+                display: flex;
+                align-items: center;
+                width: 100%;
+                min-height: 36px;
+                margin-bottom: 6px;
+                padding: 8px 10px;
+                border: 1px solid transparent;
+                border-radius: 7px;
+                background: transparent;
+                color: #52606d;
+                font-weight: 750;
+                text-align: left;
+                cursor: pointer;
+                transition: background .15s ease, color .15s ease, border-color .15s ease, transform .15s ease;
+              }
+              .historia-section-nav button:hover {
+                border-color: #b9d7f5;
+                background: #eaf4ff;
+                color: #0759bd;
+                transform: translateX(2px);
+              }
               .historia-header-actions button {
                 min-height: 36px;
                 padding-left: 14px !important;
@@ -8226,9 +10414,53 @@ export default function App() {
                 box-shadow: 0 3px 8px rgba(63, 45, 29, .14);
               }
               .historia-main-scroll input[type="checkbox"] {
-                width: 16px;
-                height: 16px;
-                accent-color: #5f7734;
+                position: absolute;
+                width: 1px;
+                height: 1px;
+                margin: -1px;
+                padding: 0;
+                overflow: hidden;
+                clip: rect(0 0 0 0);
+                white-space: nowrap;
+                border: 0;
+              }
+              .historia-main-scroll label:has(input[type="checkbox"]) {
+                min-height: 34px;
+                padding: 8px 16px;
+                border: 1px solid transparent;
+                border-radius: 999px;
+                background: #eceeef;
+                color: #4b5563;
+                cursor: pointer;
+                justify-content: center;
+                text-align: center;
+                user-select: none;
+                box-shadow: none;
+                transition: background .15s ease, color .15s ease, box-shadow .15s ease, transform .15s ease;
+              }
+              .historia-main-scroll label:has(input[type="checkbox"]):hover {
+                border-color: transparent;
+                background: #dfe4ea;
+                color: #334155;
+                box-shadow: 0 3px 8px rgba(15, 23, 42, .09);
+                transform: translateY(-1px);
+              }
+              .historia-main-scroll label:has(input[type="checkbox"]:checked) {
+                border-color: transparent;
+                background: #0866d9;
+                color: #fff;
+                font-weight: 800;
+                box-shadow: 0 4px 10px rgba(8, 102, 217, .24);
+              }
+              .historia-main-scroll label:has(input[type="checkbox"]:checked):hover {
+                border-color: transparent;
+                background: #0759bd;
+                color: #fff;
+                box-shadow: 0 6px 14px rgba(8, 102, 217, .3);
+              }
+              .historia-main-scroll label:has(input[type="checkbox"]:focus-visible) {
+                outline: 3px solid rgba(8, 102, 217, .3);
+                outline-offset: 2px;
               }
               .historia-paciente-grid { display: grid; gap: 10px; grid-template-columns: repeat(6, minmax(0, 1fr)); }
               @media (max-width: 1700px) {
@@ -8239,12 +10471,49 @@ export default function App() {
               }
               @media (max-width: 860px) {
                 .historia-paciente-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+                .historia-section-nav { display: none; }
+                .historia-main-scroll { padding-left: 12px; }
+                .historia-modal-header { align-items: flex-start !important; }
+                .historia-header-actions {
+                  width: 100%;
+                  justify-content: flex-start !important;
+                }
               }
               @media (max-width: 560px) {
                 .historia-paciente-grid { grid-template-columns: 1fr; }
               }
             `}</style>
             <div className="historia-layout" style={HISTORIA_LAYOUT_SCALE_STYLE}>
+              <nav className="historia-section-nav" aria-label="Secciones de historia clínica">
+                <div className="historia-section-nav-title">Ir a sección</div>
+                {[
+                  ["paciente", "Paciente"],
+                  ["antecedentes", "Antecedentes"],
+                  ["habitos", "Hábitos y riesgos"],
+                  ["refraccion", "Refracción"],
+                  ["mediciones", "Mediciones"],
+                  ["optometria", "Optometría"],
+                  ["hallazgos", "AV y hallazgos"],
+                  ["seguimiento", "Seguimiento"],
+                ].map(([sectionId, label]) => (
+                  <button
+                    key={`historia-nav-${sectionId}`}
+                    type="button"
+                    onClick={() => {
+                      const target = document.querySelector<HTMLElement>(`[data-hist-section="${sectionId}"]`);
+                      const scrollPanel = target?.closest<HTMLElement>(".historia-main-scroll");
+                      if (!target || !scrollPanel) return;
+                      const targetTop =
+                        scrollPanel.scrollTop +
+                        target.getBoundingClientRect().top -
+                        scrollPanel.getBoundingClientRect().top;
+                      scrollPanel.scrollTo({ top: Math.max(0, targetTop - 12), behavior: "smooth" });
+                    }}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </nav>
               <div className="historia-main-scroll">
             <div
               style={{
@@ -8506,20 +10775,6 @@ export default function App() {
 
                     {historiaData.usa_lentes === true && (
                       <>
-                        <label style={{ display: "grid", gap: 4 }}>
-                          <span>Uso de lentes con micas antiblueray al día</span>
-                          <select
-                            style={historiaInputStyle}
-                            value={historiaData.uso_lentes_proteccion_uv ?? ""}
-                            onChange={(e) => setHistoriaData({ ...historiaData, uso_lentes_proteccion_uv: e.target.value })}
-                          >
-                            <option value="">Seleccionar</option>
-                            {TIEMPO_USO_ANTIBLUERAY_DIA_OPTIONS.map((opt) => (
-                              <option key={`antiblueray-dia-${opt.value}`} value={opt.value}>{opt.label}</option>
-                            ))}
-                          </select>
-                        </label>
-
                         <label style={{ display: "grid", gap: 4, maxWidth: 320 }}>
                           <span>¿Cuántos pares de lentes tiene actualmente?</span>
                           <input
@@ -8532,7 +10787,7 @@ export default function App() {
                             onChange={(e) => {
                               const count = Math.max(1, Math.min(10, Number(e.target.value) || 1));
                               const current = parseLentesActualesDetalle(historiaData.lentes_pares);
-                              const next = Array.from({ length: count }, (_, idx) => current[idx] ?? { tipo: "", tratamientos: [] });
+                              const next = Array.from({ length: count }, (_, idx) => current[idx] ?? { tipo: "", tratamientos: [], color_tinte: "", grado_tinte: "" });
                               setHistoriaData({ ...historiaData, lentes_pares: next });
                             }}
                           />
@@ -8541,7 +10796,7 @@ export default function App() {
                         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 10 }}>
                           {(parseLentesActualesDetalle(historiaData.lentes_pares).length
                             ? parseLentesActualesDetalle(historiaData.lentes_pares)
-                            : [{ tipo: "", tratamientos: [] }]
+                            : [{ tipo: "", tratamientos: [], color_tinte: "", grado_tinte: "" }]
                           ).map((par, idx, pares) => (
                             <div key={`lentes-par-${idx}`} style={{ border: "1px solid #ead9c8", background: "#fff", borderRadius: 12, padding: 12 }}>
                               <div style={{ fontWeight: 800, color: "#5f4a32", marginBottom: 8 }}>Par de lentes #{idx + 1}</div>
@@ -8556,7 +10811,7 @@ export default function App() {
                                   }}
                                 >
                                   <option value="">Seleccionar</option>
-                                  <option value="armazon">Armazón</option>
+                                  <option value="opticos">Lentes ópticos</option>
                                   <option value="contacto">Contacto</option>
                                   <option value="sol">Lentes de sol</option>
                                 </select>
@@ -8572,7 +10827,13 @@ export default function App() {
                                         const tratamientos = e.target.checked
                                           ? Array.from(new Set([...par.tratamientos, opt.value]))
                                           : par.tratamientos.filter((value) => value !== opt.value);
-                                        const next = pares.map((item, itemIdx) => itemIdx === idx ? { ...item, tratamientos } : item);
+                                        const next = pares.map((item, itemIdx) => itemIdx === idx
+                                          ? {
+                                              ...item,
+                                              tratamientos,
+                                              ...(opt.value === "tintados" && !e.target.checked ? { color_tinte: "", grado_tinte: "" } : {}),
+                                            }
+                                          : item);
                                         setHistoriaData({ ...historiaData, lentes_pares: next });
                                       }}
                                     />
@@ -8580,6 +10841,34 @@ export default function App() {
                                   </label>
                                 ))}
                               </div>
+                              {par.tratamientos.includes("tintados") && (
+                                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 12 }}>
+                                  <label style={{ display: "grid", gap: 4 }}>
+                                    <span>Color del tinte</span>
+                                    <input
+                                      style={historiaInputStyle}
+                                      placeholder="Ej. gris, café, verde"
+                                      value={par.color_tinte}
+                                      onChange={(e) => {
+                                        const next = pares.map((item, itemIdx) => itemIdx === idx ? { ...item, color_tinte: e.target.value } : item);
+                                        setHistoriaData({ ...historiaData, lentes_pares: next });
+                                      }}
+                                    />
+                                  </label>
+                                  <label style={{ display: "grid", gap: 4 }}>
+                                    <span>Grado de tinte</span>
+                                    <input
+                                      style={historiaInputStyle}
+                                      placeholder="Ej. 25%, 50% u oscuro"
+                                      value={par.grado_tinte}
+                                      onChange={(e) => {
+                                        const next = pares.map((item, itemIdx) => itemIdx === idx ? { ...item, grado_tinte: e.target.value } : item);
+                                        setHistoriaData({ ...historiaData, lentes_pares: next });
+                                      }}
+                                    />
+                                  </label>
+                                </div>
+                              )}
                             </div>
                           ))}
                         </div>
