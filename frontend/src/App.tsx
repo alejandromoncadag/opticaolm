@@ -107,17 +107,70 @@ type VentaFormaLiquidacion =
   | "meses_sin_intereses"
   | "meses_con_intereses";
 
+type VentaEstado =
+  | "cotizacion"
+  | "pendiente"
+  | "confirmada"
+  | "completada"
+  | "cancelada"
+  | "devuelta";
+
+type VentaEstadoPago =
+  | "sin_pago"
+  | "anticipo"
+  | "pagada"
+  | "pago_parcial"
+  | "reembolsada";
+
+type VentaEstadoPedido =
+  | "pendiente_fabricacion"
+  | "en_fabricacion"
+  | "listo_entregar"
+  | "entregado"
+  | "cancelado";
+
+type VentaPago = {
+  pago_id?: number;
+  metodo: VentaMetodoPago;
+  monto: number;
+  referencia?: string | null;
+  fecha_hora?: string | null;
+};
+
+type VentaPagoDraft = Omit<VentaPago, "monto"> & {
+  ui_id: number;
+  monto: number | string;
+};
+
+type VentaProductoDetalle = {
+  producto_id: number;
+  sku: string;
+  categoria: string;
+  subcategoria?: string | null;
+  nombre: string;
+  modelo?: string | null;
+  color?: string | null;
+  tipo_mica?: string | null;
+  descripcion?: string | null;
+  imagen_url?: string | null;
+  cantidad: number;
+  precio_unitario: number;
+  subtotal: number;
+};
+
 type Venta = {
   venta_id: number;
   fecha_hora: string | null;
   compra: string | null;
   subtotal?: number;
   descuento_porcentaje?: number;
+  descuento_monto?: number;
   descuento_motivo?: string | null;
   cupon_tipo?: string | null;
   monto_total: number;
   metodo_pago: string;
   forma_liquidacion?: VentaFormaLiquidacion;
+  plazo_meses?: number | null;
   adelanto_aplica?: boolean;
   adelanto_monto?: number | null;
   adelanto_metodo?: VentaMetodoPago | null;
@@ -128,6 +181,13 @@ type Venta = {
   estado_paciente?: "nuevo" | "intermedio" | "estrella" | string | null;
   sucursal_id: number | null;
   sucursal_nombre?: string | null;
+  pagos?: VentaPago[];
+  productos?: VentaProductoDetalle[];
+  monto_pagado?: number;
+  saldo_pendiente?: number;
+  estado_venta?: VentaEstado | string;
+  estado_pago?: VentaEstadoPago | string;
+  estado_pedido?: VentaEstadoPedido | string;
 };
 
 type VentaCreate = {
@@ -136,11 +196,13 @@ type VentaCreate = {
   compra: string;
   subtotal?: number;
   descuento_porcentaje?: number;
+  descuento_monto?: number;
   descuento_motivo?: string | null;
   cupon_tipo?: string | null;
   monto_total: number;
   metodo_pago: string;
   forma_liquidacion?: VentaFormaLiquidacion;
+  plazo_meses?: number | null;
   adelanto_aplica?: boolean;
   adelanto_monto?: number | null;
   adelanto_metodo?: VentaMetodoPago | null;
@@ -150,6 +212,10 @@ type VentaCreate = {
     producto_id: number;
     cantidad: number;
   }>;
+  pagos?: VentaPago[];
+  estado_venta?: VentaEstado;
+  estado_pago?: VentaEstadoPago;
+  estado_pedido?: VentaEstadoPedido;
 };
 
 type InventarioProducto = {
@@ -701,7 +767,7 @@ function TabButton({
   onClick,
 }: {
   active: boolean;
-  variant: "pacientes" | "consultas" | "ventas" | "estadisticas" | "historia_clinica" | "inventario";
+  variant: "pacientes" | "consultas" | "ventas" | "resumen_ventas" | "estadisticas" | "historia_clinica" | "inventario";
   children: ReactNode;
   onClick: () => void;
 }) {
@@ -712,6 +778,8 @@ function TabButton({
         ? "#f59e0b"
         : variant === "ventas"
           ? "#3b82f6"
+          : variant === "resumen_ventas"
+            ? "#0f766e"
           : variant === "inventario"
             ? "#2563eb"
           : variant === "historia_clinica"
@@ -724,6 +792,8 @@ function TabButton({
         ? "◷"
         : variant === "ventas"
           ? "⊕"
+          : variant === "resumen_ventas"
+            ? "▤"
           : variant === "inventario"
             ? "▦"
           : variant === "historia_clinica"
@@ -836,6 +906,29 @@ function formatDateYYYYMMDD(d: Date): string {
   const month = String(d.getMonth() + 1).padStart(2, "0");
   const day = String(d.getDate()).padStart(2, "0");
   return `${year}-${month}-${day}`;
+}
+
+function formatIsoWeekInput(date: Date): string {
+  const utcDate = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+  const day = utcDate.getUTCDay() || 7;
+  utcDate.setUTCDate(utcDate.getUTCDate() + 4 - day);
+  const yearStart = new Date(Date.UTC(utcDate.getUTCFullYear(), 0, 1));
+  const week = Math.ceil((((utcDate.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
+  return `${utcDate.getUTCFullYear()}-W${String(week).padStart(2, "0")}`;
+}
+
+function parseIsoWeekRange(value: string): { start: Date; end: Date } | null {
+  const match = /^(\d{4})-W(\d{2})$/.exec(value);
+  if (!match) return null;
+  const year = Number(match[1]);
+  const week = Number(match[2]);
+  if (week < 1 || week > 53) return null;
+  const januaryFourth = new Date(year, 0, 4);
+  const mondayOffset = (januaryFourth.getDay() + 6) % 7;
+  const start = new Date(year, 0, 4 - mondayOffset + (week - 1) * 7);
+  const end = new Date(start);
+  end.setDate(start.getDate() + 7);
+  return { start, end };
 }
 
 function parseDateYYYYMMDD(value: string | null | undefined): Date | null {
@@ -969,6 +1062,28 @@ function formatFormaLiquidacionLabel(value: string | null | undefined): string {
     meses_con_intereses: "Meses con intereses",
   };
   return labels[value] ?? value.replace(/_/g, " ");
+}
+
+function formatVentaEstadoLabel(value: string | null | undefined): string {
+  return VENTA_ESTADO_OPTIONS.find((opcion) => opcion.value === value)?.label || "Confirmada";
+}
+
+function formatVentaEstadoPagoLabel(value: string | null | undefined): string {
+  return VENTA_ESTADO_PAGO_OPTIONS.find((opcion) => opcion.value === value)?.label || "Sin pago";
+}
+
+function formatVentaEstadoPedidoLabel(value: string | null | undefined): string {
+  return VENTA_ESTADO_PEDIDO_OPTIONS.find((opcion) => opcion.value === value)?.label || "Pendiente de fabricación";
+}
+
+function deriveVentaEstadoPago(
+  montoTotal: number,
+  montoPagado: number,
+  cantidadPagos: number,
+): VentaEstadoPago {
+  if (montoPagado <= 0) return "sin_pago";
+  if (montoPagado >= montoTotal) return "pagada";
+  return cantidadPagos <= 1 ? "anticipo" : "pago_parcial";
 }
 
 function formatComoNosConocioLabel(value: string | null | undefined): string {
@@ -1377,12 +1492,34 @@ const VENTA_METODO_PAGO_OPTIONS: Array<{ value: VentaMetodoPago; label: string }
   { value: "cheque", label: "Cheque" },
 ];
 
-const VENTA_FORMA_LIQUIDACION_OPTIONS: Array<{ value: VentaFormaLiquidacion; label: string }> = [
-  { value: "pago_completo", label: "Pago completo" },
-  { value: "adelanto_apartado", label: "Adelanto / apartado" },
-  { value: "pago_mixto", label: "Pago mixto" },
+const VENTA_PLAN_FINANCIAMIENTO_OPTIONS: Array<{ value: VentaFormaLiquidacion; label: string }> = [
   { value: "meses_sin_intereses", label: "Meses sin intereses" },
   { value: "meses_con_intereses", label: "Meses con intereses" },
+];
+
+const VENTA_ESTADO_OPTIONS: Array<{ value: VentaEstado; label: string; detail: string }> = [
+  { value: "cotizacion", label: "Cotización", detail: "Todavía no es una venta confirmada." },
+  { value: "pendiente", label: "Pendiente", detail: "Se inició, pero falta confirmar algo." },
+  { value: "confirmada", label: "Confirmada", detail: "El cliente aceptó el pedido." },
+  { value: "completada", label: "Completada", detail: "Terminó correctamente." },
+  { value: "cancelada", label: "Cancelada", detail: "La venta se anuló." },
+  { value: "devuelta", label: "Devuelta", detail: "El producto fue regresado después de completar la venta." },
+];
+
+const VENTA_ESTADO_PAGO_OPTIONS: Array<{ value: VentaEstadoPago; label: string }> = [
+  { value: "sin_pago", label: "Sin pago" },
+  { value: "anticipo", label: "Anticipo" },
+  { value: "pagada", label: "Pagada" },
+  { value: "pago_parcial", label: "Pago parcial" },
+  { value: "reembolsada", label: "Reembolsada" },
+];
+
+const VENTA_ESTADO_PEDIDO_OPTIONS: Array<{ value: VentaEstadoPedido; label: string }> = [
+  { value: "pendiente_fabricacion", label: "Pendiente de fabricación" },
+  { value: "en_fabricacion", label: "En fabricación" },
+  { value: "listo_entregar", label: "Listo para entregar" },
+  { value: "entregado", label: "Entregado" },
+  { value: "cancelado", label: "Cancelado" },
 ];
 
 const VENTA_DESCUENTO_MOTIVO_OPTIONS = [
@@ -2352,7 +2489,7 @@ function normalizeHistoriaForUi(data: any, fallbackDoctor: string) {
 }
 
 export default function App() {
-  const [tab, setTab] = useState<"pacientes" | "consultas" | "ventas" | "estadisticas" | "historia_clinica" | "inventario">("pacientes");
+  const [tab, setTab] = useState<"pacientes" | "consultas" | "ventas" | "resumen_ventas" | "estadisticas" | "historia_clinica" | "inventario">("pacientes");
 
   // ---- Estado de sesión y búsqueda ----
   const [pacientes, setPacientes] = useState<Paciente[]>([]);
@@ -2387,6 +2524,19 @@ export default function App() {
   const [ventaAnio, setVentaAnio] = useState(String(new Date().getFullYear()));
   const [ventaFiltroLabel, setVentaFiltroLabel] = useState("Hoy");
   const [qVenta, setQVenta] = useState("");
+  const [ventasResumen, setVentasResumen] = useState<Venta[]>([]);
+  const [loadingVentasResumen, setLoadingVentasResumen] = useState(false);
+  const [ventasResumenError, setVentasResumenError] = useState<string | null>(null);
+  const [qVentasResumen, setQVentasResumen] = useState("");
+  const [ventasResumenEstado, setVentasResumenEstado] = useState<"por_cobrar" | "parciales" | "liquidadas" | "todas">("por_cobrar");
+  const [ventasResumenEstadoVenta, setVentasResumenEstadoVenta] = useState<"todas" | VentaEstado>("todas");
+  const [ventasResumenEstadoPago, setVentasResumenEstadoPago] = useState<"todos" | VentaEstadoPago>("todos");
+  const [ventasResumenPeriodo, setVentasResumenPeriodo] = useState<"todos" | "dia" | "semana" | "mes" | "anio">("todos");
+  const [ventasResumenDia, setVentasResumenDia] = useState(formatDateYYYYMMDD(new Date()));
+  const [ventasResumenSemana, setVentasResumenSemana] = useState(formatIsoWeekInput(new Date()));
+  const [ventasResumenMes, setVentasResumenMes] = useState(`${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, "0")}`);
+  const [ventasResumenAnio, setVentasResumenAnio] = useState(String(new Date().getFullYear()));
+  const [ventasResumenOrden, setVentasResumenOrden] = useState<"recientes" | "antiguas" | "cliente" | "monto_desc" | "saldo_desc">("recientes");
   const [statsData, setStatsData] = useState<StatsResumen | null>(null);
   const [loadingStats, setLoadingStats] = useState(false);
   const [statsFiltroModo, setStatsFiltroModo] = useState<"hoy" | "ayer" | "dia" | "semana" | "mes" | "anio" | "rango">("hoy");
@@ -2419,6 +2569,7 @@ export default function App() {
   const [loginUser, setLoginUser] = useState("");
   const [loginPass, setLoginPass] = useState("");
   const [loggingIn, setLoggingIn] = useState(false);
+  const [logoutConfirmOpen, setLogoutConfirmOpen] = useState(false);
 
 
 
@@ -2434,6 +2585,22 @@ export default function App() {
   const [loadingPacientePerfil, setLoadingPacientePerfil] = useState(false);
   const [selectedConsultaDetalle, setSelectedConsultaDetalle] = useState<Consulta | null>(null);
   const [selectedVentaDetalle, setSelectedVentaDetalle] = useState<Venta | null>(null);
+  const [ventaDetalleEditando, setVentaDetalleEditando] = useState(false);
+  const [savingVentaSeguimiento, setSavingVentaSeguimiento] = useState(false);
+  const [ventaSeguimientoError, setVentaSeguimientoError] = useState<string | null>(null);
+  const [ventaSeguimientoDraft, setVentaSeguimientoDraft] = useState<{
+    estado_venta: VentaEstado;
+    estado_pago: VentaEstadoPago;
+    estado_pedido: VentaEstadoPedido;
+    notas: string;
+  }>({
+    estado_venta: "confirmada",
+    estado_pago: "sin_pago",
+    estado_pedido: "pendiente_fabricacion",
+    notas: "",
+  });
+  const [ventaNuevoPagoMetodo, setVentaNuevoPagoMetodo] = useState<VentaMetodoPago>("efectivo");
+  const [ventaNuevoPagoMonto, setVentaNuevoPagoMonto] = useState("");
 
 
   const [savingPaciente, setSavingPaciente] = useState(false);
@@ -2442,6 +2609,7 @@ export default function App() {
   const [savingVenta, setSavingVenta] = useState(false);
   const [successVentaMsg, setSuccessVentaMsg] = useState<string | null>(null);
   const [editingVentaId, setEditingVentaId] = useState<number | null>(null);
+  const [ventaEdicionOriginal, setVentaEdicionOriginal] = useState<Venta | null>(null);
   const [inventario, setInventario] = useState<InventarioProducto[]>([]);
   const [loadingInventario, setLoadingInventario] = useState(false);
   const [inventarioError, setInventarioError] = useState<string | null>(null);
@@ -2456,9 +2624,17 @@ export default function App() {
   const [inventarioImagenAmpliada, setInventarioImagenAmpliada] = useState<InventarioProducto | null>(null);
   const [ventaCategoria, setVentaCategoria] = useState<VentaCategoria | "">("");
   const [ventaCarrito, setVentaCarrito] = useState<VentaCarritoItem[]>([]);
+  const [ventaDescuentoTipo, setVentaDescuentoTipo] = useState<"porcentaje" | "monto">("porcentaje");
   const [ventaDescuentoPorcentaje, setVentaDescuentoPorcentaje] = useState(0);
-  const [ventaMetodosPago, setVentaMetodosPago] = useState<VentaMetodoPago[]>(["efectivo"]);
+  const [ventaDescuentoMontoFijo, setVentaDescuentoMontoFijo] = useState(0);
+  const [ventaDescuentoEntrada, setVentaDescuentoEntrada] = useState("");
+  const ventaFormRef = useRef<HTMLFormElement | null>(null);
+  const ventaPagoSeqRef = useRef(1);
+  const [ventaPagos, setVentaPagos] = useState<VentaPagoDraft[]>([
+    { ui_id: 1, metodo: "efectivo", monto: "" },
+  ]);
   const [ventaLentesPaso, setVentaLentesPaso] = useState(1);
+  const [ventaConfirmacionOpen, setVentaConfirmacionOpen] = useState(false);
   const [ventaAgregarTinte, setVentaAgregarTinte] = useState(false);
   const [ventaMostrarAntiblue, setVentaMostrarAntiblue] = useState(false);
   const [ventaTinteGrado, setVentaTinteGrado] = useState<VentaTinteGrado>("");
@@ -2549,11 +2725,13 @@ export default function App() {
     compra: "",
     subtotal: 0,
     descuento_porcentaje: 0,
+    descuento_monto: 0,
     descuento_motivo: null,
     cupon_tipo: null,
     monto_total: 0,
     metodo_pago: "efectivo",
     forma_liquidacion: "pago_completo",
+    plazo_meses: null,
     adelanto_aplica: false,
     adelanto_monto: null,
     adelanto_metodo: null,
@@ -2647,6 +2825,113 @@ export default function App() {
       return texto.includes(q);
     });
   }, [ventas, qVenta]);
+
+  const ventasResumenFiltradas = useMemo(() => {
+    const q = normalizeForSearch(qVentasResumen);
+    const semanaSeleccionada = parseIsoWeekRange(ventasResumenSemana);
+    const filtradas = ventasResumen.filter((venta) => {
+      const fechaVenta = venta.fecha_hora ? new Date(venta.fecha_hora) : null;
+      const coincidePeriodo =
+        ventasResumenPeriodo === "todos"
+        || (fechaVenta !== null && !Number.isNaN(fechaVenta.getTime()) && (
+          (ventasResumenPeriodo === "dia" && formatDateYYYYMMDD(fechaVenta) === ventasResumenDia)
+          || (
+            ventasResumenPeriodo === "semana"
+            && semanaSeleccionada !== null
+            && fechaVenta >= semanaSeleccionada.start
+            && fechaVenta < semanaSeleccionada.end
+          )
+          || (
+            ventasResumenPeriodo === "mes"
+            && `${fechaVenta.getFullYear()}-${String(fechaVenta.getMonth() + 1).padStart(2, "0")}` === ventasResumenMes
+          )
+          || (
+            ventasResumenPeriodo === "anio"
+            && String(fechaVenta.getFullYear()) === ventasResumenAnio
+          )
+        ));
+      if (!coincidePeriodo) return false;
+      const saldo = Number(venta.saldo_pendiente || 0);
+      const pagado = Number(venta.monto_pagado || 0);
+      const coincideEstado =
+        ventasResumenEstado === "todas"
+        || (ventasResumenEstado === "por_cobrar" && saldo > 0)
+        || (ventasResumenEstado === "parciales" && saldo > 0 && pagado > 0)
+        || (ventasResumenEstado === "liquidadas" && venta.estado_pago === "pagada");
+      if (!coincideEstado) return false;
+      if (
+        ventasResumenEstadoVenta !== "todas"
+        && venta.estado_venta !== ventasResumenEstadoVenta
+      ) return false;
+      if (
+        ventasResumenEstadoPago !== "todos"
+        && venta.estado_pago !== ventasResumenEstadoPago
+      ) return false;
+      if (!q) return true;
+      return normalizeForSearch([
+        venta.venta_id,
+        venta.fecha_hora,
+        venta.paciente_nombre,
+        venta.compra,
+        venta.monto_total,
+        venta.monto_pagado,
+        venta.saldo_pendiente,
+        venta.metodo_pago,
+        venta.estado_venta,
+        venta.estado_pago,
+        venta.estado_pedido,
+        venta.productos?.map((producto) => [
+          producto.nombre,
+          producto.sku,
+          producto.modelo,
+          producto.color,
+          producto.tipo_mica,
+        ].join(" ")).join(" "),
+      ].join(" ")).includes(q);
+    });
+    return [...filtradas].sort((a, b) => {
+      if (ventasResumenOrden === "cliente") {
+        return a.paciente_nombre.localeCompare(b.paciente_nombre, "es", { sensitivity: "base" });
+      }
+      if (ventasResumenOrden === "monto_desc") {
+        return Number(b.monto_total || 0) - Number(a.monto_total || 0);
+      }
+      if (ventasResumenOrden === "saldo_desc") {
+        return Number(b.saldo_pendiente || 0) - Number(a.saldo_pendiente || 0);
+      }
+      const fechaA = a.fecha_hora ? new Date(a.fecha_hora).getTime() : 0;
+      const fechaB = b.fecha_hora ? new Date(b.fecha_hora).getTime() : 0;
+      return ventasResumenOrden === "antiguas" ? fechaA - fechaB : fechaB - fechaA;
+    });
+  }, [
+    ventasResumen,
+    qVentasResumen,
+    ventasResumenEstado,
+    ventasResumenEstadoVenta,
+    ventasResumenEstadoPago,
+    ventasResumenPeriodo,
+    ventasResumenDia,
+    ventasResumenSemana,
+    ventasResumenMes,
+    ventasResumenAnio,
+    ventasResumenOrden,
+  ]);
+
+  const ventasResumenMetricas = useMemo(() => {
+    const porCobrar = ventasResumen.filter((venta) => Number(venta.saldo_pendiente || 0) > 0);
+    const parciales = porCobrar.filter((venta) => Number(venta.monto_pagado || 0) > 0);
+    const liquidadas = ventasResumen.filter((venta) => venta.estado_pago === "pagada");
+    return {
+      porCobrar: porCobrar.length,
+      parciales: parciales.length,
+      liquidadas: liquidadas.length,
+      todas: ventasResumen.length,
+      saldoPorCobrar: porCobrar.reduce(
+        (total, venta) => total + Number(venta.saldo_pendiente || 0),
+        0,
+      ),
+    };
+  }, [ventasResumen]);
 
 
 
@@ -2855,6 +3140,26 @@ export default function App() {
       .catch((e) => setError(e?.message ?? String(e)));
   }
 
+  async function loadVentasResumen() {
+    if (!me) return;
+    setLoadingVentasResumen(true);
+    setVentasResumenError(null);
+    try {
+      const params = new URLSearchParams();
+      params.set("limit", "1000");
+      params.set("sucursal_id", String(sucursalActivaId));
+      params.set("fecha_desde", "2000-01-01");
+      const r = await apiFetch(`/ventas?${params.toString()}`);
+      if (!r.ok) throw new Error(await readErrorMessage(r));
+      setVentasResumen(await r.json());
+    } catch (e: any) {
+      setVentasResumen([]);
+      setVentasResumenError(e?.message ?? String(e));
+    } finally {
+      setLoadingVentasResumen(false);
+    }
+  }
+
   async function loadInventario() {
     if (!me) return;
     setLoadingInventario(true);
@@ -2957,10 +3262,17 @@ export default function App() {
   }
 
   function resetVentaWizard() {
+    setVentaConfirmacionOpen(false);
     setVentaCategoria("");
     setVentaCarrito([]);
+    setVentaDescuentoTipo("porcentaje");
     setVentaDescuentoPorcentaje(0);
-    setVentaMetodosPago(["efectivo"]);
+    setVentaDescuentoMontoFijo(0);
+    setVentaDescuentoEntrada("");
+    ventaPagoSeqRef.current += 1;
+    setVentaPagos([
+      { ui_id: ventaPagoSeqRef.current, metodo: "efectivo", monto: "" },
+    ]);
     setVentaLentesPaso(1);
     setVentaAgregarTinte(false);
     setVentaMostrarAntiblue(false);
@@ -3023,35 +3335,66 @@ export default function App() {
 
   function seleccionarArmazonFlujoOptico(producto: InventarioProducto) {
     const yaSeleccionado = ventaCarrito.some((item) => item.producto_id === producto.producto_id);
-    const idsFlujoOptico = new Set(
-      inventario
-        .filter((item) => item.categoria === "lentes_opticos" || item.categoria === "micas")
-        .map((item) => item.producto_id),
+    const idsArmazones = new Set(ventaArmazonesOpticos.map((item) => item.producto_id));
+    const idsMicas = new Set(
+      inventario.filter((item) => item.categoria === "micas").map((item) => item.producto_id),
     );
-    if (yaSeleccionado) {
-      setVentaCarrito((prev) => prev.filter((item) => !idsFlujoOptico.has(item.producto_id)));
-      setVentaLentesPaso(1);
+    setVentaCarrito((prev) => {
+      let next = yaSeleccionado
+        ? prev.filter((item) => item.producto_id !== producto.producto_id)
+        : [...prev, { producto_id: producto.producto_id, cantidad: 1 }];
+      const cantidadArmazones = next
+        .filter((item) => idsArmazones.has(item.producto_id))
+        .reduce((total, item) => total + item.cantidad, 0);
+      if (cantidadArmazones === 0) {
+        next = next.filter((item) => !idsMicas.has(item.producto_id));
+      } else {
+        next = next.map((item) =>
+          idsMicas.has(item.producto_id) ? { ...item, cantidad: cantidadArmazones } : item,
+        );
+      }
+      return next;
+    });
+    setVentaLentesPaso(1);
+    if (yaSeleccionado && ventaArmazonesSeleccionados.length === 1) {
       setVentaAgregarTinte(false);
       setVentaMostrarAntiblue(false);
       setVentaTinteGrado("");
-      return;
     }
-
-    const micaBase = inventario.find((item) => item.sku === "MIC-BASE-001");
-    setVentaCarrito((prev) => [
-      ...prev.filter((item) => !idsFlujoOptico.has(item.producto_id)),
-      { producto_id: producto.producto_id, cantidad: 1 },
-      ...(micaBase ? [{ producto_id: micaBase.producto_id, cantidad: 1 }] : []),
-    ]);
-    setVentaLentesPaso(2);
-    setVentaAgregarTinte(false);
-    setVentaMostrarAntiblue(false);
-    setVentaTinteGrado("");
   }
 
   function seleccionarDisenoFlujoOptico(producto: InventarioProducto) {
     const yaSeleccionado = ventaCarrito.some((item) => item.producto_id === producto.producto_id);
-    agregarProductoCarrito(producto, "reemplazar_subcategoria");
+    const micaBase = inventario.find((item) => item.sku === "MIC-BASE-001");
+    const idsDisenos = new Set(ventaMicasDisenos.map((item) => item.producto_id));
+    const idsTratamientos = new Set(ventaMicasTratamientos.map((item) => item.producto_id));
+    const idsArmazones = new Set(ventaArmazonesOpticos.map((item) => item.producto_id));
+    setVentaCarrito((prev) => {
+      const cantidadArmazones = Math.max(
+        1,
+        prev
+          .filter((item) => idsArmazones.has(item.producto_id))
+          .reduce((total, item) => total + item.cantidad, 0),
+      );
+      let next = prev.filter((item) => !idsDisenos.has(item.producto_id));
+      if (yaSeleccionado) {
+        next = next.filter((item) =>
+          item.producto_id !== micaBase?.producto_id
+          && !idsTratamientos.has(item.producto_id)
+        );
+        return next;
+      }
+      if (micaBase && !next.some((item) => item.producto_id === micaBase.producto_id)) {
+        next.push({ producto_id: micaBase.producto_id, cantidad: cantidadArmazones });
+      }
+      next.push({ producto_id: producto.producto_id, cantidad: cantidadArmazones });
+      return next;
+    });
+    if (yaSeleccionado) {
+      setVentaAgregarTinte(false);
+      setVentaMostrarAntiblue(false);
+      setVentaTinteGrado("");
+    }
     setVentaLentesPaso(yaSeleccionado ? 2 : 3);
   }
 
@@ -3061,6 +3404,12 @@ export default function App() {
   ) {
     const yaSeleccionado = ventaCarrito.some((item) => item.producto_id === producto.producto_id);
     agregarProductoCarrito(producto, "reemplazar_subcategoria");
+    const cantidadArmazones = ventaCarrito
+      .filter((item) => ventaArmazonesOpticos.some((armazon) => armazon.producto_id === item.producto_id))
+      .reduce((total, item) => total + item.cantidad, 0);
+    setVentaCarrito((prev) => prev.map((item) =>
+      item.producto_id === producto.producto_id ? { ...item, cantidad: Math.max(1, cantidadArmazones) } : item
+    ));
     if (yaSeleccionado) {
       setVentaLentesPaso(3);
       if (producto.tipo_mica === "tinte") setVentaTinteGrado("");
@@ -3075,13 +3424,26 @@ export default function App() {
   function actualizarCantidadCarrito(producto: InventarioProducto, cantidad: number) {
     const maximo = producto.controla_stock ? Math.max(1, producto.stock) : 99;
     const cantidadSegura = Math.min(Math.max(1, Math.trunc(cantidad || 1)), maximo);
-    setVentaCarrito((prev) =>
-      prev.map((item) =>
+    setVentaCarrito((prev) => {
+      let next = prev.map((item) =>
         item.producto_id === producto.producto_id
           ? { ...item, cantidad: cantidadSegura }
           : item,
-      ),
-    );
+      );
+      if (producto.categoria === "lentes_opticos" && producto.subcategoria === "armazon") {
+        const idsArmazones = new Set(ventaArmazonesOpticos.map((item) => item.producto_id));
+        const idsMicas = new Set(
+          inventario.filter((item) => item.categoria === "micas").map((item) => item.producto_id),
+        );
+        const cantidadArmazones = next
+          .filter((item) => idsArmazones.has(item.producto_id))
+          .reduce((total, item) => total + item.cantidad, 0);
+        next = next.map((item) =>
+          idsMicas.has(item.producto_id) ? { ...item, cantidad: cantidadArmazones } : item,
+        );
+      }
+      return next;
+    });
   }
 
   function quitarProductoCarrito(productoId: number) {
@@ -3798,6 +4160,11 @@ export default function App() {
   }, [me, tab, sucursalActivaId]);
 
   useEffect(() => {
+    if (!me || tab !== "resumen_ventas") return;
+    loadVentasResumen();
+  }, [me, tab, sucursalActivaId]);
+
+  useEffect(() => {
     if (!me) return;
     if (tab === "ventas" && me.rol !== "admin") return;
     if (tab !== "ventas" && tab !== "inventario") return;
@@ -3980,6 +4347,31 @@ export default function App() {
       setError(e?.message ?? String(e));
     } finally {
       setLoadingPacientePerfil(false);
+    }
+  }
+
+  async function openPacientePerfilDesdeVenta(venta: Venta) {
+    setTab("pacientes");
+    const pacienteLocal = pacientes.find((paciente) => paciente.paciente_id === venta.paciente_id);
+    if (pacienteLocal) {
+      await openPacientePerfil(pacienteLocal);
+      return;
+    }
+
+    setError(null);
+    try {
+      const params = new URLSearchParams();
+      params.set("q", String(venta.paciente_id));
+      params.set("limit", "20");
+      params.set("sucursal_id", String(sucursalActivaId));
+      const r = await apiFetch(`/pacientes/buscar?${params.toString()}`);
+      if (!r.ok) throw new Error(await readErrorMessage(r));
+      const encontrados: Paciente[] = await r.json();
+      const paciente = encontrados.find((item) => item.paciente_id === venta.paciente_id);
+      if (!paciente) throw new Error("No se encontró la información completa del paciente.");
+      await openPacientePerfil(paciente);
+    } catch (e: any) {
+      setError(e?.message ?? String(e));
     }
   }
 
@@ -4224,6 +4616,13 @@ export default function App() {
       const r = await apiFetch(`/ventas/${venta_id}?sucursal_id=${sucursalActivaId}`, { method: "DELETE" });
       if (!r.ok) throw new Error(await readErrorMessage(r));
       loadVentas();
+      loadVentasResumen();
+      if (selectedVentaDetalle?.venta_id === venta_id) {
+        closeVentaDetalle();
+      }
+      if (editingVentaId === venta_id) {
+        cancelEditVenta();
+      }
       if (me?.rol === "admin") {
         loadInventario();
       }
@@ -4472,8 +4871,123 @@ export default function App() {
     }
   }
 
+  function openVentaDetalle(v: Venta) {
+    const estadoPagoCalculado = deriveVentaEstadoPago(
+      Number(v.monto_total || 0),
+      Number(v.monto_pagado || 0),
+      v.pagos?.length || 0,
+    );
+    setSelectedVentaDetalle(v);
+    setVentaDetalleEditando(false);
+    setVentaSeguimientoError(null);
+    setVentaNuevoPagoMetodo("efectivo");
+    setVentaNuevoPagoMonto("");
+    setVentaSeguimientoDraft({
+      estado_venta: VENTA_ESTADO_OPTIONS.some((opcion) => opcion.value === v.estado_venta)
+        ? v.estado_venta as VentaEstado
+        : "confirmada",
+      estado_pago: VENTA_ESTADO_PAGO_OPTIONS.some((opcion) => opcion.value === v.estado_pago)
+        ? v.estado_pago as VentaEstadoPago
+        : estadoPagoCalculado,
+      estado_pedido: VENTA_ESTADO_PEDIDO_OPTIONS.some((opcion) => opcion.value === v.estado_pedido)
+        ? v.estado_pedido as VentaEstadoPedido
+        : "pendiente_fabricacion",
+      notas: v.notas || "",
+    });
+  }
+
+  function closeVentaDetalle() {
+    setSelectedVentaDetalle(null);
+    setVentaDetalleEditando(false);
+    setVentaSeguimientoError(null);
+    setVentaNuevoPagoMonto("");
+  }
+
+  async function guardarSeguimientoVenta() {
+    if (!selectedVentaDetalle) return;
+    setSavingVentaSeguimiento(true);
+    setVentaSeguimientoError(null);
+    try {
+      const montoNuevo = Math.max(0, Number(ventaNuevoPagoMonto || 0));
+      const saldoActual = Number(selectedVentaDetalle.saldo_pendiente || 0);
+      if (montoNuevo > saldoActual) {
+        throw new Error("El pago nuevo no puede ser mayor que el saldo por pagar.");
+      }
+      if (
+        montoNuevo > 0
+        && ["cancelada", "devuelta"].includes(ventaSeguimientoDraft.estado_venta)
+      ) {
+        throw new Error("No puedes registrar un pago nuevo en una venta cancelada o devuelta.");
+      }
+      const montoPagadoPreview = Number(selectedVentaDetalle.monto_pagado || 0) + montoNuevo;
+      const estadoPagoPreview = montoNuevo > 0
+        ? deriveVentaEstadoPago(
+            Number(selectedVentaDetalle.monto_total || 0),
+            montoPagadoPreview,
+            (selectedVentaDetalle.pagos?.length || 0) + 1,
+          )
+        : ventaSeguimientoDraft.estado_pago;
+      const payload = {
+        sucursal_id: sucursalActivaId,
+        estado_venta: ventaSeguimientoDraft.estado_venta,
+        estado_pago: estadoPagoPreview,
+        estado_pedido: ventaSeguimientoDraft.estado_pedido,
+        notas: ventaSeguimientoDraft.notas.trim() || null,
+        ...(montoNuevo > 0
+          ? {
+              nuevo_pago: {
+                metodo: ventaNuevoPagoMetodo,
+                monto: Number(montoNuevo.toFixed(2)),
+              },
+            }
+          : {}),
+      };
+      const r = await apiFetch(
+        `/ventas/${selectedVentaDetalle.venta_id}/seguimiento`,
+        { method: "PATCH", body: JSON.stringify(payload) },
+      );
+      if (!r.ok) throw new Error(await readErrorMessage(r));
+      const actualizado = await r.json();
+      const ventaActualizada: Venta = { ...selectedVentaDetalle, ...actualizado };
+      setSelectedVentaDetalle(ventaActualizada);
+      setVentaSeguimientoDraft((prev) => ({
+        ...prev,
+        estado_pago: actualizado.estado_pago,
+        notas: actualizado.notas || "",
+      }));
+      setVentaNuevoPagoMonto("");
+      setVentaDetalleEditando(false);
+      setVentas((prev) => prev.map((venta) => venta.venta_id === ventaActualizada.venta_id ? ventaActualizada : venta));
+      setVentasResumen((prev) => prev.map((venta) => venta.venta_id === ventaActualizada.venta_id ? ventaActualizada : venta));
+      setPerfilVentas((prev) => prev.map((venta) => venta.venta_id === ventaActualizada.venta_id ? ventaActualizada : venta));
+    } catch (e: any) {
+      setVentaSeguimientoError(e?.message ?? String(e));
+    } finally {
+      setSavingVentaSeguimiento(false);
+    }
+  }
+
   function startEditVenta(v: Venta) {
     setEditingVentaId(v.venta_id);
+    setVentaEdicionOriginal(v);
+    setVentaSeguimientoDraft({
+      estado_venta: VENTA_ESTADO_OPTIONS.some((opcion) => opcion.value === v.estado_venta)
+        ? v.estado_venta as VentaEstado
+        : "confirmada",
+      estado_pago: VENTA_ESTADO_PAGO_OPTIONS.some((opcion) => opcion.value === v.estado_pago)
+        ? v.estado_pago as VentaEstadoPago
+        : deriveVentaEstadoPago(
+            Number(v.monto_total || 0),
+            Number(v.monto_pagado || 0),
+            v.pagos?.length || 0,
+          ),
+      estado_pedido: VENTA_ESTADO_PEDIDO_OPTIONS.some((opcion) => opcion.value === v.estado_pedido)
+        ? v.estado_pedido as VentaEstadoPedido
+        : "pendiente_fabricacion",
+      notas: v.notas || "",
+    });
+    setVentaNuevoPagoMetodo("efectivo");
+    setVentaNuevoPagoMonto("");
     const comprasRaw = (v.compra ?? "")
       .split("|")
       .map((x) => x.trim())
@@ -4490,9 +5004,36 @@ export default function App() {
     const gradoTinte = compras.find((item) => /^tinte_grado_[123]$/.test(item));
     setVentasSeleccionadas(Array.from(new Set(compras)));
     setVentaCategoria(inferVentaCategoria(compras));
-    setVentaCarrito([]);
+    setVentaCarrito(
+      (v.productos || []).map((producto) => ({
+        producto_id: producto.producto_id,
+        cantidad: Math.max(1, Number(producto.cantidad || 1)),
+      })),
+    );
+    setQPacienteVenta(v.paciente_nombre);
+    setPacientesVentaOpciones((opciones) => (
+      opciones.some((opcion) => opcion.id === v.paciente_id)
+        ? opciones
+        : [{ id: v.paciente_id, label: v.paciente_nombre }, ...opciones]
+    ));
+    const descuentoMontoGuardado = Number(v.descuento_monto || 0);
+    setVentaDescuentoTipo(descuentoMontoGuardado > 0 ? "monto" : "porcentaje");
     setVentaDescuentoPorcentaje(Number(v.descuento_porcentaje || 0));
-    setVentaMetodosPago(metodosPago.length > 0 ? metodosPago : ["efectivo"]);
+    setVentaDescuentoMontoFijo(descuentoMontoGuardado);
+    setVentaDescuentoEntrada(String(descuentoMontoGuardado > 0 ? descuentoMontoGuardado : Number(v.descuento_porcentaje || 0) || ""));
+    const pagosEdicion = v.pagos && v.pagos.length > 0
+      ? v.pagos
+      : [{
+          metodo: metodosPago[0] || "efectivo",
+          monto: v.adelanto_aplica ? Number(v.adelanto_monto || 0) : Number(v.monto_total || 0),
+        }];
+    setVentaPagos(
+      pagosEdicion.map((pago, index) => ({
+        ...pago,
+        ui_id: pago.pago_id ?? -(index + 1),
+        monto: Number(pago.monto || 0),
+      })),
+    );
     setVentaTinteGrado((gradoTinte?.replace("tinte_", "") || "") as VentaTinteGrado);
     setVentaAgregarTinte(compras.includes("micas_tinte"));
     setVentaMostrarAntiblue(compras.includes("micas_antiblueray"));
@@ -4503,11 +5044,13 @@ export default function App() {
       compra: v.compra ?? "",
       subtotal: Number(v.subtotal ?? v.monto_total ?? 0),
       descuento_porcentaje: Number(v.descuento_porcentaje || 0),
+      descuento_monto: descuentoMontoGuardado,
       descuento_motivo: v.descuento_motivo ?? null,
       cupon_tipo: v.cupon_tipo ?? null,
       monto_total: Number(v.monto_total ?? 0),
       metodo_pago: v.metodo_pago ?? "efectivo",
       forma_liquidacion: v.forma_liquidacion ?? "pago_completo",
+      plazo_meses: v.plazo_meses ?? null,
       adelanto_aplica: Boolean(v.adelanto_aplica),
       adelanto_monto: v.adelanto_monto ?? null,
       adelanto_metodo: v.adelanto_metodo ?? null,
@@ -4520,6 +5063,7 @@ export default function App() {
 
   function cancelEditVenta() {
     setEditingVentaId(null);
+    setVentaEdicionOriginal(null);
     resetVentaWizard();
     setFormVenta({
       paciente_id: 0,
@@ -4527,11 +5071,13 @@ export default function App() {
       compra: "",
       subtotal: 0,
       descuento_porcentaje: 0,
+      descuento_monto: 0,
       descuento_motivo: null,
       cupon_tipo: null,
       monto_total: 0,
       metodo_pago: "efectivo",
       forma_liquidacion: "pago_completo",
+      plazo_meses: null,
       adelanto_aplica: false,
       adelanto_monto: null,
       adelanto_metodo: null,
@@ -4550,19 +5096,6 @@ export default function App() {
 
     try {
       if (!formVenta.paciente_id || formVenta.paciente_id === 0) throw new Error("Selecciona un paciente.");
-      if (ventaMetodosPago.length === 0) {
-        throw new Error("Selecciona al menos un método de pago.");
-      }
-      const formaLiquidacion = formVenta.forma_liquidacion ?? "pago_completo";
-      const requiereAdelanto = ["adelanto_apartado", "pago_mixto"].includes(formaLiquidacion);
-      if (requiereAdelanto) {
-        if (!formVenta.adelanto_monto || Number(formVenta.adelanto_monto) <= 0) {
-          throw new Error("Adelanto debe ser mayor a 0.");
-        }
-        if (!formVenta.adelanto_metodo) {
-          throw new Error("Selecciona método de pago del adelanto.");
-        }
-      }
       const carritoDetalle = ventaCarrito
         .map((item) => {
           const producto = inventario.find((row) => row.producto_id === item.producto_id);
@@ -4572,22 +5105,27 @@ export default function App() {
       if (editingVentaId === null && me?.rol === "admin" && carritoDetalle.length === 0) {
         throw new Error("Agrega al menos un producto al carrito.");
       }
-      carritoDetalle.forEach(({ producto, cantidad }) => {
-        if (producto.controla_stock && cantidad > producto.stock) {
-          throw new Error(`Solo quedan ${producto.stock} unidades de ${producto.nombre}.`);
-        }
-      });
+      if (editingVentaId === null) {
+        carritoDetalle.forEach(({ producto, cantidad }) => {
+          if (producto.controla_stock && cantidad > producto.stock) {
+            throw new Error(`Solo quedan ${producto.stock} unidades de ${producto.nombre}.`);
+          }
+        });
+      }
       const tieneMicasBase = carritoDetalle.some(({ producto }) => producto.sku === "MIC-BASE-001");
-      if (tieneMicasBase) {
+      const tieneArmazonOptico = carritoDetalle.some(
+        ({ producto }) => producto.categoria === "lentes_opticos" && producto.subcategoria === "armazon",
+      );
+      if (editingVentaId === null && (tieneMicasBase || tieneArmazonOptico)) {
         const tieneDiseno = carritoDetalle.some(({ producto }) => producto.categoria === "micas" && producto.subcategoria === "diseno");
         const tieneTratamiento = carritoDetalle.some(({ producto }) => producto.categoria === "micas" && producto.subcategoria === "tratamiento");
-        if (!tieneDiseno || !tieneTratamiento) {
-          throw new Error("Completa el diseño y tratamiento de las micas.");
+        if (!tieneMicasBase || !tieneDiseno || !tieneTratamiento) {
+          throw new Error("Completa la selección de micas: diseño y tratamiento.");
         }
       }
       const tieneTinte = carritoDetalle.some(({ producto }) => producto.tipo_mica === "tinte")
         || ventasSeleccionadas.includes("micas_tinte");
-      if (tieneTinte && !ventaTinteGrado) {
+      if (editingVentaId === null && tieneTinte && !ventaTinteGrado) {
         throw new Error("Selecciona el grado del tinte.");
       }
 
@@ -4607,55 +5145,163 @@ export default function App() {
       const subtotalVenta = editingVentaId === null && me?.rol === "admin"
         ? subtotalCarrito
         : Number(formVenta.subtotal || formVenta.monto_total || 0);
-      const descuento = editingVentaId === null && me?.rol === "admin"
+      const descuentoPorcentaje = editingVentaId === null && me?.rol === "admin"
         ? ventaDescuentoPorcentaje
         : Number(formVenta.descuento_porcentaje || 0);
-      if (descuento > 0 && !formVenta.descuento_motivo) {
+      const descuentoMontoFijo = editingVentaId === null && me?.rol === "admin"
+        ? ventaDescuentoMontoFijo
+        : Number(formVenta.descuento_monto || 0);
+      const descuentoActivo = descuentoPorcentaje > 0 || descuentoMontoFijo > 0;
+      if (descuentoPorcentaje > 0 && descuentoMontoFijo > 0) {
+        throw new Error("Selecciona descuento por porcentaje o por monto, no ambos.");
+      }
+      if (descuentoMontoFijo > subtotalVenta) {
+        throw new Error("El descuento en pesos no puede ser mayor al subtotal.");
+      }
+      if (descuentoActivo && !formVenta.descuento_motivo) {
         throw new Error("Selecciona el motivo del descuento.");
       }
-      if (descuento > 0 && !formVenta.cupon_tipo) {
+      if (descuentoActivo && !formVenta.cupon_tipo) {
         throw new Error("Selecciona el tipo de cupón.");
       }
-      const montoTotal = Number((subtotalVenta * (1 - descuento / 100)).toFixed(2));
+      const descuentoCalculado = descuentoMontoFijo > 0
+        ? descuentoMontoFijo
+        : subtotalVenta * descuentoPorcentaje / 100;
+      const montoTotal = Number(Math.max(0, subtotalVenta - descuentoCalculado).toFixed(2));
       if (subtotalVenta <= 0) throw new Error("El carrito debe tener un subtotal mayor a 0.");
-      if (requiereAdelanto && Number(formVenta.adelanto_monto || 0) > montoTotal) {
-        throw new Error("El adelanto no puede ser mayor al total.");
+      const pagosPayload = ventaPagos
+        .map((pago) => ({
+          metodo: pago.metodo,
+          monto: Number(Number(pago.monto || 0).toFixed(2)),
+        }))
+        .filter((pago) => pago.monto > 0);
+      if (editingVentaId === null && pagosPayload.length === 0) {
+        throw new Error("Registra al menos un pago o adelanto.");
       }
+      const montoPagado = Number(
+        pagosPayload.reduce((total, pago) => total + pago.monto, 0).toFixed(2),
+      );
+      if (editingVentaId === null && montoPagado > montoTotal) {
+        throw new Error("La suma de los pagos no puede ser mayor al total.");
+      }
+      const metodosPago = Array.from(new Set(pagosPayload.map((pago) => pago.metodo)));
+      const pagoCompleto = Math.abs(montoPagado - montoTotal) < 0.01;
+      const planFinanciamiento = ["meses_sin_intereses", "meses_con_intereses"].includes(
+        formVenta.forma_liquidacion || "",
+      )
+        ? formVenta.forma_liquidacion
+        : null;
+      if (
+        planFinanciamiento
+        && ![3, 6, 9, 12, 18, 24].includes(Number(formVenta.plazo_meses || 0))
+      ) {
+        throw new Error("Selecciona el plazo del financiamiento.");
+      }
+      const nuevoPagoEdicion = editingVentaId !== null
+        ? Math.max(0, Number(ventaNuevoPagoMonto || 0))
+        : 0;
+      const montoPagadoExistente = editingVentaId !== null
+        ? Number(ventaEdicionOriginal?.monto_pagado || 0)
+        : montoPagado;
+      if (editingVentaId !== null && montoPagadoExistente > montoTotal) {
+        throw new Error("El descuento deja el total por debajo de lo que el cliente ya pagó.");
+      }
+      if (editingVentaId !== null && montoPagadoExistente + nuevoPagoEdicion > montoTotal) {
+        throw new Error("El pago nuevo es mayor que el saldo por pagar.");
+      }
+      if (
+        editingVentaId !== null
+        && nuevoPagoEdicion > 0
+        && ["cancelada", "devuelta"].includes(ventaSeguimientoDraft.estado_venta)
+      ) {
+        throw new Error("No puedes agregar un pago a una venta cancelada o devuelta.");
+      }
+      const formaLiquidacion: VentaFormaLiquidacion = editingVentaId !== null
+        ? (formVenta.forma_liquidacion ?? "pago_completo")
+        : planFinanciamiento
+          ? planFinanciamiento
+          : pagoCompleto
+            ? (metodosPago.length > 1 ? "pago_mixto" : "pago_completo")
+            : "adelanto_apartado";
+      const requiereAdelanto = editingVentaId === null
+        ? !pagoCompleto
+        : Boolean(formVenta.adelanto_aplica);
 
       const payload = cleanPayload({
         ...formVenta,
         sucursal_id: sucursalActivaId,
         compra: compraTokens.join("|"),
         subtotal: subtotalVenta,
-        descuento_porcentaje: descuento,
+        descuento_porcentaje: descuentoPorcentaje,
+        descuento_monto: descuentoMontoFijo,
         monto_total: montoTotal,
-        metodo_pago: ventaMetodosPago.join("|"),
+        metodo_pago: editingVentaId !== null
+          ? formVenta.metodo_pago
+          : (metodosPago.join("|") || "efectivo"),
         forma_liquidacion: formaLiquidacion,
         adelanto_aplica: requiereAdelanto,
-        adelanto_monto: requiereAdelanto ? Number(formVenta.adelanto_monto) : null,
-        adelanto_metodo: requiereAdelanto ? formVenta.adelanto_metodo : null,
+        adelanto_monto: requiereAdelanto
+          ? (editingVentaId !== null ? Number(formVenta.adelanto_monto || 0) : montoPagado)
+          : null,
+        adelanto_metodo: requiereAdelanto && metodosPago.length === 1
+          ? metodosPago[0]
+          : null,
         ...(editingVentaId === null && me?.rol === "admin"
           ? {
               productos: ventaCarrito,
             }
           : {}),
+        ...(editingVentaId === null ? { pagos: pagosPayload } : {}),
       });
 
       const endpoint = editingVentaId === null ? "/ventas" : `/ventas/${editingVentaId}`;
       const method = editingVentaId === null ? "POST" : "PUT";
       const r = await apiFetch(endpoint, { method, body: JSON.stringify(payload) });
       if (!r.ok) throw new Error(await readErrorMessage(r));
+      if (editingVentaId !== null) {
+        const estadoPagoActualizado = nuevoPagoEdicion > 0
+          ? deriveVentaEstadoPago(
+              montoTotal,
+              montoPagadoExistente + nuevoPagoEdicion,
+              (ventaEdicionOriginal?.pagos?.length || 0) + 1,
+            )
+          : ventaSeguimientoDraft.estado_pago;
+        const seguimientoPayload = {
+          sucursal_id: sucursalActivaId,
+          estado_venta: ventaSeguimientoDraft.estado_venta,
+          estado_pago: estadoPagoActualizado,
+          estado_pedido: ventaSeguimientoDraft.estado_pedido,
+          notas: formVenta.notas?.trim() || null,
+          ...(nuevoPagoEdicion > 0
+            ? {
+                nuevo_pago: {
+                  metodo: ventaNuevoPagoMetodo,
+                  monto: Number(nuevoPagoEdicion.toFixed(2)),
+                },
+              }
+            : {}),
+        };
+        const seguimientoResponse = await apiFetch(
+          `/ventas/${editingVentaId}/seguimiento`,
+          { method: "PATCH", body: JSON.stringify(seguimientoPayload) },
+        );
+        if (!seguimientoResponse.ok) {
+          throw new Error(await readErrorMessage(seguimientoResponse));
+        }
+      }
 
       setFormVenta((prev) => ({
         ...prev,
         compra: "",
         subtotal: 0,
         descuento_porcentaje: 0,
+        descuento_monto: 0,
         descuento_motivo: null,
         cupon_tipo: null,
         monto_total: 0,
         metodo_pago: "efectivo",
         forma_liquidacion: "pago_completo",
+        plazo_meses: null,
         adelanto_aplica: false,
         adelanto_monto: null,
         adelanto_metodo: null,
@@ -4664,6 +5310,7 @@ export default function App() {
       }));
       resetVentaWizard();
       setEditingVentaId(null);
+      setVentaEdicionOriginal(null);
       loadVentas();
       if (me?.rol === "admin") {
         loadInventario();
@@ -5103,6 +5750,7 @@ export default function App() {
   }
 
   function logout() {
+    setLogoutConfirmOpen(false);
     clearToken();
     setMe(null);
     setLoginUser("");
@@ -5251,7 +5899,8 @@ export default function App() {
     })
     .filter((item): item is VentaCarritoItem & { producto: InventarioProducto } => Boolean(item));
   const ventaCarritoIds = new Set(ventaCarrito.map((item) => item.producto_id));
-  const ventaArmazonSeleccionado = ventaArmazonesOpticos.find((producto) => ventaCarritoIds.has(producto.producto_id));
+  const ventaArmazonesSeleccionados = ventaArmazonesOpticos.filter((producto) => ventaCarritoIds.has(producto.producto_id));
+  const ventaArmazonSeleccionado = ventaArmazonesSeleccionados[0];
   const ventaDisenoSeleccionado = ventaMicasDisenos.find((producto) => ventaCarritoIds.has(producto.producto_id));
   const ventaTratamientoSeleccionado = ventaMicasTratamientos.find((producto) => ventaCarritoIds.has(producto.producto_id));
   const ventaTinteSeleccionado = ventaTratamientoSeleccionado?.tipo_mica === "tinte"
@@ -5268,15 +5917,42 @@ export default function App() {
     ? Number(formVenta.subtotal ?? formVenta.monto_total ?? 0)
     : ventaSubtotalCarrito;
   const ventaDescuentoMonto = Number(
-    (ventaSubtotalResumen * ventaDescuentoPorcentaje / 100).toFixed(2),
+    (
+      ventaDescuentoTipo === "monto"
+        ? ventaDescuentoMontoFijo
+        : ventaSubtotalResumen * ventaDescuentoPorcentaje / 100
+    ).toFixed(2),
   );
+  const ventaDescuentoActivo = ventaDescuentoMonto > 0;
   const ventaTotalCarrito = Number(
     Math.max(0, ventaSubtotalResumen - ventaDescuentoMonto).toFixed(2),
   );
-  const ventaDeposito = formVenta.adelanto_aplica
-    ? Math.max(0, Number(formVenta.adelanto_monto || 0))
-    : 0;
-  const ventaSaldo = Math.max(0, ventaTotalCarrito - ventaDeposito);
+  const ventaMontoPagado = Number(
+    ventaPagos.reduce((total, pago) => total + Math.max(0, Number(pago.monto || 0)), 0).toFixed(2),
+  );
+  const ventaSaldo = Math.max(0, Number((ventaTotalCarrito - ventaMontoPagado).toFixed(2)));
+  const ventaEstadoPago = ventaMontoPagado <= 0
+    ? "Pendiente"
+    : ventaSaldo > 0
+      ? "Pago parcial"
+      : "Pagado";
+  const ventaDetallePagoNuevo = Math.max(0, Number(ventaNuevoPagoMonto || 0));
+  const ventaDetalleMontoPagadoPreview = Number(
+    (Number(selectedVentaDetalle?.monto_pagado || 0) + ventaDetallePagoNuevo).toFixed(2),
+  );
+  const ventaDetalleSaldoPreview = Math.max(
+    0,
+    Number((Number(selectedVentaDetalle?.monto_total || 0) - ventaDetalleMontoPagadoPreview).toFixed(2)),
+  );
+  const ventaDetalleEstadoPagoPreview = selectedVentaDetalle
+    ? ventaDetallePagoNuevo > 0
+      ? deriveVentaEstadoPago(
+          Number(selectedVentaDetalle.monto_total || 0),
+          ventaDetalleMontoPagadoPreview,
+          (selectedVentaDetalle.pagos?.length || 0) + 1,
+        )
+      : ventaSeguimientoDraft.estado_pago
+    : "sin_pago";
   const inventarioVisible = inventario.filter(
     (producto) => producto.categoria !== "micas",
   );
@@ -5377,106 +6053,265 @@ export default function App() {
   };
 
   const renderVentaPagoLiquidacion = () => (
-    <section style={{ display: "grid", gap: 12, marginTop: 12, padding: 12, border: "1px solid #cbdcf0", background: "#fff" }}>
-      <div>
-        <div style={{ marginBottom: 7, fontWeight: 900, color: "#16385d" }}>Método de pago *</div>
-        <div role="group" aria-label="Métodos de pago" style={{ display: "flex", gap: 7, flexWrap: "wrap" }}>
-          {VENTA_METODO_PAGO_OPTIONS.map((opcion) => {
-            const seleccionado = ventaMetodosPago.includes(opcion.value);
-            return (
-              <button
-                key={opcion.value}
-                type="button"
-                aria-pressed={seleccionado}
-                onClick={() => {
-                  setVentaMetodosPago((prev) => {
-                    const next = seleccionado
-                      ? prev.filter((item) => item !== opcion.value)
-                      : [...prev, opcion.value];
-                    setFormVenta((curr) => ({ ...curr, metodo_pago: next.join("|") }));
-                    return next;
-                  });
-                }}
-                style={{
-                  padding: "8px 11px",
-                  borderRadius: 999,
-                  border: seleccionado ? "1px solid #1667ba" : "1px solid #cbd8e4",
-                  background: seleccionado ? "#1677d2" : "#f7fafc",
-                  color: seleccionado ? "#fff" : "#31475d",
-                  fontWeight: 800,
-                  cursor: "pointer",
-                }}
-              >
-                {seleccionado ? "✓ " : ""}{opcion.label}
-              </button>
-            );
-          })}
+    <section style={{ display: "grid", gap: 11, marginTop: 12, padding: 12, border: "1px solid #cbdcf0", background: "#fff" }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+        <div>
+          <div style={{ fontWeight: 900, color: "#16385d" }}>Pagos y adelantos</div>
+          <div style={{ marginTop: 2, color: "#718397", fontSize: 11 }}>
+            El total de la venta ya está en el resumen. Aquí registra cuánto pagó con cada método.
+          </div>
         </div>
-        <div style={{ marginTop: 5, color: "#718397", fontSize: 11 }}>
-          Puedes seleccionar más de un método.
-        </div>
+        <span
+          style={{
+            padding: "6px 10px",
+            borderRadius: 999,
+            background: ventaMontoPagado > ventaTotalCarrito ? "#fee2e2" : ventaSaldo > 0 ? "#fff1d6" : "#dcfce7",
+            color: ventaMontoPagado > ventaTotalCarrito ? "#991b1b" : ventaSaldo > 0 ? "#92400e" : "#166534",
+            fontSize: 11,
+            fontWeight: 900,
+          }}
+        >
+          {ventaMontoPagado > ventaTotalCarrito ? "Importe excedido" : ventaEstadoPago}
+        </span>
       </div>
 
-      <label style={{ display: "block" }}>
-        <span style={{ display: "block", marginBottom: 6, fontWeight: 900, color: "#16385d" }}>Forma de liquidación *</span>
-        <select
-          value={formVenta.forma_liquidacion ?? "pago_completo"}
-          onChange={(e) => {
-            const forma = e.target.value as VentaFormaLiquidacion;
-            const aplica = forma === "adelanto_apartado" || forma === "pago_mixto";
-            setFormVenta({
-              ...formVenta,
-              forma_liquidacion: forma,
-              adelanto_aplica: aplica,
-              adelanto_monto: aplica ? formVenta.adelanto_monto ?? null : null,
-              adelanto_metodo: aplica ? formVenta.adelanto_metodo ?? "efectivo" : null,
-            });
-          }}
-          style={{ width: "100%", padding: 10, border: "1px solid #b9cce0", background: "#fff" }}
-        >
-          {VENTA_FORMA_LIQUIDACION_OPTIONS.map((opcion) => (
-            <option key={opcion.value} value={opcion.value}>{opcion.label}</option>
-          ))}
-        </select>
-      </label>
+      {editingVentaId !== null && (
+        <div style={{ padding: 9, border: "1px solid #bfdbfe", background: "#eff6ff", color: "#1e40af", fontSize: 11, fontWeight: 750 }}>
+          Los pagos anteriores se conservan. Puedes actualizar los estados y registrar un pago adicional abajo.
+        </div>
+      )}
 
-      {formVenta.adelanto_aplica && (
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-          <label style={{ display: "block" }}>
-            <span style={{ display: "block", marginBottom: 6, fontWeight: 800, color: "#40566c" }}>Monto adelanto (MXN) *</span>
-            <input
-              type="number"
-              min={0}
-              step="0.01"
-              value={formVenta.adelanto_monto ?? ""}
-              onChange={(e) =>
-                setFormVenta({
-                  ...formVenta,
-                  adelanto_monto: e.target.value === "" ? null : Number(e.target.value),
-                })
-              }
-              style={{ width: "100%", padding: 10, border: "1px solid #b9cce0" }}
-            />
-          </label>
-          <label style={{ display: "block" }}>
-            <span style={{ display: "block", marginBottom: 6, fontWeight: 800, color: "#40566c" }}>Método adelanto *</span>
-            <select
-              value={formVenta.adelanto_metodo ?? "efectivo"}
-              onChange={(e) =>
-                setFormVenta({
-                  ...formVenta,
-                  adelanto_metodo: e.target.value as VentaMetodoPago,
-                })
-              }
-              style={{ width: "100%", padding: 10, border: "1px solid #b9cce0", background: "#fff" }}
+      <div style={{ display: "grid", gap: 8 }}>
+        {ventaPagos.map((pago, index) => (
+          <div
+            key={pago.ui_id}
+            style={{
+              display: "grid",
+              gridTemplateColumns: "minmax(170px, 1fr) minmax(170px, .8fr) 32px",
+              gap: 7,
+              alignItems: "end",
+              padding: 9,
+              border: "1px solid #dbe6ef",
+              background: "#f8fbff",
+            }}
+          >
+            <label style={{ display: "grid", gap: 4, color: "#40566c", fontSize: 10, fontWeight: 850 }}>
+              MÉTODO
+              <select
+                value={pago.metodo}
+                disabled={editingVentaId !== null}
+                onChange={(e) => setVentaPagos((prev) => prev.map((item) => item.ui_id === pago.ui_id ? { ...item, metodo: e.target.value as VentaMetodoPago } : item))}
+                style={{ width: "100%", padding: 8, border: "1px solid #b9cce0", background: "#fff" }}
+              >
+                {VENTA_METODO_PAGO_OPTIONS.map((opcion) => (
+                  <option key={opcion.value} value={opcion.value}>{opcion.label}</option>
+                ))}
+              </select>
+            </label>
+            <label style={{ display: "grid", gap: 4, color: "#40566c", fontSize: 10, fontWeight: 850 }}>
+              MONTO PAGADO CON ESTE MÉTODO
+              <input
+                type="text"
+                inputMode="decimal"
+                value={String(pago.monto ?? "")}
+                disabled={editingVentaId !== null}
+                onChange={(e) => {
+                  const siguiente = e.target.value.replace(",", ".");
+                  if (siguiente === "" || /^\d+(?:\.\d{0,2})?$/.test(siguiente)) {
+                    setVentaPagos((prev) => prev.map((item) =>
+                      item.ui_id === pago.ui_id ? { ...item, monto: siguiente } : item
+                    ));
+                  }
+                }}
+                placeholder=""
+                style={{ width: "100%", padding: 8, border: "1px solid #8cb4df", textAlign: "right", fontWeight: 900 }}
+              />
+            </label>
+            <button
+              type="button"
+              disabled={editingVentaId !== null || ventaPagos.length === 1}
+              onClick={() => setVentaPagos((prev) => prev.filter((item) => item.ui_id !== pago.ui_id))}
+              aria-label={`Eliminar pago ${index + 1}`}
+              title="Eliminar pago"
+              style={{
+                width: 32,
+                height: 34,
+                border: "1px solid #fecaca",
+                background: editingVentaId !== null || ventaPagos.length === 1 ? "#f1f5f9" : "#fff5f5",
+                color: "#b91c1c",
+                cursor: editingVentaId !== null || ventaPagos.length === 1 ? "not-allowed" : "pointer",
+                fontWeight: 900,
+              }}
             >
-              {VENTA_METODO_PAGO_OPTIONS.map((opcion) => (
+              ×
+            </button>
+          </div>
+        ))}
+      </div>
+
+      {editingVentaId !== null && (
+        <div style={{ display: "grid", gap: 10, padding: 11, border: "1px solid #a7c7e7", background: "#f8fbff" }}>
+          <div style={{ fontWeight: 900, color: "#173b61" }}>Editar seguimiento de la venta</div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: 8 }}>
+            <label style={{ display: "grid", gap: 4, color: "#40566c", fontSize: 10, fontWeight: 850 }}>
+              ESTADO DE LA VENTA
+              <select
+                value={ventaSeguimientoDraft.estado_venta}
+                onChange={(e) => setVentaSeguimientoDraft((prev) => ({ ...prev, estado_venta: e.target.value as VentaEstado }))}
+                style={{ width: "100%", padding: 8, border: "1px solid #b9cce0", background: "#fff" }}
+              >
+                {VENTA_ESTADO_OPTIONS.map((opcion) => (
+                  <option key={`edicion-venta-${opcion.value}`} value={opcion.value}>{opcion.label}</option>
+                ))}
+              </select>
+            </label>
+            <label style={{ display: "grid", gap: 4, color: "#40566c", fontSize: 10, fontWeight: 850 }}>
+              ESTADO DEL PAGO
+              <select
+                value={ventaSeguimientoDraft.estado_pago}
+                disabled={Number(ventaNuevoPagoMonto || 0) > 0}
+                onChange={(e) => setVentaSeguimientoDraft((prev) => ({ ...prev, estado_pago: e.target.value as VentaEstadoPago }))}
+                style={{ width: "100%", padding: 8, border: "1px solid #b9cce0", background: Number(ventaNuevoPagoMonto || 0) > 0 ? "#eef2f6" : "#fff" }}
+              >
+                {VENTA_ESTADO_PAGO_OPTIONS.map((opcion) => (
+                  <option key={`edicion-pago-${opcion.value}`} value={opcion.value}>{opcion.label}</option>
+                ))}
+              </select>
+            </label>
+            <label style={{ display: "grid", gap: 4, color: "#40566c", fontSize: 10, fontWeight: 850 }}>
+              PEDIDO / ENTREGA
+              <select
+                value={ventaSeguimientoDraft.estado_pedido}
+                onChange={(e) => setVentaSeguimientoDraft((prev) => ({ ...prev, estado_pedido: e.target.value as VentaEstadoPedido }))}
+                style={{ width: "100%", padding: 8, border: "1px solid #b9cce0", background: "#fff" }}
+              >
+                {VENTA_ESTADO_PEDIDO_OPTIONS.map((opcion) => (
+                  <option key={`edicion-pedido-${opcion.value}`} value={opcion.value}>{opcion.label}</option>
+                ))}
+              </select>
+            </label>
+          </div>
+          {ventaSaldo > 0 && ventaSeguimientoDraft.estado_pago !== "reembolsada" && (
+            <div style={{ display: "grid", gridTemplateColumns: "minmax(170px, 1fr) minmax(170px, .8fr)", gap: 8, paddingTop: 9, borderTop: "1px solid #dbe6ef" }}>
+              <label style={{ display: "grid", gap: 4, color: "#40566c", fontSize: 10, fontWeight: 850 }}>
+                MÉTODO DEL PAGO NUEVO
+                <select
+                  value={ventaNuevoPagoMetodo}
+                  onChange={(e) => setVentaNuevoPagoMetodo(e.target.value as VentaMetodoPago)}
+                  style={{ width: "100%", padding: 8, border: "1px solid #b9cce0", background: "#fff" }}
+                >
+                  {VENTA_METODO_PAGO_OPTIONS.map((opcion) => (
+                    <option key={`pago-nuevo-${opcion.value}`} value={opcion.value}>{opcion.label}</option>
+                  ))}
+                </select>
+              </label>
+              <label style={{ display: "grid", gap: 4, color: "#40566c", fontSize: 10, fontWeight: 850 }}>
+                MONTO ADICIONAL
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  value={ventaNuevoPagoMonto}
+                  onChange={(e) => {
+                    const entrada = e.target.value.replace(",", ".");
+                    if (entrada === "" || /^\d+(?:\.\d{0,2})?$/.test(entrada)) {
+                      setVentaNuevoPagoMonto(entrada);
+                    }
+                  }}
+                  placeholder="0"
+                  style={{ width: "100%", padding: 8, border: "1px solid #8cb4df", textAlign: "right", fontWeight: 900 }}
+                />
+              </label>
+            </div>
+          )}
+          <div style={{ color: "#718397", fontSize: 10 }}>
+            Saldo actual: ${ventaSaldo.toFixed(2)}. Si registras un pago, el estado se calculará automáticamente.
+          </div>
+        </div>
+      )}
+
+      {editingVentaId === null && (
+        <>
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+            <button
+              type="button"
+              onClick={() => {
+                ventaPagoSeqRef.current += 1;
+                const usados = new Set(ventaPagos.map((pago) => pago.metodo));
+                const siguiente = VENTA_METODO_PAGO_OPTIONS.find((opcion) => !usados.has(opcion.value))?.value || "efectivo";
+                setVentaPagos((prev) => [...prev, { ui_id: ventaPagoSeqRef.current, metodo: siguiente, monto: "" }]);
+              }}
+              style={{ ...actionBtnStyle, padding: "7px 10px", borderColor: "#8fb1d5", color: "#174ea6" }}
+            >
+              + Agregar otro pago
+            </button>
+          </div>
+          <label style={{ display: "grid", gap: 4, maxWidth: 270, color: "#40566c", fontSize: 10, fontWeight: 850 }}>
+            PLAN DE FINANCIAMIENTO (OPCIONAL)
+            <select
+              value={
+                ["meses_sin_intereses", "meses_con_intereses"].includes(formVenta.forma_liquidacion || "")
+                  ? formVenta.forma_liquidacion
+                  : ""
+              }
+              onChange={(e) => setFormVenta((prev) => ({
+                ...prev,
+                forma_liquidacion: (e.target.value || "pago_completo") as VentaFormaLiquidacion,
+                plazo_meses: null,
+              }))}
+              style={{ width: "100%", padding: 8, border: "1px solid #b9cce0", background: "#fff" }}
+            >
+              <option value="">Sin plan especial</option>
+              {VENTA_PLAN_FINANCIAMIENTO_OPTIONS.map((opcion) => (
                 <option key={opcion.value} value={opcion.value}>{opcion.label}</option>
               ))}
             </select>
           </label>
-        </div>
+          {["meses_sin_intereses", "meses_con_intereses"].includes(formVenta.forma_liquidacion || "") && (
+            <div style={{ display: "grid", gap: 6 }}>
+              <span style={{ color: "#40566c", fontSize: 10, fontWeight: 850 }}>
+                PLAZO *
+              </span>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(6, minmax(58px, 1fr))", gap: 6 }}>
+                {[3, 6, 9, 12, 18, 24].map((meses) => {
+                  const activo = formVenta.plazo_meses === meses;
+                  return (
+                    <button
+                      key={meses}
+                      type="button"
+                      aria-pressed={activo}
+                      onClick={() => setFormVenta((prev) => ({ ...prev, plazo_meses: meses }))}
+                      style={{
+                        padding: "8px 6px",
+                        border: activo ? "1px solid #1565c0" : "1px solid #cbd8e4",
+                        background: activo ? "#1565c0" : "#fff",
+                        color: activo ? "#fff" : "#40566c",
+                        fontWeight: 850,
+                        cursor: "pointer",
+                      }}
+                    >
+                      {meses} meses
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </>
       )}
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", border: "1px solid #dbe6ef" }}>
+        <div style={{ padding: 9, background: "#eff6ff" }}>
+          <div style={{ color: "#52708e", fontSize: 10, fontWeight: 850 }}>PAGADO</div>
+          <strong style={{ color: "#174ea6" }}>${ventaMontoPagado.toFixed(2)}</strong>
+        </div>
+        <div style={{ padding: 9, background: ventaSaldo > 0 ? "#fff7ed" : "#f0fdf4" }}>
+          <div style={{ color: ventaSaldo > 0 ? "#9a4c0e" : "#166534", fontSize: 10, fontWeight: 850 }}>SALDO POR PAGAR</div>
+          <strong style={{ color: ventaSaldo > 0 ? "#c2410c" : "#166534" }}>${ventaSaldo.toFixed(2)}</strong>
+        </div>
+      </div>
+      <div style={{ color: "#718397", fontSize: 10 }}>
+        “Saldo por pagar” es la cantidad que el cliente todavía debe.
+      </div>
     </section>
   );
 
@@ -5487,7 +6322,7 @@ export default function App() {
           <div style={{ fontWeight: 900, color: "#16385d" }}>Resumen de productos</div>
           <div style={{ fontSize: 12, color: "#6b7f93" }}>{ventaCarritoDetalle.length} producto(s) diferente(s)</div>
         </div>
-        {ventaCarritoDetalle.length > 0 && (
+        {ventaCarritoDetalle.length > 0 && editingVentaId === null && (
           <button
             type="button"
             onClick={() => setVentaCarrito([])}
@@ -5498,13 +6333,18 @@ export default function App() {
         )}
       </div>
 
-      {(ventaArmazonSeleccionado || ventaDisenoSeleccionado || ventaTratamientoSeleccionado) && (
+      {(ventaArmazonesSeleccionados.length > 0 || ventaDisenoSeleccionado || ventaTratamientoSeleccionado) && (
         <div style={{ display: "grid", gap: 5, marginBottom: 10, padding: 10, border: "1px solid #dbe6ef", background: "#fff" }}>
           <div style={{ display: "flex", justifyContent: "space-between", gap: 10, fontSize: 12 }}>
-            <span style={{ color: "#6b7f93" }}>Armazón</span>
+            <span style={{ color: "#6b7f93" }}>Armazones</span>
             <strong style={{ textAlign: "right", color: "#31475d" }}>
-              {ventaArmazonSeleccionado
-                ? `${ventaArmazonSeleccionado.nombre} · $${Number(ventaArmazonSeleccionado.precio).toFixed(2)}`
+              {ventaArmazonesSeleccionados.length > 0
+                ? ventaArmazonesSeleccionados
+                    .map((producto) => {
+                      const cantidad = ventaCarrito.find((item) => item.producto_id === producto.producto_id)?.cantidad || 1;
+                      return `${cantidad}× ${producto.nombre} · $${(Number(producto.precio) * cantidad).toFixed(2)}`;
+                    })
+                    .join(" · ")
                 : "Pendiente"}
             </strong>
           </div>
@@ -5568,22 +6408,28 @@ export default function App() {
                   min={1}
                   max={producto.controla_stock ? producto.stock : 99}
                   value={cantidad}
+                  disabled={editingVentaId !== null || (esMica && ventaArmazonesSeleccionados.length > 0)}
                   onChange={(e) => actualizarCantidadCarrito(producto, Number(e.target.value))}
                   aria-label={`Cantidad de ${producto.nombre}`}
-                  style={{ width: "100%", padding: 7, border: "1px solid #b9cce0" }}
+                  title={esMica && ventaArmazonesSeleccionados.length > 0 ? "La cantidad se sincroniza con los armazones." : undefined}
+                  style={{ width: "100%", padding: 7, border: "1px solid #b9cce0", background: editingVentaId !== null || (esMica && ventaArmazonesSeleccionados.length > 0) ? "#eef2f6" : "#fff" }}
                 />
                 <strong style={{ textAlign: "right", color: "#174ea6" }}>
                   ${(Number(producto.precio || 0) * cantidad).toFixed(2)}
                 </strong>
-                <button
-                  type="button"
-                  onClick={() => quitarProductoCarrito(producto.producto_id)}
-                  aria-label={`Quitar ${producto.nombre}`}
-                  title="Quitar"
-                  style={{ width: 30, height: 30, border: "1px solid #fecaca", background: "#fff5f5", color: "#b91c1c", cursor: "pointer", fontWeight: 900 }}
-                >
-                  ×
-                </button>
+                {editingVentaId === null ? (
+                  <button
+                    type="button"
+                    onClick={() => quitarProductoCarrito(producto.producto_id)}
+                    aria-label={`Quitar ${producto.nombre}`}
+                    title="Quitar"
+                    style={{ width: 30, height: 30, border: "1px solid #fecaca", background: "#fff5f5", color: "#b91c1c", cursor: "pointer", fontWeight: 900 }}
+                  >
+                    ×
+                  </button>
+                ) : (
+                  <span aria-hidden="true" />
+                )}
               </div>
             );
           })}
@@ -5593,132 +6439,255 @@ export default function App() {
       {renderVentaPagoLiquidacion()}
 
       <div style={{ marginTop: 12, display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: 12, alignItems: "end" }}>
-        <label style={{ display: "block", fontWeight: 800, color: "#31475d" }}>
-          Cupón / descuento (%)
-          <input
-            type="number"
-            min={0}
-            max={100}
-            step="0.01"
-            value={ventaDescuentoPorcentaje}
-            onChange={(e) => {
-              const next = Math.min(100, Math.max(0, Number(e.target.value) || 0));
-              setVentaDescuentoPorcentaje(next);
-              setFormVenta((curr) => ({
-                ...curr,
-                descuento_porcentaje: next,
-                descuento_motivo: next > 0 ? curr.descuento_motivo : null,
-                cupon_tipo: next > 0 ? curr.cupon_tipo : null,
-              }));
-            }}
-            style={{ width: "100%", marginTop: 5, padding: 9, border: "1px solid #b9cce0" }}
-          />
-          <span style={{ display: "flex", gap: 5, flexWrap: "wrap", marginTop: 6 }}>
-            {[0, 5, 10, 15, 20, 25, 50].map((porcentaje) => (
-              <button
-                key={porcentaje}
-                type="button"
-                onClick={() => {
-                  setVentaDescuentoPorcentaje(porcentaje);
+        <div style={{ display: "block", fontWeight: 800, color: "#31475d" }}>
+          <div>Cupón / descuento</div>
+          <div style={{ display: "grid", gridTemplateColumns: "minmax(120px, .8fr) minmax(150px, 1.2fr)", gap: 8, marginTop: 5 }}>
+            <label style={{ display: "grid", gap: 4, fontSize: 11 }}>
+              Tipo
+              <select
+                value={ventaDescuentoTipo}
+                onChange={(e) => {
+                  const tipo = e.target.value as "porcentaje" | "monto";
+                  setVentaDescuentoTipo(tipo);
+                  setVentaDescuentoPorcentaje(0);
+                  setVentaDescuentoMontoFijo(0);
+                  setVentaDescuentoEntrada("");
                   setFormVenta((curr) => ({
                     ...curr,
-                    descuento_porcentaje: porcentaje,
-                    descuento_motivo: porcentaje > 0 ? curr.descuento_motivo : null,
-                    cupon_tipo: porcentaje > 0 ? curr.cupon_tipo : null,
+                    descuento_porcentaje: 0,
+                    descuento_monto: 0,
+                    descuento_motivo: null,
+                    cupon_tipo: null,
+                  }));
+                }}
+                style={{ width: "100%", padding: 9, border: "1px solid #b9cce0", background: "#fff" }}
+              >
+                <option value="porcentaje">Porcentaje (%)</option>
+                <option value="monto">Monto fijo (MXN)</option>
+              </select>
+            </label>
+            <label style={{ display: "grid", gap: 4, fontSize: 11 }}>
+              {ventaDescuentoTipo === "porcentaje" ? "Porcentaje" : "Cantidad a descontar"}
+              <input
+                type="text"
+                inputMode="decimal"
+                value={ventaDescuentoEntrada}
+                placeholder="0"
+                onChange={(e) => {
+                  const entrada = e.target.value.replace(",", ".");
+                  if (entrada !== "" && !/^\d+(?:\.\d{0,2})?$/.test(entrada)) return;
+                  const raw = entrada === "" ? 0 : Number(entrada);
+                  if (ventaDescuentoTipo === "porcentaje" && raw > 100) return;
+                  setVentaDescuentoEntrada(entrada);
+                  const next = Math.max(0, raw);
+                  if (ventaDescuentoTipo === "porcentaje") {
+                    setVentaDescuentoPorcentaje(next);
+                    setVentaDescuentoMontoFijo(0);
+                  } else {
+                    setVentaDescuentoMontoFijo(next);
+                    setVentaDescuentoPorcentaje(0);
+                  }
+                  setFormVenta((curr) => ({
+                    ...curr,
+                    descuento_porcentaje: ventaDescuentoTipo === "porcentaje" ? next : 0,
+                    descuento_monto: ventaDescuentoTipo === "monto" ? next : 0,
+                    descuento_motivo: next > 0 ? curr.descuento_motivo : null,
+                    cupon_tipo: next > 0 ? curr.cupon_tipo : null,
+                  }));
+                }}
+                style={{ width: "100%", padding: 9, border: "1px solid #b9cce0" }}
+              />
+            </label>
+          </div>
+          <span style={{ display: "flex", gap: 5, flexWrap: "wrap", marginTop: 6 }}>
+            {(ventaDescuentoTipo === "porcentaje" ? [0, 5, 10, 15, 20, 25, 50] : [0, 100, 250, 500, 1000]).map((valor) => (
+              <button
+                key={valor}
+                type="button"
+                onClick={() => {
+                  if (ventaDescuentoTipo === "porcentaje") {
+                    setVentaDescuentoPorcentaje(valor);
+                    setVentaDescuentoMontoFijo(0);
+                  } else {
+                    setVentaDescuentoMontoFijo(valor);
+                    setVentaDescuentoPorcentaje(0);
+                  }
+                  setVentaDescuentoEntrada(valor === 0 ? "" : String(valor));
+                  setFormVenta((curr) => ({
+                    ...curr,
+                    descuento_porcentaje: ventaDescuentoTipo === "porcentaje" ? valor : 0,
+                    descuento_monto: ventaDescuentoTipo === "monto" ? valor : 0,
+                    descuento_motivo: valor > 0 ? curr.descuento_motivo : null,
+                    cupon_tipo: valor > 0 ? curr.cupon_tipo : null,
                   }));
                 }}
                 style={{
                   padding: "5px 8px",
-                  border: ventaDescuentoPorcentaje === porcentaje ? "1px solid #1677d2" : "1px solid #cfdbe6",
-                  background: ventaDescuentoPorcentaje === porcentaje ? "#ddebff" : "#fff",
+                  border: (ventaDescuentoTipo === "porcentaje" ? ventaDescuentoPorcentaje : ventaDescuentoMontoFijo) === valor ? "1px solid #1677d2" : "1px solid #cfdbe6",
+                  background: (ventaDescuentoTipo === "porcentaje" ? ventaDescuentoPorcentaje : ventaDescuentoMontoFijo) === valor ? "#ddebff" : "#fff",
                   color: "#174ea6",
                   cursor: "pointer",
                   fontWeight: 800,
                 }}
               >
-                {porcentaje}%
+                {ventaDescuentoTipo === "porcentaje" ? `${valor}%` : `$${valor}`}
               </button>
             ))}
           </span>
-          {ventaDescuentoPorcentaje > 0 && (
-            <span style={{ display: "grid", gap: 10, marginTop: 12 }}>
-              <span>
-                <span style={{ display: "block", marginBottom: 6, color: "#40566c", fontSize: 12 }}>
-                  Motivo del descuento *
-                </span>
-                <span style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                  {VENTA_DESCUENTO_MOTIVO_OPTIONS.map((opcion) => {
-                    const activo = formVenta.descuento_motivo === opcion.value;
-                    return (
-                      <button
-                        key={opcion.value}
-                        type="button"
-                        aria-pressed={activo}
-                        onClick={() => setFormVenta((curr) => ({ ...curr, descuento_motivo: opcion.value }))}
-                        style={{
-                          padding: "7px 10px",
-                          border: activo ? "1px solid #1565c0" : "1px solid #cbd8e4",
-                          background: activo ? "#1565c0" : "#fff",
-                          color: activo ? "#fff" : "#40566c",
-                          fontWeight: 800,
-                          cursor: "pointer",
-                        }}
-                      >
-                        {opcion.label}
-                      </button>
-                    );
-                  })}
-                </span>
+          {ventaDescuentoTipo === "monto" && ventaDescuentoMontoFijo > ventaSubtotalResumen && (
+            <span style={{ display: "block", marginTop: 7, color: "#b91c1c", fontSize: 11 }}>
+              El descuento no puede ser mayor al subtotal.
+            </span>
+          )}
+          {ventaDescuentoActivo && (
+            <span style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 12 }}>
+              <span style={{ display: "grid", gap: 5 }}>
+                <span style={{ color: "#40566c", fontSize: 12 }}>Motivo del descuento *</span>
+                <select
+                  value={formVenta.descuento_motivo || ""}
+                  onChange={(e) => setFormVenta((curr) => ({ ...curr, descuento_motivo: e.target.value || null }))}
+                  style={{ width: "100%", padding: 9, border: "1px solid #cbd8e4", background: "#fff" }}
+                >
+                  <option value="">Seleccionar motivo</option>
+                  {VENTA_DESCUENTO_MOTIVO_OPTIONS.map((opcion) => (
+                    <option key={opcion.value} value={opcion.value}>{opcion.label}</option>
+                  ))}
+                </select>
               </span>
-              <span>
-                <span style={{ display: "block", marginBottom: 6, color: "#40566c", fontSize: 12 }}>
-                  Tipo de cupón *
-                </span>
-                <span style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                  {VENTA_CUPON_TIPO_OPTIONS.map((opcion) => {
-                    const activo = formVenta.cupon_tipo === opcion.value;
-                    return (
-                      <button
-                        key={opcion.value}
-                        type="button"
-                        aria-pressed={activo}
-                        onClick={() => setFormVenta((curr) => ({ ...curr, cupon_tipo: opcion.value }))}
-                        style={{
-                          padding: "7px 10px",
-                          border: activo ? "1px solid #0f766e" : "1px solid #cbd8e4",
-                          background: activo ? "#0f766e" : "#fff",
-                          color: activo ? "#fff" : "#40566c",
-                          fontWeight: 800,
-                          cursor: "pointer",
-                        }}
-                      >
-                        {opcion.label}
-                      </button>
-                    );
-                  })}
-                </span>
+              <span style={{ display: "grid", gap: 5 }}>
+                <span style={{ color: "#40566c", fontSize: 12 }}>Tipo de cupón *</span>
+                <select
+                  value={formVenta.cupon_tipo || ""}
+                  onChange={(e) => setFormVenta((curr) => ({ ...curr, cupon_tipo: e.target.value || null }))}
+                  style={{ width: "100%", padding: 9, border: "1px solid #cbd8e4", background: "#fff" }}
+                >
+                  <option value="">Seleccionar tipo de cupón</option>
+                  {VENTA_CUPON_TIPO_OPTIONS.map((opcion) => (
+                    <option key={opcion.value} value={opcion.value}>{opcion.label}</option>
+                  ))}
+                </select>
               </span>
             </span>
           )}
-        </label>
+        </div>
         <div style={{ padding: 12, background: "#102f50", color: "#fff" }}>
           <div style={{ display: "flex", justifyContent: "space-between", gap: 10, fontSize: 13 }}>
             <span>Subtotal</span><strong>${ventaSubtotalResumen.toFixed(2)}</strong>
           </div>
           <div style={{ display: "flex", justifyContent: "space-between", gap: 10, marginTop: 5, fontSize: 13, color: "#a9d5ff" }}>
-            <span>Descuento ({ventaDescuentoPorcentaje}%)</span><strong>−${ventaDescuentoMonto.toFixed(2)}</strong>
+            <span>
+              Descuento {ventaDescuentoTipo === "porcentaje" ? `(${ventaDescuentoPorcentaje}%)` : "(monto fijo)"}
+            </span>
+            <strong>−${ventaDescuentoMonto.toFixed(2)}</strong>
           </div>
           <div style={{ display: "flex", justifyContent: "space-between", gap: 10, marginTop: 5, fontSize: 13, color: "#cbdff3" }}>
-            <span>Adelanto</span><strong>−${ventaDeposito.toFixed(2)}</strong>
+            <span>Pagado</span><strong>−${ventaMontoPagado.toFixed(2)}</strong>
           </div>
           <div style={{ display: "flex", justifyContent: "space-between", gap: 10, marginTop: 5, fontSize: 13, color: "#fff" }}>
-            <span>Saldo pendiente</span><strong>${ventaSaldo.toFixed(2)}</strong>
+            <span>Saldo por pagar</span><strong>${ventaSaldo.toFixed(2)}</strong>
           </div>
           <div style={{ display: "flex", justifyContent: "space-between", gap: 10, marginTop: 9, paddingTop: 9, borderTop: "1px solid rgba(255,255,255,.22)", fontSize: 19 }}>
             <span>Total</span><strong>${ventaTotalCarrito.toFixed(2)} MXN</strong>
           </div>
         </div>
       </div>
+      {editingVentaId === null && (
+        <div style={{ display: "grid", gap: 6, marginTop: 12 }}>
+          <button
+            type="button"
+            onClick={() => {
+              setError(null);
+              if (!formVenta.paciente_id) {
+                setError("Selecciona un paciente antes de confirmar.");
+                return;
+              }
+              if (ventaCarritoDetalle.length === 0) {
+                setError("Agrega al menos un producto antes de confirmar.");
+                return;
+              }
+              if (
+                ventaArmazonesSeleccionados.length > 0
+                && (!ventaDisenoSeleccionado || !ventaTratamientoSeleccionado)
+              ) {
+                setError("Completa la selección de micas: diseño y tratamiento.");
+                return;
+              }
+              if (ventaMontoPagado <= 0) {
+                setError("Registra al menos un pago o adelanto antes de confirmar.");
+                return;
+              }
+              if (ventaMontoPagado > ventaTotalCarrito) {
+                setError("La suma de los pagos no puede ser mayor al total.");
+                return;
+              }
+              if (
+                ["meses_sin_intereses", "meses_con_intereses"].includes(formVenta.forma_liquidacion || "")
+                && ![3, 6, 9, 12, 18, 24].includes(Number(formVenta.plazo_meses || 0))
+              ) {
+                setError("Selecciona el plazo del financiamiento.");
+                return;
+              }
+              if (ventaDescuentoTipo === "monto" && ventaDescuentoMontoFijo > ventaSubtotalResumen) {
+                setError("El descuento en pesos no puede ser mayor al subtotal.");
+                return;
+              }
+              if (ventaDescuentoActivo && (!formVenta.descuento_motivo || !formVenta.cupon_tipo)) {
+                setError("Completa el motivo y el tipo de cupón del descuento.");
+                return;
+              }
+              setVentaConfirmacionOpen(true);
+            }}
+            disabled={savingVenta || !canCreateVenta}
+            style={{
+              width: "100%",
+              padding: 13,
+              border: "1px solid #0f766e",
+              background: savingVenta || !canCreateVenta ? "#dfe9e8" : "#0f766e",
+              color: savingVenta || !canCreateVenta ? "#526b7b" : "#fff",
+              fontWeight: 900,
+              cursor: savingVenta || !canCreateVenta ? "not-allowed" : "pointer",
+            }}
+          >
+            Confirmar venta
+          </button>
+          <span style={{ textAlign: "center", color: "#718397", fontSize: 10 }}>
+            Revisarás una confirmación final antes de guardar.
+          </span>
+          {error && (
+            <span style={{ padding: 9, border: "1px solid #fecaca", background: "#fef2f2", color: "#991b1b", fontSize: 11 }}>
+              {error}
+            </span>
+          )}
+        </div>
+      )}
+      {editingVentaId !== null && (
+        <div style={{ display: "grid", gap: 6, marginTop: 12 }}>
+          <button
+            type="button"
+            onClick={() => ventaFormRef.current?.requestSubmit()}
+            disabled={savingVenta || !canEditVenta}
+            style={{
+              width: "100%",
+              padding: 13,
+              border: "1px solid #0f766e",
+              background: savingVenta || !canEditVenta ? "#dfe9e8" : "#0f766e",
+              color: savingVenta || !canEditVenta ? "#526b7b" : "#fff",
+              fontWeight: 900,
+              cursor: savingVenta ? "wait" : "pointer",
+            }}
+          >
+            {savingVenta ? "Guardando cambios..." : "Guardar cambios de la venta"}
+          </button>
+          <span style={{ textAlign: "center", color: "#718397", fontSize: 10 }}>
+            Actualiza cliente, descuento, notas, estados y pagos adicionales sin volver a descontar inventario.
+          </span>
+          {error && (
+            <span style={{ padding: 9, border: "1px solid #fecaca", background: "#fef2f2", color: "#991b1b", fontSize: 11 }}>
+              {error}
+            </span>
+          )}
+        </div>
+      )}
     </section>
   );
 
@@ -5760,7 +6729,10 @@ export default function App() {
         <section style={{ border: ventaLentesPaso === 1 ? "2px solid #1677d2" : "1px solid #cbd8e4", background: "#fff" }}>
           {ventaLentesPaso === 1 ? (
             <div style={{ padding: 11 }}>
-              <div style={{ marginBottom: 8, fontWeight: 900, color: "#173b61" }}>1. Selecciona el armazón</div>
+              <div style={{ marginBottom: 3, fontWeight: 900, color: "#173b61" }}>1. Selecciona uno o varios armazones</div>
+              <div style={{ marginBottom: 8, color: "#718397", fontSize: 11 }}>
+                Puedes combinar diferentes modelos; vuelve a pulsar uno para quitarlo.
+              </div>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(205px, 1fr))", gap: 7 }}>
                 {ventaArmazonesOpticos.map((producto) =>
                   renderVentaProductoButton(
@@ -5769,9 +6741,28 @@ export default function App() {
                   ),
                 )}
               </div>
+              {ventaArmazonesSeleccionados.length > 0 && (
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, marginTop: 10, paddingTop: 10, borderTop: "1px solid #dbe6ef" }}>
+                  <strong style={{ color: "#174ea6" }}>
+                    {ventaArmazonesSeleccionados.length} modelo(s) seleccionado(s)
+                  </strong>
+                  <button
+                    type="button"
+                    onClick={() => setVentaLentesPaso(2)}
+                    style={{ padding: "9px 14px", border: "1px solid #1d4ed8", background: "#2563eb", color: "#fff", fontWeight: 900, cursor: "pointer" }}
+                  >
+                    Continuar con micas →
+                  </button>
+                </div>
+              )}
             </div>
           ) : (
-            resumenPaso("PASO 1 · ARMAZÓN", ventaArmazonSeleccionado, 1)
+            resumenPaso(
+              "PASO 1 · ARMAZONES",
+              ventaArmazonSeleccionado,
+              1,
+              `${ventaArmazonesSeleccionados.length} modelo(s)`,
+            )
           )}
         </section>
 
@@ -6172,7 +7163,7 @@ export default function App() {
 
         <button
           type="button"
-          onClick={logout}
+          onClick={() => setLogoutConfirmOpen(true)}
           style={{
             padding: "10px 14px",
             borderRadius: 12,
@@ -6238,6 +7229,15 @@ export default function App() {
         {canViewVentasTab && (
           <TabButton variant="ventas" active={tab === "ventas"} onClick={() => setTab("ventas")}>
             Ventas
+          </TabButton>
+        )}
+        {canViewVentasTab && (
+          <TabButton
+            variant="resumen_ventas"
+            active={tab === "resumen_ventas"}
+            onClick={() => setTab("resumen_ventas")}
+          >
+            Resumen de ventas
           </TabButton>
         )}
         <TabButton variant="estadisticas" active={tab === "estadisticas"} onClick={() => setTab("estadisticas")}>
@@ -7710,7 +8710,7 @@ export default function App() {
       {/* ========================= VENTAS ========================= */}
       {canViewVentasTab && tab === "ventas" && (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(440px, 1fr))", gap: 16, alignItems: "start" }}>
-          <form onSubmit={onSubmitVenta} style={{ border: "1px solid #ddd", borderRadius: 12, padding: 14 }}>
+          <form ref={ventaFormRef} onSubmit={onSubmitVenta} style={{ border: "1px solid #ddd", borderRadius: 12, padding: 14 }}>
             <div style={{ fontWeight: 700, marginBottom: 10 }}>
               {editingVentaId === null ? "Nueva venta" : `Editando venta #${editingVentaId}`}
             </div>
@@ -8033,22 +9033,24 @@ export default function App() {
               />
             </label>
 
-            <button
-              type="submit"
-              disabled={savingVenta || !formVenta.paciente_id || (editingVentaId === null ? !canCreateVenta : !canEditVenta)}
-              style={{
-                width: "100%",
-                padding: 12,
-                borderRadius: 12,
-                border: "1px solid #3f6784",
-                background: savingVenta ? "#e7eff6" : "#4D7A9B",
-                color: savingVenta ? "#2b3f4f" : "#fff",
-                fontWeight: 700,
-                cursor: savingVenta ? "not-allowed" : "pointer",
-              }}
-            >
-              {savingVenta ? "Guardando..." : editingVentaId === null ? "Guardar venta" : "Actualizar venta"}
-            </button>
+            {(!isAdmin || editingVentaId !== null) && (
+              <button
+                type="submit"
+                disabled={savingVenta || !formVenta.paciente_id || (editingVentaId === null ? !canCreateVenta : !canEditVenta)}
+                style={{
+                  width: "100%",
+                  padding: 12,
+                  borderRadius: 12,
+                  border: "1px solid #3f6784",
+                  background: savingVenta ? "#e7eff6" : "#4D7A9B",
+                  color: savingVenta ? "#2b3f4f" : "#fff",
+                  fontWeight: 700,
+                  cursor: savingVenta ? "not-allowed" : "pointer",
+                }}
+              >
+                {savingVenta ? "Guardando..." : editingVentaId === null ? "Guardar venta" : "Actualizar venta"}
+              </button>
+            )}
 
             <button
               type="button"
@@ -8162,7 +9164,7 @@ export default function App() {
                   <th align="left" style={{ padding: 10 }}>Compra</th>
                   <th align="left" style={{ padding: 10 }}>Monto</th>
                   <th align="left" style={{ padding: 10 }}>Método</th>
-                  <th align="left" style={{ padding: 10 }}>Adelanto</th>
+                  <th align="left" style={{ padding: 10 }}>Saldo por pagar</th>
                   <th align="left" style={{ padding: 10 }}>Acciones</th>
                 </tr>
               </thead>
@@ -8204,18 +9206,16 @@ export default function App() {
                     <td style={{ padding: 10 }}>
                       <div>{formatMetodoPagoLabel(v.metodo_pago)}</div>
                       <div style={{ marginTop: 3, color: "#718397", fontSize: 11 }}>
-                        {formatFormaLiquidacionLabel(v.forma_liquidacion)}
+                        {formatVentaEstadoPagoLabel(v.estado_pago)}
                       </div>
                     </td>
                     <td style={{ padding: 10 }}>
-                      {v.adelanto_aplica
-                        ? `$${Number(v.adelanto_monto || 0).toFixed(2)} (${v.adelanto_metodo || ""})`
-                        : "no"}
+                      ${Number(v.saldo_pendiente || 0).toFixed(2)}
                     </td>
                     <td style={{ padding: 10 }}>
                       <button
                         type="button"
-                        onClick={() => setSelectedVentaDetalle(v)}
+                        onClick={() => openVentaDetalle(v)}
                         style={{ padding: "6px 10px", borderRadius: 10, border: "1px solid #ddd", background: "#fff", fontWeight: 700, cursor: "pointer", marginRight: 8 }}
                       >
                         Ver
@@ -8252,6 +9252,355 @@ export default function App() {
 
             {isAdmin && renderVentaResumenProductos()}
           </div>
+        </div>
+      )}
+
+      {/* ========================= RESUMEN DE VENTAS ========================= */}
+      {canViewVentasTab && tab === "resumen_ventas" && (
+        <div style={{ display: "grid", gap: 16 }}>
+          <section style={{ ...softCard, padding: 18, background: "#f8fbff", borderColor: "#c9dced" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 14, alignItems: "center", flexWrap: "wrap" }}>
+              <div>
+                <h2 style={{ margin: 0, color: "#173b61" }}>Resumen de ventas</h2>
+                <div style={{ marginTop: 5, color: "#6b7f93" }}>
+                  Localiza rápidamente ventas con saldo por pagar y consulta al cliente o el detalle de la venta.
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={loadVentasResumen}
+                disabled={loadingVentasResumen}
+                style={{
+                  ...actionBtnStyle,
+                  padding: "10px 14px",
+                  borderColor: "#8fb1d5",
+                  color: "#174ea6",
+                  cursor: loadingVentasResumen ? "wait" : "pointer",
+                }}
+              >
+                {loadingVentasResumen ? "Actualizando..." : "Actualizar resumen"}
+              </button>
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(175px, 1fr))", gap: 10, marginTop: 16 }}>
+              {([
+                {
+                  value: "por_cobrar",
+                  label: "Por cobrar",
+                  count: ventasResumenMetricas.porCobrar,
+                  detail: `$${ventasResumenMetricas.saldoPorCobrar.toFixed(2)} pendientes`,
+                  color: "#c2410c",
+                  background: "#fff7ed",
+                },
+                {
+                  value: "parciales",
+                  label: "Pago parcial",
+                  count: ventasResumenMetricas.parciales,
+                  detail: "Ya pagaron una parte",
+                  color: "#a16207",
+                  background: "#fffbeb",
+                },
+                {
+                  value: "liquidadas",
+                  label: "Pagadas",
+                  count: ventasResumenMetricas.liquidadas,
+                  detail: "Pagadas por completo",
+                  color: "#166534",
+                  background: "#f0fdf4",
+                },
+                {
+                  value: "todas",
+                  label: "Todas las ventas",
+                  count: ventasResumenMetricas.todas,
+                  detail: "Historial completo",
+                  color: "#174ea6",
+                  background: "#eff6ff",
+                },
+              ] as const).map((filtro) => {
+                const activo = ventasResumenEstado === filtro.value;
+                return (
+                  <button
+                    key={filtro.value}
+                    type="button"
+                    aria-pressed={activo}
+                    onClick={() => setVentasResumenEstado(filtro.value)}
+                    style={{
+                      padding: 13,
+                      border: activo ? `2px solid ${filtro.color}` : "1px solid #d7e3ed",
+                      background: filtro.background,
+                      color: filtro.color,
+                      textAlign: "left",
+                      cursor: "pointer",
+                      boxShadow: activo ? "0 8px 20px rgba(15, 23, 42, .10)" : "none",
+                    }}
+                  >
+                    <span style={{ display: "block", fontSize: 11, fontWeight: 900, textTransform: "uppercase", letterSpacing: .5 }}>
+                      {filtro.label}
+                    </span>
+                    <strong style={{ display: "block", marginTop: 4, fontSize: 24 }}>{filtro.count}</strong>
+                    <span style={{ display: "block", marginTop: 2, fontSize: 11, opacity: .82 }}>{filtro.detail}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </section>
+
+          <section style={{ ...softCard, overflow: "hidden" }}>
+            <div style={{ padding: 14, borderBottom: "1px solid #dbe6ef", display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+              <input
+                value={qVentasResumen}
+                onChange={(e) => setQVentasResumen(e.target.value)}
+                placeholder="Buscar por cliente, venta, producto, método o monto..."
+                style={{ flex: "1 1 360px", minWidth: 220, padding: 10, border: "1px solid #cbd8e4", background: "#fff" }}
+              />
+              <select
+                value={ventasResumenEstadoVenta}
+                onChange={(e) => setVentasResumenEstadoVenta(e.target.value as "todas" | VentaEstado)}
+                aria-label="Filtrar por estado de la venta"
+                style={{ minWidth: 190, padding: 10, border: "1px solid #cbd8e4", background: "#fff" }}
+              >
+                <option value="todas">Todos los estados de venta</option>
+                {VENTA_ESTADO_OPTIONS.map((opcion) => (
+                  <option key={`filtro-${opcion.value}`} value={opcion.value}>{opcion.label}</option>
+                ))}
+              </select>
+              <select
+                value={ventasResumenEstadoPago}
+                onChange={(e) => setVentasResumenEstadoPago(e.target.value as "todos" | VentaEstadoPago)}
+                aria-label="Filtrar por estado del pago"
+                style={{ minWidth: 170, padding: 10, border: "1px solid #cbd8e4", background: "#fff" }}
+              >
+                <option value="todos">Todos los estados de pago</option>
+                {VENTA_ESTADO_PAGO_OPTIONS.map((opcion) => (
+                  <option key={`filtro-pago-${opcion.value}`} value={opcion.value}>{opcion.label}</option>
+                ))}
+              </select>
+              <select
+                value={ventasResumenPeriodo}
+                onChange={(e) => setVentasResumenPeriodo(e.target.value as typeof ventasResumenPeriodo)}
+                aria-label="Filtrar por periodo"
+                style={{ minWidth: 155, padding: 10, border: "1px solid #cbd8e4", background: "#fff" }}
+              >
+                <option value="todos">Cualquier fecha</option>
+                <option value="dia">Elegir día</option>
+                <option value="semana">Elegir semana</option>
+                <option value="mes">Elegir mes</option>
+                <option value="anio">Elegir año</option>
+              </select>
+              {ventasResumenPeriodo === "dia" && (
+                <input
+                  type="date"
+                  value={ventasResumenDia}
+                  onChange={(e) => setVentasResumenDia(e.target.value)}
+                  aria-label="Día de las ventas"
+                  style={{ minWidth: 155, padding: 9, border: "1px solid #cbd8e4", background: "#fff" }}
+                />
+              )}
+              {ventasResumenPeriodo === "semana" && (
+                <input
+                  type="week"
+                  value={ventasResumenSemana}
+                  onChange={(e) => setVentasResumenSemana(e.target.value)}
+                  aria-label="Semana de las ventas"
+                  style={{ minWidth: 165, padding: 9, border: "1px solid #cbd8e4", background: "#fff" }}
+                />
+              )}
+              {ventasResumenPeriodo === "mes" && (
+                <input
+                  type="month"
+                  value={ventasResumenMes}
+                  onChange={(e) => setVentasResumenMes(e.target.value)}
+                  aria-label="Mes de las ventas"
+                  style={{ minWidth: 155, padding: 9, border: "1px solid #cbd8e4", background: "#fff" }}
+                />
+              )}
+              {ventasResumenPeriodo === "anio" && (
+                <input
+                  type="number"
+                  min={2000}
+                  max={2100}
+                  step={1}
+                  value={ventasResumenAnio}
+                  onChange={(e) => setVentasResumenAnio(e.target.value)}
+                  aria-label="Año de las ventas"
+                  style={{ width: 115, padding: 9, border: "1px solid #cbd8e4", background: "#fff" }}
+                />
+              )}
+              <select
+                value={ventasResumenOrden}
+                onChange={(e) => setVentasResumenOrden(e.target.value as typeof ventasResumenOrden)}
+                aria-label="Ordenar ventas"
+                style={{ minWidth: 175, padding: 10, border: "1px solid #cbd8e4", background: "#fff" }}
+              >
+                <option value="recientes">Más recientes primero</option>
+                <option value="antiguas">Más antiguas primero</option>
+                <option value="cliente">Cliente A–Z</option>
+                <option value="monto_desc">Mayor total</option>
+                <option value="saldo_desc">Mayor saldo pendiente</option>
+              </select>
+              {(qVentasResumen || ventasResumenEstadoVenta !== "todas" || ventasResumenEstadoPago !== "todos" || ventasResumenPeriodo !== "todos" || ventasResumenOrden !== "recientes") && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setQVentasResumen("");
+                    setVentasResumenEstadoVenta("todas");
+                    setVentasResumenEstadoPago("todos");
+                    setVentasResumenPeriodo("todos");
+                    setVentasResumenOrden("recientes");
+                  }}
+                  style={{ ...actionBtnStyle, padding: "9px 12px" }}
+                >
+                  Limpiar filtros
+                </button>
+              )}
+              <span style={{ color: "#6b7f93", fontSize: 12, fontWeight: 800 }}>
+                {ventasResumenFiltradas.length} resultado(s)
+              </span>
+            </div>
+
+            {ventasResumenError && (
+              <div style={{ margin: 14, padding: 11, border: "1px solid #fecaca", background: "#fef2f2", color: "#991b1b" }}>
+                {ventasResumenError}
+              </div>
+            )}
+
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ width: "100%", minWidth: 1360, borderCollapse: "collapse", tableLayout: "fixed" }}>
+                <thead>
+                  <tr style={{ background: "#173b61", color: "#fff" }}>
+                    <th align="left" style={{ width: 75, padding: "11px 9px" }}>Venta</th>
+                    <th align="left" style={{ width: 145, padding: "11px 9px" }}>Fecha</th>
+                    <th align="left" style={{ width: 210, padding: "11px 9px" }}>Cliente</th>
+                    <th align="right" style={{ width: 110, padding: "11px 9px" }}>Total</th>
+                    <th align="right" style={{ width: 110, padding: "11px 9px" }}>Pagado</th>
+                    <th align="right" style={{ width: 135, padding: "11px 9px" }}>Saldo por pagar</th>
+                    <th align="left" style={{ width: 125, padding: "11px 9px" }}>Estado venta</th>
+                    <th align="left" style={{ width: 125, padding: "11px 9px" }}>Estado pago</th>
+                    <th align="left" style={{ width: 175, padding: "11px 9px" }}>Pedido / entrega</th>
+                    <th align="left" style={{ width: 150, padding: "11px 9px" }}>Método</th>
+                    <th align="left" style={{ width: 105, padding: "11px 9px" }}>Acciones</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {ventasResumenFiltradas.map((venta) => {
+                    const saldo = Number(venta.saldo_pendiente || 0);
+                    const pagado = Number(venta.monto_pagado || 0);
+                    const liquidada = saldo <= 0;
+                    const parcial = !liquidada && pagado > 0;
+                    const metodos = venta.pagos && venta.pagos.length > 0
+                      ? Array.from(new Set(venta.pagos.map((pago) => formatMetodoPagoLabel(pago.metodo)))).join(" + ")
+                      : formatMetodoPagoLabel(venta.metodo_pago);
+                    return (
+                      <tr key={`resumen-venta-${venta.venta_id}`} style={{ borderTop: "1px solid #e4ebf1", background: liquidada ? "#fbfefc" : "#fff" }}>
+                        <td style={{ padding: 9, fontWeight: 900, color: "#173b61" }}>#{venta.venta_id}</td>
+                        <td style={{ padding: 9, color: "#526b7b", fontSize: 12 }}>{formatDateTimePretty(venta.fecha_hora)}</td>
+                        <td style={{ padding: 9 }}>
+                          <button
+                            type="button"
+                            onClick={() => openPacientePerfilDesdeVenta(venta)}
+                            title="Abrir información completa del paciente"
+                            style={{
+                              padding: 0,
+                              border: 0,
+                              background: "transparent",
+                              color: "#0e5fa8",
+                              fontWeight: 850,
+                              textAlign: "left",
+                              cursor: "pointer",
+                              textDecoration: "underline",
+                              textUnderlineOffset: 3,
+                            }}
+                          >
+                            {venta.paciente_nombre}
+                          </button>
+                        </td>
+                        <td style={{ padding: 9, textAlign: "right", fontWeight: 800 }}>${Number(venta.monto_total || 0).toFixed(2)}</td>
+                        <td style={{ padding: 9, textAlign: "right", color: "#174ea6", fontWeight: 800 }}>${pagado.toFixed(2)}</td>
+                        <td style={{ padding: 9, textAlign: "right", color: liquidada ? "#166534" : "#c2410c", fontWeight: 900 }}>${saldo.toFixed(2)}</td>
+                        <td style={{ padding: 9 }}>
+                          <span
+                            style={{
+                              display: "inline-flex",
+                              padding: "5px 8px",
+                              borderRadius: 999,
+                              background: venta.estado_venta === "completada"
+                                ? "#dcfce7"
+                                : venta.estado_venta === "cancelada" || venta.estado_venta === "devuelta"
+                                  ? "#fee2e2"
+                                  : "#e0f2fe",
+                              color: venta.estado_venta === "completada"
+                                ? "#166534"
+                                : venta.estado_venta === "cancelada" || venta.estado_venta === "devuelta"
+                                  ? "#991b1b"
+                                  : "#075985",
+                              fontSize: 11,
+                              fontWeight: 900,
+                            }}
+                          >
+                            {formatVentaEstadoLabel(venta.estado_venta)}
+                          </span>
+                        </td>
+                        <td style={{ padding: 9 }}>
+                          <span
+                            style={{
+                              display: "inline-flex",
+                              padding: "5px 8px",
+                              borderRadius: 999,
+                              background: venta.estado_pago === "pagada"
+                                ? "#dcfce7"
+                                : venta.estado_pago === "reembolsada"
+                                  ? "#ede9fe"
+                                  : parcial
+                                    ? "#fef3c7"
+                                    : "#fee2e2",
+                              color: venta.estado_pago === "pagada"
+                                ? "#166534"
+                                : venta.estado_pago === "reembolsada"
+                                  ? "#6d28d9"
+                                  : parcial
+                                    ? "#92400e"
+                                    : "#991b1b",
+                              fontSize: 11,
+                              fontWeight: 900,
+                            }}
+                          >
+                            {formatVentaEstadoPagoLabel(venta.estado_pago)}
+                          </span>
+                        </td>
+                        <td style={{ padding: 9, color: "#40566c", fontSize: 12, fontWeight: 800 }}>
+                          {formatVentaEstadoPedidoLabel(venta.estado_pedido)}
+                        </td>
+                        <td style={{ padding: 9, color: "#526b7b", fontSize: 12 }}>{metodos}</td>
+                        <td style={{ padding: 9 }}>
+                          <button
+                            type="button"
+                            onClick={() => openVentaDetalle(venta)}
+                            style={{ ...actionBtnStyle, padding: "7px 10px", color: "#174ea6", borderColor: "#9cb9d5" }}
+                          >
+                            Ver venta
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                  {!loadingVentasResumen && ventasResumenFiltradas.length === 0 && (
+                    <tr>
+                      <td colSpan={11} style={{ padding: 24, textAlign: "center", color: "#6b7f93" }}>
+                        No hay ventas en esta sección.
+                      </td>
+                    </tr>
+                  )}
+                  {loadingVentasResumen && ventasResumen.length === 0 && (
+                    <tr>
+                      <td colSpan={11} style={{ padding: 24, textAlign: "center", color: "#6b7f93" }}>
+                        Cargando resumen de ventas...
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </section>
         </div>
       )}
 
@@ -9772,80 +11121,514 @@ export default function App() {
         </div>
       )}
 
+      {ventaConfirmacionOpen && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(15, 23, 42, .58)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 1001,
+            padding: 16,
+          }}
+        >
+          <div style={{ width: 520, maxWidth: "96vw", background: "#fff", border: "1px solid #cbd8e4", boxShadow: "0 20px 55px rgba(15,23,42,.28)", padding: 18 }}>
+            <div style={{ fontWeight: 900, fontSize: 21, color: "#173b61" }}>Confirmar y guardar venta</div>
+            <div style={{ marginTop: 5, color: "#6b7f93", fontSize: 12 }}>
+              Revisa una vez más antes de guardar y descontar las existencias.
+            </div>
+
+            <div style={{ display: "grid", gap: 8, marginTop: 14, padding: 12, border: "1px solid #dbe6ef", background: "#f8fbff" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
+                <span style={{ color: "#6b7f93" }}>Paciente</span>
+                <strong style={{ textAlign: "right", color: "#173b61" }}>
+                  {pacientesVentaOpciones.find((paciente) => paciente.id === formVenta.paciente_id)?.label || `#${formVenta.paciente_id}`}
+                </strong>
+              </div>
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
+                <span style={{ color: "#6b7f93" }}>Productos diferentes</span>
+                <strong>{ventaCarritoDetalle.length}</strong>
+              </div>
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
+                <span style={{ color: "#6b7f93" }}>Total</span>
+                <strong style={{ color: "#174ea6" }}>${ventaTotalCarrito.toFixed(2)} MXN</strong>
+              </div>
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
+                <span style={{ color: "#6b7f93" }}>Pagado</span>
+                <strong>${ventaMontoPagado.toFixed(2)}</strong>
+              </div>
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
+                <span style={{ color: "#6b7f93" }}>Saldo por pagar</span>
+                <strong style={{ color: ventaSaldo > 0 ? "#c2410c" : "#166534" }}>${ventaSaldo.toFixed(2)}</strong>
+              </div>
+              {["meses_sin_intereses", "meses_con_intereses"].includes(formVenta.forma_liquidacion || "") && (
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
+                  <span style={{ color: "#6b7f93" }}>Financiamiento</span>
+                  <strong style={{ textAlign: "right" }}>
+                    {formatFormaLiquidacionLabel(formVenta.forma_liquidacion)} · {formVenta.plazo_meses || "Sin plazo"} meses
+                  </strong>
+                </div>
+              )}
+            </div>
+
+            <div style={{ marginTop: 12, padding: 10, border: "1px solid #fde68a", background: "#fffbeb", color: "#92400e", fontSize: 12 }}>
+              Presiona “Sí, guardar venta” para completar el registro. Esta es la confirmación final.
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 14 }}>
+              <button
+                type="button"
+                onClick={() => setVentaConfirmacionOpen(false)}
+                disabled={savingVenta}
+                style={{ ...actionBtnStyle, padding: "10px 12px" }}
+              >
+                Volver a revisar
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setVentaConfirmacionOpen(false);
+                  ventaFormRef.current?.requestSubmit();
+                }}
+                disabled={savingVenta}
+                style={{ padding: "10px 12px", border: "1px solid #0f766e", background: savingVenta ? "#dfe9e8" : "#0f766e", color: savingVenta ? "#526b7b" : "#fff", fontWeight: 900, cursor: savingVenta ? "wait" : "pointer" }}
+              >
+                {savingVenta ? "Guardando..." : "Sí, guardar venta"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {selectedVentaDetalle && (
         <div
           style={{
             position: "fixed",
             inset: 0,
-            background: "rgba(0,0,0,0.45)",
+            background: "rgba(15, 23, 42, 0.58)",
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
             zIndex: 999,
+            padding: 16,
           }}
         >
           <div
             style={{
               background: "#fff",
-              width: 760,
-              maxWidth: "96vw",
+              width: 1180,
+              maxWidth: "98vw",
+              maxHeight: "94vh",
               borderRadius: 14,
-              border: "1px solid #ddd",
-              boxShadow: "0 12px 30px rgba(0,0,0,0.22)",
-              padding: 18,
+              border: "1px solid #cbd8e4",
+              boxShadow: "0 20px 55px rgba(15,23,42,.28)",
+              overflow: "hidden",
+              display: "grid",
+              gridTemplateRows: "auto minmax(0, 1fr)",
             }}
           >
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-              <div style={{ fontWeight: 800, fontSize: 22, color: "#3b2a1c" }}>
-                Detalle de venta #{selectedVentaDetalle.venta_id}
+            <div style={{ padding: "15px 18px", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, borderBottom: "1px solid #dbe6ef", background: "#f8fbff" }}>
+              <div>
+                <div style={{ fontWeight: 900, fontSize: 22, color: "#173b61" }}>
+                  Venta #{selectedVentaDetalle.venta_id}
+                </div>
+                <div style={{ marginTop: 3, color: "#6b7f93", fontSize: 12 }}>
+                  {formatDateTimePretty(selectedVentaDetalle.fecha_hora)} · {selectedVentaDetalle.paciente_nombre}
+                </div>
               </div>
-              <button type="button" onClick={() => setSelectedVentaDetalle(null)} style={{ ...actionBtnStyle, padding: "8px 12px" }}>
-                Cerrar
-              </button>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                {canEditVenta && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const venta = selectedVentaDetalle;
+                      closeVentaDetalle();
+                      startEditVenta(venta);
+                    }}
+                    style={{ ...actionBtnStyle, padding: "9px 13px", borderColor: "#0f766e", background: "#0f766e", color: "#fff" }}
+                  >
+                    Abrir en Ventas y editar
+                  </button>
+                )}
+                {canDeleteVenta && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const ventaId = selectedVentaDetalle.venta_id;
+                      closeVentaDetalle();
+                      askDeleteVenta(ventaId);
+                    }}
+                    style={{ ...actionBtnStyle, padding: "9px 13px", borderColor: "#dc2626", background: "#fff5f5", color: "#b91c1c" }}
+                  >
+                    Eliminar venta
+                  </button>
+                )}
+                <button type="button" onClick={closeVentaDetalle} style={{ ...actionBtnStyle, padding: "9px 13px" }}>
+                  Cerrar
+                </button>
+              </div>
             </div>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-              <div><b>Fecha:</b> {formatDateTimePretty(selectedVentaDetalle.fecha_hora)}</div>
-              <div><b>Paciente:</b> {selectedVentaDetalle.paciente_nombre}</div>
-              <div><b>Subtotal:</b> ${Number(selectedVentaDetalle.subtotal ?? selectedVentaDetalle.monto_total ?? 0).toFixed(2)}</div>
-              <div><b>Descuento:</b> {Number(selectedVentaDetalle.descuento_porcentaje || 0).toFixed(2)}%</div>
-              {Number(selectedVentaDetalle.descuento_porcentaje || 0) > 0 && (
-                <>
-                  <div><b>Motivo del descuento:</b> {formatDescuentoMotivoLabel(selectedVentaDetalle.descuento_motivo)}</div>
-                  <div><b>Tipo de cupón:</b> {formatCuponTipoLabel(selectedVentaDetalle.cupon_tipo)}</div>
-                </>
-              )}
-              <div><b>Monto total:</b> ${Number(selectedVentaDetalle.monto_total || 0).toFixed(2)}</div>
-              <div><b>Método de pago:</b> {formatMetodoPagoLabel(selectedVentaDetalle.metodo_pago)}</div>
-              <div><b>Forma de liquidación:</b> {formatFormaLiquidacionLabel(selectedVentaDetalle.forma_liquidacion)}</div>
-              <div><b>Cómo nos conoció:</b> {formatComoNosConocioLabel(selectedVentaDetalle.como_nos_conocio)}</div>
-              <div style={{ gridColumn: "1 / -1" }}>
-                <b>Compra:</b>
-                <div style={{ marginTop: 8, display: "flex", flexWrap: "wrap", gap: 6 }}>
-                  {(selectedVentaDetalle.compra ?? "")
-                    .split("|")
-                    .map((x) => x.trim())
-                    .filter(Boolean)
-                    .map((item) => (
-                      <span
-                        key={`modal-venta-${selectedVentaDetalle.venta_id}-${item}`}
-                        style={{ padding: "4px 8px", borderRadius: 999, border: "1px solid #d9c7b3", background: "#fff", fontSize: 12, fontWeight: 700, color: "#5a4633" }}
+
+            <div style={{ overflowY: "auto", padding: 18 }}>
+              <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1.35fr) minmax(340px, .85fr)", gap: 16, alignItems: "start" }}>
+                <div style={{ display: "grid", gap: 14, minWidth: 0 }}>
+                  <section style={{ border: "1px solid #cbdcf0", background: "#f8fbff", padding: 14 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center", marginBottom: 10 }}>
+                      <div>
+                        <div style={{ fontWeight: 900, color: "#16385d" }}>Resumen de productos</div>
+                        <div style={{ marginTop: 2, color: "#6b7f93", fontSize: 11 }}>
+                          {selectedVentaDetalle.productos?.length || 0} producto(s) diferente(s)
+                        </div>
+                      </div>
+                      <strong style={{ color: "#174ea6", fontSize: 18 }}>
+                        ${Number(selectedVentaDetalle.monto_total || 0).toFixed(2)}
+                      </strong>
+                    </div>
+
+                    {(() => {
+                      const micasGuardadas = (selectedVentaDetalle.productos || []).filter(
+                        (producto) => producto.categoria === "micas",
+                      );
+                      const tokensMicas = (selectedVentaDetalle.compra || "")
+                        .split("|")
+                        .map((token) => token.trim())
+                        .filter((token) => token.includes("mica") || token.includes("tinte") || token.includes("bifocal") || token.includes("monofocal") || token.includes("progres"));
+                      if (micasGuardadas.length === 0 && tokensMicas.length === 0) return null;
+                      return (
+                        <div style={{ marginBottom: 10, padding: 10, border: "1px solid #b9d8d3", background: "#f0fdfa" }}>
+                          <div style={{ marginBottom: 7, color: "#0f766e", fontSize: 11, fontWeight: 900, textTransform: "uppercase" }}>
+                            Micas, diseño y tratamientos
+                          </div>
+                          <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                            {micasGuardadas.length > 0
+                              ? micasGuardadas.map((producto) => (
+                                  <span key={`mica-resumen-${producto.producto_id}`} style={{ padding: "6px 9px", border: "1px solid #99c9c1", background: "#fff", color: "#174f4a", fontSize: 11, fontWeight: 800 }}>
+                                    {producto.subcategoria === "diseno"
+                                      ? "Diseño"
+                                      : producto.subcategoria === "tratamiento"
+                                        ? "Tratamiento"
+                                        : "Micas"}: {producto.nombre}
+                                    {producto.tipo_mica ? ` · ${producto.tipo_mica.replace(/_/g, " ")}` : ""}
+                                    {` · $${Number(producto.subtotal || 0).toFixed(2)}`}
+                                  </span>
+                                ))
+                              : tokensMicas.map((token) => (
+                                  <span key={`mica-token-${token}`} style={{ padding: "6px 9px", border: "1px solid #99c9c1", background: "#fff", color: "#174f4a", fontSize: 11, fontWeight: 800 }}>
+                                    {formatVentaCompraLabel(token)}
+                                  </span>
+                                ))}
+                          </div>
+                        </div>
+                      );
+                    })()}
+
+                    {selectedVentaDetalle.productos && selectedVentaDetalle.productos.length > 0 ? (
+                      <div style={{ display: "grid", gap: 7 }}>
+                        {selectedVentaDetalle.productos.map((producto) => {
+                          const esMica = producto.categoria === "micas";
+                          return (
+                            <div
+                              key={`detalle-producto-${producto.producto_id}`}
+                              style={{
+                                display: "grid",
+                                gridTemplateColumns: esMica ? "minmax(0, 1fr) 75px 100px" : "54px minmax(0, 1fr) 75px 100px",
+                                gap: 9,
+                                alignItems: "center",
+                                padding: 9,
+                                border: "1px solid #dbe6ef",
+                                background: "#fff",
+                              }}
+                            >
+                              {!esMica && (
+                                <div style={{ width: 54, height: 48, overflow: "hidden", border: "1px solid #e3e9ee", background: "#f5f7f9" }}>
+                                  {producto.imagen_url ? (
+                                    <img src={producto.imagen_url} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                                  ) : (
+                                    <span style={{ width: "100%", height: "100%", display: "grid", placeItems: "center", color: "#8aa0b2" }}>◇</span>
+                                  )}
+                                </div>
+                              )}
+                              <div style={{ minWidth: 0 }}>
+                                <strong style={{ display: "block", color: "#173b61" }}>{producto.nombre}</strong>
+                                <span style={{ display: "block", marginTop: 2, color: "#6b7f93", fontSize: 11 }}>
+                                  {producto.sku}
+                                  {producto.modelo ? ` · ${producto.modelo}` : ""}
+                                  {producto.color ? ` · ${producto.color}` : ""}
+                                </span>
+                                <span style={{ display: "block", marginTop: 3, color: "#0f766e", fontSize: 10, fontWeight: 850, textTransform: "uppercase" }}>
+                                  {producto.subcategoria || producto.categoria}
+                                  {producto.tipo_mica ? ` · ${producto.tipo_mica.replace(/_/g, " ")}` : ""}
+                                </span>
+                              </div>
+                              <div style={{ textAlign: "center", color: "#526b7b", fontSize: 12 }}>
+                                <strong>{producto.cantidad}</strong> × ${Number(producto.precio_unitario || 0).toFixed(2)}
+                              </div>
+                              <strong style={{ textAlign: "right", color: "#174ea6" }}>
+                                ${Number(producto.subtotal || 0).toFixed(2)}
+                              </strong>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      <div style={{ padding: 12, border: "1px dashed #b9cde0", background: "#fff" }}>
+                        <div style={{ marginBottom: 7, color: "#6b7f93", fontSize: 11 }}>
+                          Venta anterior sin detalle individual de inventario:
+                        </div>
+                        <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                          {(selectedVentaDetalle.compra ?? "")
+                            .split("|")
+                            .map((item) => item.trim())
+                            .filter(Boolean)
+                            .map((item) => (
+                              <span key={`modal-venta-${selectedVentaDetalle.venta_id}-${item}`} style={{ padding: "5px 8px", borderRadius: 999, border: "1px solid #d9c7b3", background: "#fff", fontSize: 11, fontWeight: 800, color: "#5a4633" }}>
+                                {formatVentaCompraLabel(item)}
+                              </span>
+                            ))}
+                        </div>
+                      </div>
+                    )}
+
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", marginTop: 10, border: "1px solid #dbe6ef" }}>
+                      <div style={{ padding: 9, background: "#fff" }}>
+                        <div style={{ color: "#718397", fontSize: 10, fontWeight: 850 }}>SUBTOTAL</div>
+                        <strong>${Number(selectedVentaDetalle.subtotal ?? selectedVentaDetalle.monto_total ?? 0).toFixed(2)}</strong>
+                      </div>
+                      <div style={{ padding: 9, background: "#fff7ed" }}>
+                        <div style={{ color: "#9a4c0e", fontSize: 10, fontWeight: 850 }}>DESCUENTO</div>
+                        <strong>
+                          {Number(selectedVentaDetalle.descuento_monto || 0) > 0
+                            ? `$${Number(selectedVentaDetalle.descuento_monto || 0).toFixed(2)}`
+                            : `${Number(selectedVentaDetalle.descuento_porcentaje || 0).toFixed(2)}%`}
+                        </strong>
+                      </div>
+                      <div style={{ padding: 9, background: "#173b61", color: "#fff" }}>
+                        <div style={{ fontSize: 10, fontWeight: 850, opacity: .75 }}>TOTAL</div>
+                        <strong style={{ fontSize: 18 }}>${Number(selectedVentaDetalle.monto_total || 0).toFixed(2)}</strong>
+                      </div>
+                    </div>
+                    {(Number(selectedVentaDetalle.descuento_porcentaje || 0) > 0 || Number(selectedVentaDetalle.descuento_monto || 0) > 0) && (
+                      <div style={{ marginTop: 8, color: "#526b7b", fontSize: 11 }}>
+                        {formatDescuentoMotivoLabel(selectedVentaDetalle.descuento_motivo)} · {formatCuponTipoLabel(selectedVentaDetalle.cupon_tipo)}
+                      </div>
+                    )}
+                  </section>
+
+                  <section style={{ border: "1px solid #dbe6ef", padding: 14, background: "#fff" }}>
+                    <div style={{ fontWeight: 900, color: "#16385d", marginBottom: 9 }}>Pagos registrados</div>
+                    {selectedVentaDetalle.pagos && selectedVentaDetalle.pagos.length > 0 ? (
+                      <div style={{ display: "grid", gap: 6 }}>
+                        {selectedVentaDetalle.pagos.map((pago, index) => (
+                          <div key={pago.pago_id ?? index} style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 12, padding: 9, border: "1px solid #dbe6ef", background: "#f8fbff" }}>
+                            <span>
+                              <strong>{formatMetodoPagoLabel(pago.metodo)}</strong>
+                              {pago.fecha_hora ? <span style={{ display: "block", marginTop: 2, color: "#718397", fontSize: 10 }}>{formatDateTimePretty(pago.fecha_hora)}</span> : null}
+                            </span>
+                            <strong style={{ color: "#174ea6" }}>${Number(pago.monto || 0).toFixed(2)}</strong>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div style={{ color: "#718397", fontSize: 12 }}>
+                        Registro anterior: {formatMetodoPagoLabel(selectedVentaDetalle.metodo_pago)}
+                      </div>
+                    )}
+                  </section>
+                </div>
+
+                <aside style={{ display: "grid", gap: 12, minWidth: 0 }}>
+                  <section style={{ border: "1px solid #cbdcf0", background: "#f8fbff", padding: 14 }}>
+                    <div style={{ fontWeight: 900, color: "#16385d", marginBottom: 10 }}>Estados y seguimiento</div>
+                    <div style={{ display: "grid", gap: 10 }}>
+                      <label style={{ display: "grid", gap: 5, color: "#40566c", fontSize: 11, fontWeight: 850 }}>
+                        ESTADO DE LA VENTA
+                        {ventaDetalleEditando ? (
+                          <select
+                            value={ventaSeguimientoDraft.estado_venta}
+                            onChange={(e) => setVentaSeguimientoDraft((prev) => ({ ...prev, estado_venta: e.target.value as VentaEstado }))}
+                            style={{ width: "100%", padding: 9, border: "1px solid #b9cce0", background: "#fff" }}
+                          >
+                            {VENTA_ESTADO_OPTIONS.map((opcion) => (
+                              <option key={opcion.value} value={opcion.value}>{opcion.label}</option>
+                            ))}
+                          </select>
+                        ) : (
+                          <strong style={{ padding: 9, border: "1px solid #dbe6ef", background: "#fff", color: "#173b61" }}>
+                            {formatVentaEstadoLabel(selectedVentaDetalle.estado_venta)}
+                          </strong>
+                        )}
+                        <span style={{ color: "#718397", fontSize: 10, fontWeight: 500 }}>
+                          {VENTA_ESTADO_OPTIONS.find((opcion) => opcion.value === (ventaDetalleEditando ? ventaSeguimientoDraft.estado_venta : selectedVentaDetalle.estado_venta))?.detail}
+                        </span>
+                      </label>
+
+                      <label style={{ display: "grid", gap: 5, color: "#40566c", fontSize: 11, fontWeight: 850 }}>
+                        ESTADO DEL PAGO
+                        {ventaDetalleEditando ? (
+                          <select
+                            value={ventaDetalleEstadoPagoPreview}
+                            disabled={ventaDetallePagoNuevo > 0}
+                            onChange={(e) => setVentaSeguimientoDraft((prev) => ({ ...prev, estado_pago: e.target.value as VentaEstadoPago }))}
+                            style={{ width: "100%", padding: 9, border: "1px solid #b9cce0", background: ventaDetallePagoNuevo > 0 ? "#eef2f6" : "#fff" }}
+                          >
+                            {VENTA_ESTADO_PAGO_OPTIONS.map((opcion) => {
+                              const pagado = Number(selectedVentaDetalle.monto_pagado || 0);
+                              const saldo = Number(selectedVentaDetalle.saldo_pendiente || 0);
+                              const incompatible =
+                                (opcion.value === "sin_pago" && pagado > 0)
+                                || (opcion.value === "pagada" && saldo > 0)
+                                || (["anticipo", "pago_parcial"].includes(opcion.value) && (pagado <= 0 || saldo <= 0));
+                              return <option key={opcion.value} value={opcion.value} disabled={incompatible}>{opcion.label}</option>;
+                            })}
+                          </select>
+                        ) : (
+                          <strong style={{ padding: 9, border: "1px solid #dbe6ef", background: "#fff", color: "#173b61" }}>
+                            {formatVentaEstadoPagoLabel(selectedVentaDetalle.estado_pago)}
+                          </strong>
+                        )}
+                        {ventaDetallePagoNuevo > 0 && (
+                          <span style={{ color: "#0e5fa8", fontSize: 10, fontWeight: 700 }}>
+                            Se actualizará automáticamente a {formatVentaEstadoPagoLabel(ventaDetalleEstadoPagoPreview)}.
+                          </span>
+                        )}
+                      </label>
+
+                      <label style={{ display: "grid", gap: 5, color: "#40566c", fontSize: 11, fontWeight: 850 }}>
+                        ESTADO DEL PEDIDO O ENTREGA
+                        {ventaDetalleEditando ? (
+                          <select
+                            value={ventaSeguimientoDraft.estado_pedido}
+                            onChange={(e) => setVentaSeguimientoDraft((prev) => ({ ...prev, estado_pedido: e.target.value as VentaEstadoPedido }))}
+                            style={{ width: "100%", padding: 9, border: "1px solid #b9cce0", background: "#fff" }}
+                          >
+                            {VENTA_ESTADO_PEDIDO_OPTIONS.map((opcion) => (
+                              <option key={opcion.value} value={opcion.value}>{opcion.label}</option>
+                            ))}
+                          </select>
+                        ) : (
+                          <strong style={{ padding: 9, border: "1px solid #dbe6ef", background: "#fff", color: "#173b61" }}>
+                            {formatVentaEstadoPedidoLabel(selectedVentaDetalle.estado_pedido)}
+                          </strong>
+                        )}
+                      </label>
+                    </div>
+                  </section>
+
+                  <section style={{ border: "1px solid #cbdcf0", background: "#fff", padding: 14 }}>
+                    <div style={{ fontWeight: 900, color: "#16385d", marginBottom: 10 }}>Estado de cuenta</div>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", border: "1px solid #dbe6ef" }}>
+                      <div style={{ padding: 10, background: "#eff6ff" }}>
+                        <div style={{ color: "#52708e", fontSize: 10, fontWeight: 850 }}>PAGADO</div>
+                        <strong style={{ color: "#174ea6" }}>${ventaDetalleMontoPagadoPreview.toFixed(2)}</strong>
+                      </div>
+                      <div style={{ padding: 10, background: ventaDetalleSaldoPreview > 0 ? "#fff7ed" : "#f0fdf4" }}>
+                        <div style={{ color: ventaDetalleSaldoPreview > 0 ? "#9a4c0e" : "#166534", fontSize: 10, fontWeight: 850 }}>SALDO POR PAGAR</div>
+                        <strong style={{ color: ventaDetalleSaldoPreview > 0 ? "#c2410c" : "#166534" }}>${ventaDetalleSaldoPreview.toFixed(2)}</strong>
+                      </div>
+                    </div>
+                    <div style={{ marginTop: 7, color: "#718397", fontSize: 10 }}>
+                      Forma de liquidación: {formatFormaLiquidacionLabel(selectedVentaDetalle.forma_liquidacion)}
+                      {selectedVentaDetalle.plazo_meses ? ` · ${selectedVentaDetalle.plazo_meses} meses` : ""}
+                    </div>
+
+                    {ventaDetalleEditando && Number(selectedVentaDetalle.saldo_pendiente || 0) > 0 && ventaSeguimientoDraft.estado_pago !== "reembolsada" && (
+                      <div style={{ display: "grid", gap: 8, marginTop: 11, paddingTop: 11, borderTop: "1px solid #e1e8ef" }}>
+                        <div>
+                          <strong style={{ display: "block", color: "#173b61", fontSize: 12 }}>Registrar un pago nuevo</strong>
+                          <span style={{ display: "block", marginTop: 2, color: "#718397", fontSize: 10 }}>
+                            Déjalo vacío si solo actualizarás los estados.
+                          </span>
+                        </div>
+                        <label style={{ display: "grid", gap: 4, color: "#40566c", fontSize: 10, fontWeight: 850 }}>
+                          MÉTODO
+                          <select
+                            value={ventaNuevoPagoMetodo}
+                            onChange={(e) => setVentaNuevoPagoMetodo(e.target.value as VentaMetodoPago)}
+                            style={{ width: "100%", padding: 8, border: "1px solid #b9cce0", background: "#fff" }}
+                          >
+                            {VENTA_METODO_PAGO_OPTIONS.map((opcion) => (
+                              <option key={opcion.value} value={opcion.value}>{opcion.label}</option>
+                            ))}
+                          </select>
+                        </label>
+                        <label style={{ display: "grid", gap: 4, color: "#40566c", fontSize: 10, fontWeight: 850 }}>
+                          MONTO PAGADO AHORA
+                          <input
+                            type="text"
+                            inputMode="decimal"
+                            value={ventaNuevoPagoMonto}
+                            onChange={(e) => {
+                              const siguiente = e.target.value.replace(",", ".");
+                              if (siguiente === "" || /^\d+(?:\.\d{0,2})?$/.test(siguiente)) {
+                                setVentaNuevoPagoMonto(siguiente);
+                              }
+                            }}
+                            placeholder=""
+                            style={{ width: "100%", padding: 8, border: "1px solid #8cb4df", textAlign: "right", fontWeight: 900 }}
+                          />
+                        </label>
+                      </div>
+                    )}
+                  </section>
+
+                  <section style={{ border: "1px solid #dbe6ef", background: "#fff", padding: 14 }}>
+                    <label style={{ display: "grid", gap: 6, color: "#40566c", fontSize: 11, fontWeight: 850 }}>
+                      NOTAS
+                      {ventaDetalleEditando ? (
+                        <textarea
+                          rows={4}
+                          value={ventaSeguimientoDraft.notas}
+                          onChange={(e) => setVentaSeguimientoDraft((prev) => ({ ...prev, notas: e.target.value }))}
+                          style={{ width: "100%", padding: 9, border: "1px solid #b9cce0", resize: "vertical" }}
+                        />
+                      ) : (
+                        <span style={{ minHeight: 58, padding: 9, border: "1px solid #dbe6ef", background: "#f8fafc", color: "#526b7b", fontWeight: 500 }}>
+                          {selectedVentaDetalle.notas?.trim() || "Sin notas"}
+                        </span>
+                      )}
+                    </label>
+                  </section>
+
+                  {ventaSeguimientoDraft.estado_pago === "reembolsada" && ventaDetalleEditando && (
+                    <div style={{ padding: 10, border: "1px solid #ddd6fe", background: "#f5f3ff", color: "#5b21b6", fontSize: 11 }}>
+                      “Reembolsada” registra el estado. No modifica inventario ni crea automáticamente un movimiento de devolución.
+                    </div>
+                  )}
+
+                  {ventaSeguimientoError && (
+                    <div style={{ padding: 10, border: "1px solid #fecaca", background: "#fef2f2", color: "#991b1b", fontSize: 12 }}>
+                      {ventaSeguimientoError}
+                    </div>
+                  )}
+
+                  {ventaDetalleEditando && (
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setVentaDetalleEditando(false);
+                          setVentaSeguimientoError(null);
+                          setVentaNuevoPagoMonto("");
+                          openVentaDetalle(selectedVentaDetalle);
+                        }}
+                        disabled={savingVentaSeguimiento}
+                        style={{ ...actionBtnStyle, padding: "10px 12px" }}
                       >
-                        {item}
-                      </span>
-                    ))}
-                </div>
-              </div>
-              <div style={{ gridColumn: "1 / -1" }}>
-                <b>Adelanto:</b>{" "}
-                {selectedVentaDetalle.adelanto_aplica
-                  ? `$${Number(selectedVentaDetalle.adelanto_monto || 0).toFixed(2)} (${formatMetodoPagoLabel(selectedVentaDetalle.adelanto_metodo || "")})`
-                  : "No"}
-              </div>
-              <div style={{ gridColumn: "1 / -1" }}>
-                <b>Notas:</b>
-                <div style={{ marginTop: 6, minHeight: 56, border: "1px solid #ddd", borderRadius: 10, background: "#fffdf9", padding: 10 }}>
-                  {selectedVentaDetalle.notas?.trim() ? selectedVentaDetalle.notas : "Sin notas"}
-                </div>
+                        Cancelar
+                      </button>
+                      <button
+                        type="button"
+                        onClick={guardarSeguimientoVenta}
+                        disabled={savingVentaSeguimiento}
+                        style={{ padding: "10px 12px", border: "1px solid #0f766e", background: savingVentaSeguimiento ? "#dfe9e8" : "#0f766e", color: savingVentaSeguimiento ? "#526b7b" : "#fff", fontWeight: 900, cursor: savingVentaSeguimiento ? "wait" : "pointer" }}
+                      >
+                        {savingVentaSeguimiento ? "Guardando..." : "Guardar cambios"}
+                      </button>
+                    </div>
+                  )}
+                </aside>
               </div>
             </div>
           </div>
@@ -10133,6 +11916,48 @@ export default function App() {
       )}
 
 
+      {logoutConfirmOpen && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="logout-confirm-title"
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 1300,
+            background: "rgba(15, 23, 42, .48)",
+            display: "grid",
+            placeItems: "center",
+            padding: 16,
+          }}
+        >
+          <div style={{ width: 430, maxWidth: "95vw", padding: 18, border: "1px solid #cbd8e4", background: "#fff", boxShadow: "0 20px 55px rgba(15,23,42,.28)" }}>
+            <div id="logout-confirm-title" style={{ color: "#173b61", fontSize: 19, fontWeight: 900 }}>
+              Confirmar cierre de sesión
+            </div>
+            <div style={{ marginTop: 8, color: "#526b7b" }}>
+              ¿Estás seguro de que quieres cerrar sesión?
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 16 }}>
+              <button
+                type="button"
+                onClick={() => setLogoutConfirmOpen(false)}
+                style={{ ...actionBtnStyle, padding: "10px 12px" }}
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={logout}
+                style={{ padding: "10px 12px", border: "1px solid #b91c1c", background: "#b91c1c", color: "#fff", fontWeight: 900, cursor: "pointer" }}
+              >
+                Sí, cerrar sesión
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {deleteConfirmOpen && (
         <div
           style={{
@@ -10164,7 +11989,7 @@ export default function App() {
                 ? `¿Seguro que quieres eliminar el paciente #${deleteConfirmId}?`
                 : deleteConfirmType === "consulta"
                 ? `¿Seguro que quieres eliminar la consulta #${deleteConfirmId}?`
-                : `¿Seguro que quieres eliminar la venta #${deleteConfirmId}?`}
+                : `¿Estás seguro de que quieres eliminar la venta #${deleteConfirmId}? Se borrará para siempre de PostgreSQL y las existencias descontadas se restaurarán.`}
             </div>
             <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
               <button

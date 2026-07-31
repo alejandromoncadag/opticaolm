@@ -503,14 +503,19 @@ def ensure_ventas_schema():
                     compra text NOT NULL,
                     subtotal numeric(12,2) NOT NULL DEFAULT 0 CHECK (subtotal >= 0),
                     descuento_porcentaje numeric(5,2) NOT NULL DEFAULT 0 CHECK (descuento_porcentaje >= 0 AND descuento_porcentaje <= 100),
+                    descuento_monto numeric(12,2) NOT NULL DEFAULT 0 CHECK (descuento_monto >= 0),
                     descuento_motivo text NULL,
                     cupon_tipo text NULL,
                     monto_total numeric(12,2) NOT NULL CHECK (monto_total >= 0),
                     metodo_pago text NOT NULL DEFAULT 'efectivo',
                     forma_liquidacion text NOT NULL DEFAULT 'pago_completo',
+                    plazo_meses integer NULL,
                     adelanto_aplica boolean NOT NULL DEFAULT false,
                     adelanto_monto numeric(12,2) NULL CHECK (adelanto_monto >= 0),
                     adelanto_metodo text NULL,
+                    estado_venta text NOT NULL DEFAULT 'confirmada',
+                    estado_pago text NOT NULL DEFAULT 'sin_pago',
+                    estado_pedido text NOT NULL DEFAULT 'pendiente_fabricacion',
                     notas text NULL,
                     created_by text NOT NULL,
                     updated_at timestamptz NULL,
@@ -526,12 +531,17 @@ def ensure_ventas_schema():
                 ADD COLUMN IF NOT EXISTS metodo_pago text NOT NULL DEFAULT 'efectivo',
                 ADD COLUMN IF NOT EXISTS subtotal numeric(12,2) NOT NULL DEFAULT 0,
                 ADD COLUMN IF NOT EXISTS descuento_porcentaje numeric(5,2) NOT NULL DEFAULT 0,
+                ADD COLUMN IF NOT EXISTS descuento_monto numeric(12,2) NOT NULL DEFAULT 0,
                 ADD COLUMN IF NOT EXISTS descuento_motivo text NULL,
                 ADD COLUMN IF NOT EXISTS cupon_tipo text NULL,
                 ADD COLUMN IF NOT EXISTS forma_liquidacion text NOT NULL DEFAULT 'pago_completo',
+                ADD COLUMN IF NOT EXISTS plazo_meses integer NULL,
                 ADD COLUMN IF NOT EXISTS adelanto_aplica boolean NOT NULL DEFAULT false,
                 ADD COLUMN IF NOT EXISTS adelanto_monto numeric(12,2) NULL,
-                ADD COLUMN IF NOT EXISTS adelanto_metodo text NULL;
+                ADD COLUMN IF NOT EXISTS adelanto_metodo text NULL,
+                ADD COLUMN IF NOT EXISTS estado_venta text NOT NULL DEFAULT 'confirmada',
+                ADD COLUMN IF NOT EXISTS estado_pago text NOT NULL DEFAULT 'sin_pago',
+                ADD COLUMN IF NOT EXISTS estado_pedido text NOT NULL DEFAULT 'pendiente_fabricacion';
                 """
             )
             cur.execute(
@@ -631,6 +641,65 @@ def ensure_ventas_schema():
             )
             cur.execute(
                 "CREATE INDEX IF NOT EXISTS idx_venta_detalles_venta ON core.venta_detalles (venta_id);"
+            )
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS core.venta_pagos (
+                    pago_id bigserial PRIMARY KEY,
+                    venta_id bigint NOT NULL REFERENCES core.ventas(venta_id),
+                    metodo text NOT NULL,
+                    monto numeric(12,2) NOT NULL CHECK (monto > 0),
+                    referencia text NULL,
+                    created_by text NOT NULL,
+                    created_at timestamptz NOT NULL DEFAULT NOW(),
+                    activo boolean NOT NULL DEFAULT true
+                );
+                """
+            )
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS idx_venta_pagos_venta ON core.venta_pagos (venta_id, created_at);"
+            )
+            cur.execute(
+                """
+                UPDATE core.ventas venta
+                SET estado_pago = CASE
+                    WHEN COALESCE(
+                        (
+                            SELECT SUM(pago.monto)
+                            FROM core.venta_pagos pago
+                            WHERE pago.venta_id = venta.venta_id
+                              AND pago.activo = true
+                        ),
+                        CASE
+                            WHEN venta.adelanto_aplica THEN venta.adelanto_monto
+                            ELSE venta.monto_total
+                        END,
+                        0
+                    ) >= venta.monto_total THEN 'pagada'
+                    WHEN COALESCE(
+                        (
+                            SELECT SUM(pago.monto)
+                            FROM core.venta_pagos pago
+                            WHERE pago.venta_id = venta.venta_id
+                              AND pago.activo = true
+                        ),
+                        venta.adelanto_monto,
+                        0
+                    ) > 0 THEN 'anticipo'
+                    ELSE 'sin_pago'
+                END
+                WHERE venta.estado_pago = 'sin_pago'
+                  AND (
+                    EXISTS (
+                        SELECT 1
+                        FROM core.venta_pagos pago
+                        WHERE pago.venta_id = venta.venta_id
+                          AND pago.activo = true
+                    )
+                    OR venta.adelanto_aplica = true
+                    OR venta.monto_total = 0
+                  );
+                """
             )
             cur.execute(
                 """
@@ -1287,23 +1356,44 @@ class VentaProductoIn(BaseModel):
     cantidad: int = 1
 
 
+class VentaPagoIn(BaseModel):
+    metodo: str
+    monto: Decimal
+    referencia: str | None = None
+
+
 class VentaCreate(BaseModel):
     paciente_id: int
     sucursal_id: int | None = 1
     compra: str
     subtotal: float | None = None
     descuento_porcentaje: float | None = 0
+    descuento_monto: float | None = 0
     descuento_motivo: str | None = None
     cupon_tipo: str | None = None
     monto_total: float | None = None
     metodo_pago: str
     forma_liquidacion: str | None = None
+    plazo_meses: int | None = None
     adelanto_aplica: bool | None = False
     adelanto_monto: float | None = None
     adelanto_metodo: str | None = None
     como_nos_conocio: str | None = None
     notas: str | None = None
     productos: list[VentaProductoIn] | None = None
+    pagos: list[VentaPagoIn] | None = None
+    estado_venta: str | None = None
+    estado_pago: str | None = None
+    estado_pedido: str | None = None
+
+
+class VentaSeguimientoUpdate(BaseModel):
+    sucursal_id: int | None = 1
+    estado_venta: str
+    estado_pago: str
+    estado_pedido: str
+    notas: str | None = None
+    nuevo_pago: VentaPagoIn | None = None
 
 
 class InventarioStockUpdate(BaseModel):
@@ -1621,6 +1711,7 @@ VENTA_FORMA_LIQUIDACION_ALLOWED = {
     "meses_sin_intereses",
     "meses_con_intereses",
 }
+VENTA_PLAZO_MESES_ALLOWED = {3, 6, 9, 12, 18, 24}
 VENTA_DESCUENTO_MOTIVO_ALLOWED = {
     "familiar",
     "cliente_referido",
@@ -1632,6 +1723,28 @@ VENTA_CUPON_TIPO_ALLOWED = {
     "cupon_online",
     "cupon_fisico",
     "sin_cupon",
+}
+VENTA_ESTADO_ALLOWED = {
+    "cotizacion",
+    "pendiente",
+    "confirmada",
+    "completada",
+    "cancelada",
+    "devuelta",
+}
+VENTA_ESTADO_PAGO_ALLOWED = {
+    "sin_pago",
+    "anticipo",
+    "pagada",
+    "pago_parcial",
+    "reembolsada",
+}
+VENTA_ESTADO_PEDIDO_ALLOWED = {
+    "pendiente_fabricacion",
+    "en_fabricacion",
+    "listo_entregar",
+    "entregado",
+    "cancelado",
 }
 VENTA_COMPRA_ALIASES = {
     "armazon": "armazon_solo",
@@ -1704,10 +1817,11 @@ def normalize_metodos_pago(value: str | None) -> str:
 
 def normalize_datos_descuento(
     porcentaje: Decimal,
+    monto: Decimal,
     motivo: str | None,
     cupon_tipo: str | None,
 ) -> tuple[str | None, str | None]:
-    if porcentaje <= 0:
+    if porcentaje <= 0 and monto <= 0:
         return None, None
     motivo_norm = normalize_single_allowed_token(
         motivo,
@@ -5111,7 +5225,12 @@ def listar_ventas(
       venta_base.descuento_porcentaje,
       venta_base.forma_liquidacion,
       venta_base.descuento_motivo,
-      venta_base.cupon_tipo
+      venta_base.cupon_tipo,
+      venta_base.estado_venta,
+      venta_base.estado_pago,
+      venta_base.estado_pedido,
+      venta_base.plazo_meses,
+      venta_base.descuento_monto
     FROM core.ventas_detalle v
     JOIN core.ventas venta_base ON venta_base.venta_id = v.venta_id
     WHERE {" AND ".join(where)}
@@ -5124,15 +5243,116 @@ def listar_ventas(
         with conn.cursor() as cur:
             cur.execute(sql, tuple(params))
             rows = cur.fetchall()
+            pagos_rows = []
+            productos_rows = []
+            venta_ids = [int(row[0]) for row in rows]
+            if venta_ids:
+                cur.execute(
+                    """
+                    SELECT pago_id, venta_id, metodo, monto, referencia, created_at
+                    FROM core.venta_pagos
+                    WHERE venta_id = ANY(%s::bigint[])
+                      AND activo = true
+                    ORDER BY created_at, pago_id;
+                    """,
+                    (venta_ids,),
+                )
+                pagos_rows = cur.fetchall()
+                cur.execute(
+                    """
+                    SELECT
+                      detalle.venta_id,
+                      detalle.producto_id,
+                      producto.sku,
+                      producto.categoria,
+                      producto.subcategoria,
+                      producto.nombre,
+                      producto.modelo,
+                      producto.color,
+                      producto.tipo_mica,
+                      producto.descripcion,
+                      producto.imagen_url,
+                      detalle.cantidad,
+                      detalle.precio_unitario,
+                      detalle.subtotal
+                    FROM core.venta_detalles detalle
+                    JOIN core.productos producto
+                      ON producto.producto_id = detalle.producto_id
+                    WHERE detalle.venta_id = ANY(%s::bigint[])
+                    ORDER BY detalle.venta_id, detalle.venta_detalle_id;
+                    """,
+                    (venta_ids,),
+                )
+                productos_rows = cur.fetchall()
 
     estado_map = _estado_paciente_map(sucursal_id, [int(r[9]) for r in rows])
+    pagos_por_venta: dict[int, list[dict[str, Any]]] = {}
+    for pago in pagos_rows:
+        pagos_por_venta.setdefault(int(pago[1]), []).append(
+            {
+                "pago_id": int(pago[0]),
+                "metodo": pago[2],
+                "monto": float(pago[3] or 0),
+                "referencia": pago[4],
+                "fecha_hora": str(pago[5]) if pago[5] else None,
+            }
+        )
+    productos_por_venta: dict[int, list[dict[str, Any]]] = {}
+    for producto in productos_rows:
+        productos_por_venta.setdefault(int(producto[0]), []).append(
+            {
+                "producto_id": int(producto[1]),
+                "sku": producto[2],
+                "categoria": producto[3],
+                "subcategoria": producto[4],
+                "nombre": producto[5],
+                "modelo": producto[6],
+                "color": producto[7],
+                "tipo_mica": producto[8],
+                "descripcion": producto[9],
+                "imagen_url": producto[10],
+                "cantidad": int(producto[11] or 0),
+                "precio_unitario": float(producto[12] or 0),
+                "subtotal": float(producto[13] or 0),
+            }
+        )
 
-    return [
-        {
+    ventas_out = []
+    for r in rows:
+        pagos = pagos_por_venta.get(int(r[0]), [])
+        monto_total = float(r[3] or 0)
+        if pagos:
+            monto_pagado = round(sum(float(pago["monto"]) for pago in pagos), 2)
+        else:
+            # Compatibilidad con ventas anteriores a la captura de pagos por importe.
+            monto_pagado = round(float(r[6] or 0), 2) if bool(r[5]) else monto_total
+        saldo_pendiente = max(0.0, round(monto_total - monto_pagado, 2))
+        if monto_pagado <= 0:
+            estado_pago_calculado = "sin_pago"
+        elif saldo_pendiente > 0:
+            estado_pago_calculado = "anticipo" if len(pagos) <= 1 else "pago_parcial"
+        else:
+            estado_pago_calculado = "pagada"
+        estado_pago_guardado = normalize_controlled_token(r[19])
+        if estado_pago_guardado == "reembolsada":
+            estado_pago = "reembolsada"
+        elif estado_pago_guardado == "pagada" and saldo_pendiente <= 0:
+            estado_pago = "pagada"
+        elif (
+            estado_pago_guardado in {"anticipo", "pago_parcial"}
+            and monto_pagado > 0
+            and saldo_pendiente > 0
+        ):
+            estado_pago = estado_pago_guardado
+        elif estado_pago_guardado == "sin_pago" and monto_pagado <= 0:
+            estado_pago = "sin_pago"
+        else:
+            estado_pago = estado_pago_calculado
+        ventas_out.append({
             "venta_id": r[0],
             "fecha_hora": str(r[1]) if r[1] else None,
             "compra": r[2],
-            "monto_total": float(r[3]) if r[3] is not None else 0,
+            "monto_total": monto_total,
             "metodo_pago": r[4],
             "adelanto_aplica": bool(r[5]),
             "adelanto_monto": float(r[6]) if r[6] is not None else None,
@@ -5145,13 +5365,21 @@ def listar_ventas(
             "sucursal_nombre": r[12],
             "subtotal": float(r[13]) if r[13] is not None else float(r[3] or 0),
             "descuento_porcentaje": float(r[14] or 0),
+            "descuento_monto": float(r[22] or 0),
             "forma_liquidacion": r[15] or "pago_completo",
             "descuento_motivo": r[16],
             "cupon_tipo": r[17],
             "estado_paciente": estado_map.get(int(r[9]), "nuevo"),
-        }
-        for r in rows
-    ]
+            "pagos": pagos,
+            "productos": productos_por_venta.get(int(r[0]), []),
+            "monto_pagado": monto_pagado,
+            "saldo_pendiente": saldo_pendiente,
+            "estado_pago": estado_pago,
+            "estado_venta": r[18] or "confirmada",
+            "estado_pedido": r[20] or "pendiente_fabricacion",
+            "plazo_meses": int(r[21]) if r[21] is not None else None,
+        })
+    return ventas_out
 
 
 @app.get("/inventario", summary="Listar inventario por sucursal")
@@ -5494,6 +5722,7 @@ def crear_venta(v: VentaCreate, user=Depends(get_current_user)):
     require_roles(user, ("admin", "recepcion", "doctor"))
     v.sucursal_id = force_sucursal(user, v.sucursal_id)
     productos_input = list(v.productos or [])
+    pagos_input = list(v.pagos or [])
     sanitize_model_strings(v)
     if user["rol"] == "admin" and v.sucursal_id is None:
         raise HTTPException(status_code=400, detail="Sucursal es requerida.")
@@ -5501,23 +5730,38 @@ def crear_venta(v: VentaCreate, user=Depends(get_current_user)):
         raise HTTPException(status_code=400, detail="Compra es obligatoria.")
     v.compra = normalize_compra_tokens(v.compra)
     v.metodo_pago = normalize_metodos_pago(v.metodo_pago)
+    v.estado_venta = normalize_controlled_token(v.estado_venta) or "confirmada"
+    v.estado_pedido = normalize_controlled_token(v.estado_pedido) or "pendiente_fabricacion"
+    if v.estado_venta not in VENTA_ESTADO_ALLOWED:
+        raise HTTPException(status_code=400, detail="estado_venta inválido.")
+    if v.estado_pedido not in VENTA_ESTADO_PEDIDO_ALLOWED:
+        raise HTTPException(status_code=400, detail="estado_pedido inválido.")
 
     v.forma_liquidacion = normalize_controlled_token(v.forma_liquidacion)
     if not v.forma_liquidacion:
         v.forma_liquidacion = "adelanto_apartado" if v.adelanto_aplica else "pago_completo"
     if v.forma_liquidacion not in VENTA_FORMA_LIQUIDACION_ALLOWED:
         raise HTTPException(status_code=400, detail="forma_liquidacion inválida.")
-
-    v.adelanto_aplica = v.forma_liquidacion in {"adelanto_apartado", "pago_mixto"}
-    if v.adelanto_aplica:
-        if v.adelanto_monto is None or float(v.adelanto_monto) <= 0:
-            raise HTTPException(status_code=400, detail="adelanto_monto debe ser mayor a 0.")
-        v.adelanto_metodo = normalize_controlled_token(v.adelanto_metodo)
-        if (v.adelanto_metodo or "").strip() not in VENTA_METODO_PAGO_ALLOWED:
-            raise HTTPException(status_code=400, detail="adelanto_metodo inválido.")
+    if v.forma_liquidacion in {"meses_sin_intereses", "meses_con_intereses"}:
+        if v.plazo_meses not in VENTA_PLAZO_MESES_ALLOWED:
+            raise HTTPException(
+                status_code=400,
+                detail="Selecciona un plazo de 3, 6, 9, 12, 18 o 24 meses.",
+            )
     else:
-        v.adelanto_monto = None
-        v.adelanto_metodo = None
+        v.plazo_meses = None
+
+    if v.pagos is None:
+        v.adelanto_aplica = v.forma_liquidacion in {"adelanto_apartado", "pago_mixto"}
+        if v.adelanto_aplica:
+            if v.adelanto_monto is None or float(v.adelanto_monto) <= 0:
+                raise HTTPException(status_code=400, detail="adelanto_monto debe ser mayor a 0.")
+            v.adelanto_metodo = normalize_controlled_token(v.adelanto_metodo)
+            if (v.adelanto_metodo or "").strip() not in VENTA_METODO_PAGO_ALLOWED:
+                raise HTTPException(status_code=400, detail="adelanto_metodo inválido.")
+        else:
+            v.adelanto_monto = None
+            v.adelanto_metodo = None
 
     descuento_porcentaje = Decimal(str(v.descuento_porcentaje or 0))
     if descuento_porcentaje < 0 or descuento_porcentaje > 100:
@@ -5525,8 +5769,17 @@ def crear_venta(v: VentaCreate, user=Depends(get_current_user)):
             status_code=400,
             detail="descuento_porcentaje debe estar entre 0 y 100.",
         )
+    descuento_monto = Decimal(str(v.descuento_monto or 0)).quantize(Decimal("0.01"))
+    if descuento_monto < 0:
+        raise HTTPException(status_code=400, detail="descuento_monto no puede ser negativo.")
+    if descuento_porcentaje > 0 and descuento_monto > 0:
+        raise HTTPException(
+            status_code=400,
+            detail="Usa un descuento por porcentaje o por monto, no ambos.",
+        )
     v.descuento_motivo, v.cupon_tipo = normalize_datos_descuento(
         descuento_porcentaje,
+        descuento_monto,
         v.descuento_motivo,
         v.cupon_tipo,
     )
@@ -5658,23 +5911,79 @@ def crear_venta(v: VentaCreate, user=Depends(get_current_user)):
                     if subtotal_venta <= 0:
                         raise HTTPException(status_code=400, detail="Monto total debe ser mayor a 0.")
 
-                monto_total = (
-                    subtotal_venta * (Decimal("100") - descuento_porcentaje) / Decimal("100")
-                ).quantize(Decimal("0.01"))
-                if v.adelanto_aplica and Decimal(str(v.adelanto_monto or 0)) > monto_total:
+                if descuento_monto > subtotal_venta:
                     raise HTTPException(
                         status_code=400,
-                        detail="El adelanto no puede ser mayor al total de la venta.",
+                        detail="El descuento en pesos no puede ser mayor al subtotal.",
                     )
+                descuento_calculado = (
+                    descuento_monto
+                    if descuento_monto > 0
+                    else subtotal_venta * descuento_porcentaje / Decimal("100")
+                ).quantize(Decimal("0.01"))
+                monto_total = (subtotal_venta - descuento_calculado).quantize(Decimal("0.01"))
+                pagos_validados: list[dict[str, Any]] = []
+                monto_pagado = Decimal("0.00")
+                for pago in pagos_input:
+                    metodo = normalize_controlled_token(pago.metodo)
+                    if metodo not in VENTA_METODO_PAGO_ALLOWED:
+                        raise HTTPException(status_code=400, detail="Método de pago inválido.")
+                    monto_pago = Decimal(str(pago.monto)).quantize(Decimal("0.01"))
+                    if monto_pago <= 0:
+                        raise HTTPException(status_code=400, detail="Cada pago debe ser mayor a 0.")
+                    referencia = (pago.referencia or "").strip() or None
+                    if referencia and len(referencia) > 120:
+                        raise HTTPException(status_code=400, detail="La referencia del pago es demasiado larga.")
+                    pagos_validados.append(
+                        {"metodo": metodo, "monto": monto_pago, "referencia": referencia}
+                    )
+                    monto_pagado += monto_pago
 
+                if not pagos_validados:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Registra al menos un pago o adelanto.",
+                    )
+                if monto_pagado > monto_total:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="La suma de los pagos no puede ser mayor al total de la venta.",
+                    )
+                if pagos_validados:
+                    metodos_pago = list(dict.fromkeys(pago["metodo"] for pago in pagos_validados))
+                    v.metodo_pago = "|".join(metodos_pago)
+                    tiene_plan_financiamiento = v.forma_liquidacion in {
+                        "meses_sin_intereses",
+                        "meses_con_intereses",
+                    }
+                    if monto_pagado < monto_total:
+                        if not tiene_plan_financiamiento:
+                            v.forma_liquidacion = "adelanto_apartado"
+                        v.adelanto_aplica = True
+                        v.adelanto_monto = float(monto_pagado)
+                        v.adelanto_metodo = metodos_pago[0] if len(metodos_pago) == 1 else None
+                    else:
+                        if not tiene_plan_financiamiento:
+                            v.forma_liquidacion = "pago_mixto" if len(metodos_pago) > 1 else "pago_completo"
+                        v.adelanto_aplica = False
+                        v.adelanto_monto = None
+                        v.adelanto_metodo = None
+                v.estado_pago = (
+                    "pagada"
+                    if monto_pagado >= monto_total
+                    else "anticipo"
+                    if len(pagos_validados) == 1
+                    else "pago_parcial"
+                )
                 cur.execute(
                     """
                     INSERT INTO core.ventas (
-                      sucursal_id, paciente_id, compra, subtotal, descuento_porcentaje,
-                      descuento_motivo, cupon_tipo, monto_total, metodo_pago, forma_liquidacion, adelanto_aplica,
-                      adelanto_monto, adelanto_metodo, notas, created_by
+                      sucursal_id, paciente_id, compra, subtotal, descuento_porcentaje, descuento_monto,
+                      descuento_motivo, cupon_tipo, monto_total, metodo_pago, forma_liquidacion, plazo_meses, adelanto_aplica,
+                      adelanto_monto, adelanto_metodo, estado_venta, estado_pago,
+                      estado_pedido, notas, created_by
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     RETURNING venta_id;
                     """,
                     (
@@ -5683,19 +5992,41 @@ def crear_venta(v: VentaCreate, user=Depends(get_current_user)):
                         v.compra,
                         subtotal_venta,
                         descuento_porcentaje,
+                        descuento_monto,
                         v.descuento_motivo,
                         v.cupon_tipo,
                         monto_total,
                         v.metodo_pago,
                         v.forma_liquidacion,
+                        v.plazo_meses,
                         v.adelanto_aplica,
                         v.adelanto_monto,
                         v.adelanto_metodo,
+                        v.estado_venta,
+                        v.estado_pago,
+                        v.estado_pedido,
                         v.notas,
                         user["username"],
                     ),
                 )
                 new_id = cur.fetchone()[0]
+
+                for pago in pagos_validados:
+                    cur.execute(
+                        """
+                        INSERT INTO core.venta_pagos (
+                            venta_id, metodo, monto, referencia, created_by
+                        )
+                        VALUES (%s, %s, %s, %s, %s);
+                        """,
+                        (
+                            new_id,
+                            pago["metodo"],
+                            pago["monto"],
+                            pago["referencia"],
+                            user["username"],
+                        ),
+                    )
 
                 inventario_descontado: list[dict[str, Any]] = []
                 for producto in productos_validados:
@@ -5745,7 +6076,14 @@ def crear_venta(v: VentaCreate, user=Depends(get_current_user)):
             "venta_id": new_id,
             "subtotal": float(subtotal_venta),
             "descuento_porcentaje": float(descuento_porcentaje),
+            "descuento_monto": float(descuento_monto),
             "monto_total": float(monto_total),
+            "monto_pagado": float(monto_pagado),
+            "saldo_pendiente": float(monto_total - monto_pagado),
+            "estado_venta": v.estado_venta,
+            "estado_pago": v.estado_pago,
+            "estado_pedido": v.estado_pedido,
+            "plazo_meses": v.plazo_meses,
             "inventario_descontado": inventario_descontado,
         }
     except HTTPException:
@@ -5767,11 +6105,28 @@ def actualizar_venta(venta_id: int, v: VentaCreate, user=Depends(get_current_use
         raise HTTPException(status_code=400, detail="Monto total no puede ser negativo.")
     v.compra = normalize_compra_tokens(v.compra)
     v.metodo_pago = normalize_metodos_pago(v.metodo_pago)
+    v.estado_venta = normalize_controlled_token(v.estado_venta)
+    v.estado_pago = normalize_controlled_token(v.estado_pago)
+    v.estado_pedido = normalize_controlled_token(v.estado_pedido)
+    if v.estado_venta and v.estado_venta not in VENTA_ESTADO_ALLOWED:
+        raise HTTPException(status_code=400, detail="estado_venta inválido.")
+    if v.estado_pago and v.estado_pago not in VENTA_ESTADO_PAGO_ALLOWED:
+        raise HTTPException(status_code=400, detail="estado_pago inválido.")
+    if v.estado_pedido and v.estado_pedido not in VENTA_ESTADO_PEDIDO_ALLOWED:
+        raise HTTPException(status_code=400, detail="estado_pedido inválido.")
     v.forma_liquidacion = normalize_controlled_token(v.forma_liquidacion)
     if not v.forma_liquidacion:
         v.forma_liquidacion = "adelanto_apartado" if v.adelanto_aplica else "pago_completo"
     if v.forma_liquidacion not in VENTA_FORMA_LIQUIDACION_ALLOWED:
         raise HTTPException(status_code=400, detail="forma_liquidacion inválida.")
+    if v.forma_liquidacion in {"meses_sin_intereses", "meses_con_intereses"}:
+        if v.plazo_meses not in VENTA_PLAZO_MESES_ALLOWED:
+            raise HTTPException(
+                status_code=400,
+                detail="Selecciona un plazo de 3, 6, 9, 12, 18 o 24 meses.",
+            )
+    else:
+        v.plazo_meses = None
     v.adelanto_aplica = v.forma_liquidacion in {"adelanto_apartado", "pago_mixto"}
     if v.adelanto_aplica:
         if v.adelanto_monto is None or float(v.adelanto_monto) <= 0:
@@ -5787,16 +6142,40 @@ def actualizar_venta(venta_id: int, v: VentaCreate, user=Depends(get_current_use
             status_code=400,
             detail="El inventario de una venta existente no se modifica desde esta operación.",
         )
+    if v.pagos is not None:
+        raise HTTPException(
+            status_code=400,
+            detail="Los pagos de una venta existente se registran por separado.",
+        )
     descuento_porcentaje = Decimal(str(v.descuento_porcentaje or 0))
     if descuento_porcentaje < 0 or descuento_porcentaje > 100:
         raise HTTPException(status_code=400, detail="descuento_porcentaje debe estar entre 0 y 100.")
+    descuento_monto = Decimal(str(v.descuento_monto or 0)).quantize(Decimal("0.01"))
+    if descuento_monto < 0:
+        raise HTTPException(status_code=400, detail="descuento_monto no puede ser negativo.")
+    if descuento_porcentaje > 0 and descuento_monto > 0:
+        raise HTTPException(
+            status_code=400,
+            detail="Usa un descuento por porcentaje o por monto, no ambos.",
+        )
     v.descuento_motivo, v.cupon_tipo = normalize_datos_descuento(
         descuento_porcentaje,
+        descuento_monto,
         v.descuento_motivo,
         v.cupon_tipo,
     )
     subtotal_venta = Decimal(str(v.subtotal if v.subtotal is not None else v.monto_total or 0))
-    monto_total = Decimal(str(v.monto_total or 0))
+    if descuento_monto > subtotal_venta:
+        raise HTTPException(
+            status_code=400,
+            detail="El descuento en pesos no puede ser mayor al subtotal.",
+        )
+    descuento_calculado = (
+        descuento_monto
+        if descuento_monto > 0
+        else subtotal_venta * descuento_porcentaje / Decimal("100")
+    ).quantize(Decimal("0.01"))
+    monto_total = (subtotal_venta - descuento_calculado).quantize(Decimal("0.01"))
 
     try:
         with psycopg.connect(DB_CONNINFO) as conn:
@@ -5857,14 +6236,19 @@ def actualizar_venta(venta_id: int, v: VentaCreate, user=Depends(get_current_use
                         compra = %s,
                         subtotal = %s,
                         descuento_porcentaje = %s,
+                        descuento_monto = %s,
                         descuento_motivo = %s,
                         cupon_tipo = %s,
                         monto_total = %s,
                         metodo_pago = %s,
                         forma_liquidacion = %s,
+                        plazo_meses = %s,
                         adelanto_aplica = %s,
                         adelanto_monto = %s,
                         adelanto_metodo = %s,
+                        estado_venta = COALESCE(%s, estado_venta),
+                        estado_pago = COALESCE(%s, estado_pago),
+                        estado_pedido = COALESCE(%s, estado_pedido),
                         notas = %s,
                         updated_at = NOW()
                     WHERE venta_id = %s
@@ -5877,14 +6261,19 @@ def actualizar_venta(venta_id: int, v: VentaCreate, user=Depends(get_current_use
                         v.compra,
                         subtotal_venta,
                         descuento_porcentaje,
+                        descuento_monto,
                         v.descuento_motivo,
                         v.cupon_tipo,
                         monto_total,
                         v.metodo_pago,
                         v.forma_liquidacion,
+                        v.plazo_meses,
                         v.adelanto_aplica,
                         v.adelanto_monto,
                         v.adelanto_metodo,
+                        v.estado_venta,
+                        v.estado_pago,
+                        v.estado_pedido,
                         v.notas,
                         venta_id,
                         v.sucursal_id,
@@ -5899,6 +6288,247 @@ def actualizar_venta(venta_id: int, v: VentaCreate, user=Depends(get_current_use
         raise
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.patch("/ventas/{venta_id}/seguimiento", summary="Actualizar seguimiento y pagos de una venta")
+def actualizar_seguimiento_venta(
+    venta_id: int,
+    data: VentaSeguimientoUpdate,
+    user=Depends(get_current_user),
+):
+    require_roles(user, ("admin", "recepcion", "doctor"))
+    data.sucursal_id = force_sucursal(user, data.sucursal_id)
+    nuevo_pago_input = data.nuevo_pago
+    sanitize_model_strings(data)
+    if user["rol"] == "admin" and data.sucursal_id is None:
+        raise HTTPException(status_code=400, detail="Sucursal es requerida.")
+
+    estado_venta = normalize_controlled_token(data.estado_venta)
+    estado_pago_solicitado = normalize_controlled_token(data.estado_pago)
+    estado_pedido = normalize_controlled_token(data.estado_pedido)
+    if estado_venta not in VENTA_ESTADO_ALLOWED:
+        raise HTTPException(status_code=400, detail="estado_venta inválido.")
+    if estado_pago_solicitado not in VENTA_ESTADO_PAGO_ALLOWED:
+        raise HTTPException(status_code=400, detail="estado_pago inválido.")
+    if estado_pedido not in VENTA_ESTADO_PEDIDO_ALLOWED:
+        raise HTTPException(status_code=400, detail="estado_pedido inválido.")
+    if nuevo_pago_input is not None and estado_venta in {"cancelada", "devuelta"}:
+        raise HTTPException(
+            status_code=400,
+            detail="No se puede registrar un pago nuevo en una venta cancelada o devuelta.",
+        )
+    if nuevo_pago_input is not None and estado_pago_solicitado == "reembolsada":
+        raise HTTPException(
+            status_code=400,
+            detail="No se puede registrar un pago nuevo y marcarlo como reembolsado al mismo tiempo.",
+        )
+
+    with psycopg.connect(DB_CONNINFO) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                  monto_total,
+                  forma_liquidacion,
+                  adelanto_aplica,
+                  adelanto_monto,
+                  metodo_pago,
+                  adelanto_metodo
+                FROM core.ventas
+                WHERE venta_id = %s
+                  AND sucursal_id = %s
+                  AND activo = true
+                FOR UPDATE;
+                """,
+                (venta_id, data.sucursal_id),
+            )
+            venta_row = cur.fetchone()
+            if venta_row is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail="Venta no existe en esa sucursal o está inactiva.",
+                )
+            monto_total = Decimal(str(venta_row[0] or 0)).quantize(Decimal("0.01"))
+            forma_liquidacion_actual = normalize_controlled_token(venta_row[1]) or "pago_completo"
+            adelanto_legacy = bool(venta_row[2])
+            adelanto_monto_legacy = Decimal(str(venta_row[3] or 0)).quantize(Decimal("0.01"))
+            metodo_pago_legacy = normalize_metodos_pago(venta_row[4] or "efectivo")
+            adelanto_metodo_legacy = normalize_controlled_token(venta_row[5])
+
+            cur.execute(
+                """
+                SELECT pago_id, metodo, monto, referencia, created_at
+                FROM core.venta_pagos
+                WHERE venta_id = %s
+                  AND activo = true
+                ORDER BY created_at, pago_id
+                FOR UPDATE;
+                """,
+                (venta_id,),
+            )
+            pagos_rows = list(cur.fetchall())
+            if not pagos_rows:
+                monto_legacy = adelanto_monto_legacy if adelanto_legacy else monto_total
+                if monto_legacy > 0:
+                    metodo_legacy = (
+                        adelanto_metodo_legacy
+                        if adelanto_metodo_legacy in VENTA_METODO_PAGO_ALLOWED
+                        else split_pipe_tokens(metodo_pago_legacy)[0]
+                        if split_pipe_tokens(metodo_pago_legacy)
+                        else "efectivo"
+                    )
+                    cur.execute(
+                        """
+                        INSERT INTO core.venta_pagos (
+                            venta_id, metodo, monto, referencia, created_by
+                        )
+                        VALUES (%s, %s, %s, NULL, %s)
+                        RETURNING pago_id, metodo, monto, referencia, created_at;
+                        """,
+                        (venta_id, metodo_legacy, monto_legacy, user["username"]),
+                    )
+                    pagos_rows.append(cur.fetchone())
+
+            if nuevo_pago_input is not None:
+                metodo_nuevo = normalize_controlled_token(nuevo_pago_input.metodo)
+                if metodo_nuevo not in VENTA_METODO_PAGO_ALLOWED:
+                    raise HTTPException(status_code=400, detail="Método de pago inválido.")
+                monto_nuevo = Decimal(str(nuevo_pago_input.monto)).quantize(Decimal("0.01"))
+                if monto_nuevo <= 0:
+                    raise HTTPException(status_code=400, detail="El pago nuevo debe ser mayor a 0.")
+                monto_pagado_actual = sum(
+                    (Decimal(str(row[2] or 0)) for row in pagos_rows),
+                    Decimal("0.00"),
+                )
+                if monto_pagado_actual + monto_nuevo > monto_total:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="El pago nuevo es mayor que el saldo por pagar.",
+                    )
+                cur.execute(
+                    """
+                    INSERT INTO core.venta_pagos (
+                        venta_id, metodo, monto, referencia, created_by
+                    )
+                    VALUES (%s, %s, %s, NULL, %s)
+                    RETURNING pago_id, metodo, monto, referencia, created_at;
+                    """,
+                    (venta_id, metodo_nuevo, monto_nuevo, user["username"]),
+                )
+                pagos_rows.append(cur.fetchone())
+
+            monto_pagado = sum(
+                (Decimal(str(row[2] or 0)) for row in pagos_rows),
+                Decimal("0.00"),
+            ).quantize(Decimal("0.01"))
+            saldo_pendiente = max(Decimal("0.00"), monto_total - monto_pagado)
+
+            if estado_pago_solicitado == "reembolsada":
+                estado_pago = "reembolsada"
+            elif monto_pagado <= 0:
+                if estado_pago_solicitado != "sin_pago":
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Sin pagos registrados, el estado debe ser Sin pago.",
+                    )
+                estado_pago = "sin_pago"
+            elif saldo_pendiente <= 0:
+                if estado_pago_solicitado != "pagada":
+                    raise HTTPException(
+                        status_code=400,
+                        detail="La venta está liquidada; el estado de pago debe ser Pagada.",
+                    )
+                estado_pago = "pagada"
+            else:
+                if estado_pago_solicitado not in {"anticipo", "pago_parcial"}:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="La venta aún tiene saldo; usa Anticipo o Pago parcial.",
+                    )
+                estado_pago = estado_pago_solicitado
+
+            metodos = list(dict.fromkeys(str(row[1]) for row in pagos_rows))
+            metodo_pago = "|".join(metodos) if metodos else "efectivo"
+            if estado_pago == "pagada":
+                forma_liquidacion = (
+                    forma_liquidacion_actual
+                    if forma_liquidacion_actual in {"meses_sin_intereses", "meses_con_intereses"}
+                    else "pago_mixto"
+                    if len(metodos) > 1
+                    else "pago_completo"
+                )
+                adelanto_aplica = False
+                adelanto_monto = None
+                adelanto_metodo = None
+            elif monto_pagado > 0:
+                forma_liquidacion = (
+                    forma_liquidacion_actual
+                    if forma_liquidacion_actual in {"meses_sin_intereses", "meses_con_intereses"}
+                    else "adelanto_apartado"
+                )
+                adelanto_aplica = True
+                adelanto_monto = monto_pagado
+                adelanto_metodo = metodos[0] if len(metodos) == 1 else None
+            else:
+                forma_liquidacion = forma_liquidacion_actual
+                adelanto_aplica = False
+                adelanto_monto = None
+                adelanto_metodo = None
+
+            cur.execute(
+                """
+                UPDATE core.ventas
+                SET estado_venta = %s,
+                    estado_pago = %s,
+                    estado_pedido = %s,
+                    metodo_pago = %s,
+                    forma_liquidacion = %s,
+                    adelanto_aplica = %s,
+                    adelanto_monto = %s,
+                    adelanto_metodo = %s,
+                    notas = %s,
+                    updated_at = NOW()
+                WHERE venta_id = %s
+                  AND sucursal_id = %s
+                  AND activo = true;
+                """,
+                (
+                    estado_venta,
+                    estado_pago,
+                    estado_pedido,
+                    metodo_pago,
+                    forma_liquidacion,
+                    adelanto_aplica,
+                    adelanto_monto,
+                    adelanto_metodo,
+                    data.notas,
+                    venta_id,
+                    data.sucursal_id,
+                ),
+            )
+        conn.commit()
+
+    return {
+        "venta_id": venta_id,
+        "estado_venta": estado_venta,
+        "estado_pago": estado_pago,
+        "estado_pedido": estado_pedido,
+        "metodo_pago": metodo_pago,
+        "forma_liquidacion": forma_liquidacion,
+        "monto_pagado": float(monto_pagado),
+        "saldo_pendiente": float(saldo_pendiente),
+        "notas": data.notas,
+        "pagos": [
+            {
+                "pago_id": int(row[0]),
+                "metodo": row[1],
+                "monto": float(row[2] or 0),
+                "referencia": row[3],
+                "fecha_hora": str(row[4]) if row[4] else None,
+            }
+            for row in pagos_rows
+        ],
+    }
 
 
 @app.delete("/ventas/{venta_id}", summary="Eliminar venta (definitivo)")
@@ -5943,6 +6573,10 @@ def eliminar_venta(venta_id: int, sucursal_id: int, user=Depends(get_current_use
                 cur,
                 [venta_id],
                 sucursal_id,
+            )
+            cur.execute(
+                "DELETE FROM core.venta_pagos WHERE venta_id = %s;",
+                (venta_id,),
             )
             cur.execute(
                 """
