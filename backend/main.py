@@ -1,7 +1,7 @@
-from fastapi import FastAPI, HTTPException, Depends
+from fastapi import FastAPI, HTTPException, Depends, Request
 from fastapi.security import OAuth2PasswordBearer
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, Response
 
 from jose import jwt, JWTError
 from passlib.hash import argon2
@@ -20,7 +20,7 @@ import secrets
 import re
 import time as time_module
 from urllib.parse import urlencode
-from urllib.request import Request, urlopen
+from urllib.request import Request as UrlRequest, urlopen
 from urllib.error import HTTPError
 
 import psycopg
@@ -1169,6 +1169,15 @@ def ensure_auth_schema():
                   ALTER COLUMN rol SET NOT NULL;
                 """
             )
+            cur.execute(
+                """
+                ALTER TABLE core.usuarios
+                  DROP CONSTRAINT IF EXISTS usuarios_rol_check;
+                ALTER TABLE core.usuarios
+                  ADD CONSTRAINT usuarios_rol_check
+                  CHECK (rol IN ('admin', 'recepcion', 'doctor', 'contador'));
+                """
+            )
 
             admin_user = (
                 os.getenv("ADMIN_USER")
@@ -1357,6 +1366,7 @@ class VentaProductoIn(BaseModel):
 
 
 class VentaPagoIn(BaseModel):
+    pago_id: int | None = None
     metodo: str
     monto: Decimal
     referencia: str | None = None
@@ -1408,6 +1418,74 @@ class InventarioProductoUpdate(BaseModel):
     costo_unitario: Decimal | None = None
 
 
+class InventarioMovimientoIn(BaseModel):
+    sucursal_id: int | None = 1
+    tipo: str
+    cantidad: int
+    expected_stock: int
+    costo_unitario: Decimal | None = None
+    proveedor: str | None = None
+    folio: str | None = None
+    notas: str | None = None
+
+
+class FinanzasMovimientoIn(BaseModel):
+    sucursal_id: int | None = 1
+    fecha: str | None = None
+    cuenta: str
+    tipo: str
+    categoria: str
+    descripcion: str
+    monto: Decimal
+    estado: str | None = "registrado"
+    referencia: str | None = None
+
+
+class FinanzasGastoIn(BaseModel):
+    sucursal_id: int | None = 1
+    fecha: str
+    categoria: str
+    proveedor: str | None = None
+    descripcion: str
+    monto: Decimal
+    cuenta: str | None = None
+    estado: str | None = "pendiente"
+    comprobante_url: str | None = None
+    fecha_pago: str | None = None
+
+
+class FinanzasNominaIn(BaseModel):
+    sucursal_id: int | None = 1
+    empleado: str
+    periodo_inicio: str
+    periodo_fin: str
+    salario_base: Decimal = Decimal("0")
+    horas: Decimal = Decimal("0")
+    comisiones: Decimal = Decimal("0")
+    bonos: Decimal = Decimal("0")
+    deducciones: Decimal = Decimal("0")
+    pago_neto: Decimal = Decimal("0")
+    costo_patronal: Decimal = Decimal("0")
+    fecha_pago: str | None = None
+    cuenta: str | None = None
+    estado: str | None = "pendiente"
+    notas: str | None = None
+
+
+class FinanzasCuentaPagarIn(BaseModel):
+    sucursal_id: int | None = 1
+    proveedor: str
+    categoria: str
+    concepto: str
+    folio: str | None = None
+    fecha_emision: str
+    fecha_vencimiento: str | None = None
+    monto_total: Decimal
+    monto_pagado: Decimal = Decimal("0")
+    estado: str | None = "pendiente"
+    comprobante_url: str | None = None
+
+
 class Sucursal(BaseModel):
     sucursal_id: int
     nombre: str
@@ -1419,6 +1497,7 @@ class Sucursal(BaseModel):
 class LoginIn(BaseModel):
     username: str
     password: str
+
 
 class HistoriaClinicaBase(BaseModel):
     od_esfera: Optional[str] = None
@@ -2289,6 +2368,7 @@ def startup_migrations():
     ensure_auth_schema()
     ensure_historia_schema()
     ensure_ventas_schema()
+    ensure_finanzas_schema()
     ensure_consultas_schema()
     ensure_pacientes_schema()
     try:
@@ -3658,7 +3738,7 @@ def oauth2_callback(code: str | None = None, state: str | None = None, error: st
         }
     ).encode("utf-8")
 
-    req = Request(
+    req = UrlRequest(
         conf["token_uri"],
         data=token_payload,
         headers={"Content-Type": "application/x-www-form-urlencoded"},
@@ -5135,7 +5215,7 @@ def listar_ventas(
     q: str | None = None,
     user=Depends(get_current_user),
 ):
-    require_roles(user, ("admin", "recepcion", "doctor"))
+    require_roles(user, ("admin", "recepcion", "doctor", "contador"))
     sucursal_id = force_sucursal(user, sucursal_id)
     tz_name = _timezone_for_sucursal(sucursal_id) if sucursal_id is not None else None
     search_tz = tz_name or "America/Mexico_City"
@@ -5358,7 +5438,9 @@ def listar_ventas(
             "adelanto_monto": float(r[6]) if r[6] is not None else None,
             "adelanto_metodo": r[7],
             "como_nos_conocio": None,
-            "notas": r[8],
+            # Las notas libres pueden contener información privada. El contador
+            # recibe únicamente la información comercial de la venta.
+            "notas": None if user["rol"] == "contador" else r[8],
             "paciente_id": r[9],
             "paciente_nombre": r[10],
             "sucursal_id": r[11],
@@ -5389,7 +5471,7 @@ def listar_inventario(
     incluir_inactivos: bool = False,
     user=Depends(get_current_user),
 ):
-    require_roles(user, ("admin", "recepcion", "doctor"))
+    require_roles(user, ("admin", "recepcion", "doctor", "contador"))
     sucursal_id = force_sucursal(user, sucursal_id)
     if sucursal_id is None:
         raise HTTPException(status_code=400, detail="Sucursal es requerida.")
@@ -5441,7 +5523,7 @@ def listar_inventario(
             "orden_catalogo": int(r[16] or 100),
             "created_at": str(r[17]) if r[17] else None,
             "updated_at": str(r[18]) if r[18] else None,
-            "costo_unitario": float(r[19] or 0) if user["rol"] == "admin" else None,
+            "costo_unitario": float(r[19] or 0) if user["rol"] in ("admin", "contador") else None,
         }
         for r in rows
     ]
@@ -5498,8 +5580,161 @@ def actualizar_stock_inventario(
                     status_code=409,
                     detail=f"El stock cambió mientras editabas. Stock actual: {int(current_row[0])}. Actualiza la lista e intenta de nuevo.",
                 )
+            if data.stock != data.expected_stock:
+                cur.execute(
+                    """INSERT INTO core.inventario_movimientos (
+                         sucursal_id, producto_id, tipo, cantidad, stock_anterior, stock_nuevo,
+                         notas, created_by
+                       ) VALUES (%s, %s, 'conteo_fisico', %s, %s, %s, %s, %s);""",
+                    (
+                        sucursal_id,
+                        producto_id,
+                        data.stock - data.expected_stock,
+                        data.expected_stock,
+                        data.stock,
+                        "Ajuste rápido de existencias",
+                        user["username"],
+                    ),
+                )
         conn.commit()
+
     return {"producto_id": row[0], "stock": row[1], "updated": True}
+
+
+def ensure_finanzas_schema():
+    """Crea las estructuras auditables de inventario y finanzas sin duplicar ventas."""
+    with psycopg.connect(DB_CONNINFO) as conn:
+        with conn.cursor() as cur:
+            cur.execute("CREATE SCHEMA IF NOT EXISTS core;")
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS core.inventario_movimientos (
+                    movimiento_id bigserial PRIMARY KEY,
+                    sucursal_id integer NOT NULL REFERENCES core.sucursales(sucursal_id),
+                    producto_id bigint NOT NULL REFERENCES core.productos(producto_id),
+                    tipo text NOT NULL,
+                    cantidad integer NOT NULL,
+                    stock_anterior integer NOT NULL,
+                    stock_nuevo integer NOT NULL,
+                    costo_unitario numeric(12,2) NULL,
+                    proveedor text NULL,
+                    folio text NULL,
+                    notas text NULL,
+                    fuente_tipo text NULL,
+                    fuente_id bigint NULL,
+                    created_by text NOT NULL,
+                    created_at timestamptz NOT NULL DEFAULT NOW()
+                );
+                CREATE INDEX IF NOT EXISTS idx_inventario_movimientos_sucursal_fecha
+                ON core.inventario_movimientos (sucursal_id, created_at DESC);
+
+                CREATE TABLE IF NOT EXISTS core.fin_movimientos (
+                    movimiento_id bigserial PRIMARY KEY,
+                    sucursal_id integer NOT NULL REFERENCES core.sucursales(sucursal_id),
+                    fecha timestamptz NOT NULL DEFAULT NOW(),
+                    cuenta text NOT NULL,
+                    tipo text NOT NULL CHECK (tipo IN ('ingreso', 'egreso')),
+                    categoria text NOT NULL,
+                    descripcion text NOT NULL,
+                    monto numeric(12,2) NOT NULL CHECK (monto > 0),
+                    estado text NOT NULL DEFAULT 'registrado',
+                    referencia text NULL,
+                    created_by text NOT NULL,
+                    created_at timestamptz NOT NULL DEFAULT NOW()
+                );
+                CREATE INDEX IF NOT EXISTS idx_fin_movimientos_sucursal_fecha
+                ON core.fin_movimientos (sucursal_id, fecha DESC);
+
+                CREATE TABLE IF NOT EXISTS core.fin_gastos (
+                    gasto_id bigserial PRIMARY KEY,
+                    sucursal_id integer NOT NULL REFERENCES core.sucursales(sucursal_id),
+                    fecha date NOT NULL DEFAULT CURRENT_DATE,
+                    categoria text NOT NULL,
+                    proveedor text NULL,
+                    descripcion text NOT NULL,
+                    monto numeric(12,2) NOT NULL CHECK (monto > 0),
+                    cuenta text NULL,
+                    estado text NOT NULL DEFAULT 'pendiente',
+                    comprobante_url text NULL,
+                    fecha_pago date NULL,
+                    created_by text NOT NULL,
+                    created_at timestamptz NOT NULL DEFAULT NOW(),
+                    updated_at timestamptz NOT NULL DEFAULT NOW()
+                );
+                CREATE INDEX IF NOT EXISTS idx_fin_gastos_sucursal_fecha
+                ON core.fin_gastos (sucursal_id, fecha DESC);
+
+                CREATE TABLE IF NOT EXISTS core.fin_nomina (
+                    nomina_id bigserial PRIMARY KEY,
+                    sucursal_id integer NOT NULL REFERENCES core.sucursales(sucursal_id),
+                    empleado text NOT NULL,
+                    periodo_inicio date NOT NULL,
+                    periodo_fin date NOT NULL,
+                    salario_base numeric(12,2) NOT NULL DEFAULT 0,
+                    horas numeric(8,2) NOT NULL DEFAULT 0,
+                    comisiones numeric(12,2) NOT NULL DEFAULT 0,
+                    bonos numeric(12,2) NOT NULL DEFAULT 0,
+                    deducciones numeric(12,2) NOT NULL DEFAULT 0,
+                    pago_neto numeric(12,2) NOT NULL DEFAULT 0,
+                    costo_patronal numeric(12,2) NOT NULL DEFAULT 0,
+                    fecha_pago date NULL,
+                    cuenta text NULL,
+                    estado text NOT NULL DEFAULT 'pendiente',
+                    notas text NULL,
+                    created_by text NOT NULL,
+                    created_at timestamptz NOT NULL DEFAULT NOW(),
+                    updated_at timestamptz NOT NULL DEFAULT NOW()
+                );
+                CREATE INDEX IF NOT EXISTS idx_fin_nomina_sucursal_periodo
+                ON core.fin_nomina (sucursal_id, periodo_inicio DESC);
+
+                CREATE TABLE IF NOT EXISTS core.fin_cuentas_pagar (
+                    cuenta_pagar_id bigserial PRIMARY KEY,
+                    sucursal_id integer NOT NULL REFERENCES core.sucursales(sucursal_id),
+                    proveedor text NOT NULL,
+                    categoria text NOT NULL,
+                    concepto text NOT NULL,
+                    folio text NULL,
+                    fecha_emision date NOT NULL DEFAULT CURRENT_DATE,
+                    fecha_vencimiento date NULL,
+                    monto_total numeric(12,2) NOT NULL CHECK (monto_total > 0),
+                    monto_pagado numeric(12,2) NOT NULL DEFAULT 0 CHECK (monto_pagado >= 0),
+                    estado text NOT NULL DEFAULT 'pendiente',
+                    comprobante_url text NULL,
+                    created_by text NOT NULL,
+                    created_at timestamptz NOT NULL DEFAULT NOW(),
+                    updated_at timestamptz NOT NULL DEFAULT NOW()
+                );
+                CREATE INDEX IF NOT EXISTS idx_fin_cxp_sucursal_vencimiento
+                ON core.fin_cuentas_pagar (sucursal_id, fecha_vencimiento);
+
+                CREATE TABLE IF NOT EXISTS core.fin_comprobantes (
+                    comprobante_id bigserial PRIMARY KEY,
+                    sucursal_id integer NOT NULL REFERENCES core.sucursales(sucursal_id),
+                    recurso text NOT NULL,
+                    registro_id bigint NOT NULL,
+                    nombre_archivo text NOT NULL,
+                    mime_type text NOT NULL,
+                    contenido bytea NOT NULL,
+                    created_by text NOT NULL,
+                    created_at timestamptz NOT NULL DEFAULT NOW()
+                );
+                CREATE INDEX IF NOT EXISTS idx_fin_comprobantes_recurso
+                ON core.fin_comprobantes (sucursal_id, recurso, registro_id, created_at DESC);
+                """
+            )
+            cur.execute(
+                """
+                ALTER TABLE core.venta_detalles
+                ADD COLUMN IF NOT EXISTS costo_unitario numeric(12,2) NULL;
+                UPDATE core.venta_detalles detalle
+                SET costo_unitario = producto.costo_unitario
+                FROM core.productos producto
+                WHERE producto.producto_id = detalle.producto_id
+                  AND detalle.costo_unitario IS NULL;
+                """
+            )
+        conn.commit()
 
 
 @app.patch("/inventario/{producto_id}", summary="Actualizar costo, precio o stock (solo admin)")
@@ -5579,6 +5814,22 @@ def actualizar_producto_inventario(
                         detail=f"El stock cambió mientras editabas. Stock actual: {int(current_row[0])}. Actualiza la lista e intenta de nuevo.",
                     )
                 raise HTTPException(status_code=400, detail="No se pudo actualizar el producto.")
+            if data.stock is not None and data.stock != data.expected_stock:
+                cur.execute(
+                    """INSERT INTO core.inventario_movimientos (
+                         sucursal_id, producto_id, tipo, cantidad, stock_anterior, stock_nuevo,
+                         notas, created_by
+                       ) VALUES (%s, %s, 'conteo_fisico', %s, %s, %s, %s, %s);""",
+                    (
+                        sucursal_id,
+                        producto_id,
+                        data.stock - data.expected_stock,
+                        data.expected_stock,
+                        data.stock,
+                        "Ajuste desde Costos y rentabilidad",
+                        user["username"],
+                    ),
+                )
         conn.commit()
 
     return {
@@ -5590,10 +5841,513 @@ def actualizar_producto_inventario(
     }
 
 
+@app.post("/inventario/{producto_id}/movimientos", summary="Registrar entrada, salida o conteo de inventario")
+def registrar_movimiento_inventario(
+    producto_id: int,
+    data: InventarioMovimientoIn,
+    user=Depends(get_current_user),
+):
+    require_roles(user, ("admin",))
+    data.sucursal_id = force_sucursal(user, data.sucursal_id)
+    if data.sucursal_id is None:
+        raise HTTPException(status_code=400, detail="Sucursal es requerida.")
+    tipo = normalize_controlled_token(data.tipo) or ""
+    entradas = {"entrada_compra", "devolucion", "ajuste_positivo"}
+    salidas = {"merma", "ajuste_negativo"}
+    if tipo not in entradas | salidas | {"conteo_fisico"}:
+        raise HTTPException(status_code=400, detail="Tipo de movimiento inválido.")
+    if data.cantidad < 0 or (tipo != "conteo_fisico" and data.cantidad == 0):
+        raise HTTPException(status_code=400, detail="La cantidad debe ser mayor a 0.")
+    if data.costo_unitario is not None and data.costo_unitario < 0:
+        raise HTTPException(status_code=400, detail="El costo unitario no puede ser negativo.")
+    try:
+        with psycopg.connect(DB_CONNINFO) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT stock, costo_unitario, controla_stock, nombre
+                    FROM core.productos
+                    WHERE producto_id = %s AND sucursal_id = %s AND activo = true
+                    FOR UPDATE;
+                    """,
+                    (producto_id, data.sucursal_id),
+                )
+                row = cur.fetchone()
+                if row is None:
+                    raise HTTPException(status_code=404, detail="Producto no existe en esta sucursal.")
+                stock_anterior, costo_anterior, controla_stock, nombre = row
+                stock_anterior = int(stock_anterior or 0)
+                if controla_stock is not True:
+                    raise HTTPException(status_code=400, detail="Este producto no controla existencias.")
+                if stock_anterior != data.expected_stock:
+                    raise HTTPException(status_code=409, detail=f"El stock cambió. Stock actual: {stock_anterior}.")
+                if tipo == "conteo_fisico":
+                    stock_nuevo = data.cantidad
+                    cantidad_movimiento = stock_nuevo - stock_anterior
+                else:
+                    cantidad_movimiento = data.cantidad if tipo in entradas else -data.cantidad
+                    stock_nuevo = stock_anterior + cantidad_movimiento
+                if stock_nuevo < 0:
+                    raise HTTPException(status_code=400, detail="La salida supera las existencias disponibles.")
+                costo_nuevo = Decimal(str(costo_anterior or 0))
+                if tipo == "entrada_compra" and data.costo_unitario is not None and cantidad_movimiento > 0:
+                    valor_anterior = Decimal(stock_anterior) * costo_nuevo
+                    valor_entrada = Decimal(cantidad_movimiento) * data.costo_unitario
+                    costo_nuevo = ((valor_anterior + valor_entrada) / Decimal(stock_nuevo)).quantize(Decimal("0.01")) if stock_nuevo else data.costo_unitario
+                cur.execute(
+                    """
+                    UPDATE core.productos
+                    SET stock = %s, costo_unitario = %s, updated_at = NOW()
+                    WHERE producto_id = %s AND sucursal_id = %s;
+                    """,
+                    (stock_nuevo, costo_nuevo, producto_id, data.sucursal_id),
+                )
+                cur.execute(
+                    """
+                    INSERT INTO core.inventario_movimientos (
+                        sucursal_id, producto_id, tipo, cantidad, stock_anterior, stock_nuevo,
+                        costo_unitario, proveedor, folio, notas, created_by
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    RETURNING movimiento_id, created_at;
+                    """,
+                    (
+                        data.sucursal_id, producto_id, tipo, cantidad_movimiento, stock_anterior,
+                        stock_nuevo, data.costo_unitario, data.proveedor, data.folio, data.notas,
+                        user["username"],
+                    ),
+                )
+                movimiento_id, created_at = cur.fetchone()
+            conn.commit()
+        return {
+            "movimiento_id": movimiento_id, "producto_id": producto_id, "producto": nombre,
+            "stock_anterior": stock_anterior, "stock": stock_nuevo,
+            "costo_unitario": float(costo_nuevo), "created_at": created_at.isoformat(),
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/inventario/movimientos", summary="Historial auditable de inventario")
+def listar_movimientos_inventario(
+    sucursal_id: int | None = None,
+    limit: int = 200,
+    user=Depends(get_current_user),
+):
+    require_roles(user, ("admin", "contador"))
+    sucursal_id = force_sucursal(user, sucursal_id)
+    if sucursal_id is None:
+        raise HTTPException(status_code=400, detail="Sucursal es requerida.")
+    with psycopg.connect(DB_CONNINFO) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT m.movimiento_id, m.created_at, m.tipo, m.cantidad, m.stock_anterior,
+                       m.stock_nuevo, m.costo_unitario, m.proveedor, m.folio, m.notas,
+                       m.created_by, p.producto_id, p.nombre, p.sku
+                FROM core.inventario_movimientos m
+                JOIN core.productos p ON p.producto_id = m.producto_id
+                WHERE m.sucursal_id = %s
+                ORDER BY m.created_at DESC, m.movimiento_id DESC
+                LIMIT %s;
+                """,
+                (sucursal_id, min(max(limit, 1), 1000)),
+            )
+            rows = cur.fetchall()
+    return [
+        {
+            "movimiento_id": r[0], "fecha_hora": r[1].isoformat(), "tipo": r[2],
+            "cantidad": int(r[3]), "stock_anterior": int(r[4]), "stock_nuevo": int(r[5]),
+            "costo_unitario": float(r[6]) if r[6] is not None else None,
+            "proveedor": r[7], "folio": r[8], "notas": r[9], "usuario": r[10],
+            "producto_id": r[11], "producto": r[12], "sku": r[13],
+        }
+        for r in rows
+    ]
+
+
+def _finanzas_fecha(value: str | None, default: date) -> date:
+    if not value:
+        return default
+    try:
+        return date.fromisoformat(value)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Fecha inválida. Usa YYYY-MM-DD.")
+
+
+def _finanzas_scope(user, sucursal_id: int | None) -> int:
+    require_roles(user, ("admin", "contador"))
+    resolved = force_sucursal(user, sucursal_id)
+    if resolved is None:
+        raise HTTPException(status_code=400, detail="Sucursal es requerida.")
+    return resolved
+
+
+@app.post("/finanzas/movimientos", summary="Registrar movimiento financiero manual")
+def crear_movimiento_financiero(data: FinanzasMovimientoIn, user=Depends(get_current_user)):
+    sucursal_id = _finanzas_scope(user, data.sucursal_id)
+    tipo = normalize_controlled_token(data.tipo)
+    if tipo not in {"ingreso", "egreso"} or data.monto <= 0:
+        raise HTTPException(status_code=400, detail="Tipo o monto inválido.")
+    fecha = data.fecha or datetime.now(timezone.utc).isoformat()
+    with psycopg.connect(DB_CONNINFO) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """INSERT INTO core.fin_movimientos
+                   (sucursal_id, fecha, cuenta, tipo, categoria, descripcion, monto, estado, referencia, created_by)
+                   VALUES (%s, %s::timestamptz, %s, %s, %s, %s, %s, %s, %s, %s)
+                   RETURNING movimiento_id;""",
+                (sucursal_id, fecha, data.cuenta.strip(), tipo, data.categoria.strip(), data.descripcion.strip(), data.monto, data.estado or "registrado", data.referencia, user["username"]),
+            )
+            new_id = cur.fetchone()[0]
+        conn.commit()
+    return {"movimiento_id": new_id, "created": True}
+
+
+@app.post("/finanzas/gastos", summary="Registrar gasto")
+def crear_gasto(data: FinanzasGastoIn, user=Depends(get_current_user)):
+    sucursal_id = _finanzas_scope(user, data.sucursal_id)
+    if data.monto <= 0 or (data.estado or "pendiente") not in {"pendiente", "pagado", "aprobado", "cancelado"}:
+        raise HTTPException(status_code=400, detail="Monto o estado inválido.")
+    with psycopg.connect(DB_CONNINFO) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """INSERT INTO core.fin_gastos
+                   (sucursal_id, fecha, categoria, proveedor, descripcion, monto, cuenta, estado, comprobante_url, fecha_pago, created_by)
+                   VALUES (%s,%s::date,%s,%s,%s,%s,%s,%s,%s,%s::date,%s) RETURNING gasto_id;""",
+                (sucursal_id, data.fecha, data.categoria, data.proveedor, data.descripcion, data.monto, data.cuenta, data.estado or "pendiente", data.comprobante_url, data.fecha_pago, user["username"]),
+            )
+            new_id = cur.fetchone()[0]
+        conn.commit()
+    return {"gasto_id": new_id, "created": True}
+
+
+@app.post("/finanzas/nomina", summary="Registrar nómina sin cálculo fiscal")
+def crear_nomina(data: FinanzasNominaIn, user=Depends(get_current_user)):
+    sucursal_id = _finanzas_scope(user, data.sucursal_id)
+    valores = [data.salario_base, data.horas, data.comisiones, data.bonos, data.deducciones, data.pago_neto, data.costo_patronal]
+    if any(valor < 0 for valor in valores):
+        raise HTTPException(status_code=400, detail="Los importes de nómina no pueden ser negativos.")
+    with psycopg.connect(DB_CONNINFO) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """INSERT INTO core.fin_nomina
+                   (sucursal_id, empleado, periodo_inicio, periodo_fin, salario_base, horas,
+                    comisiones, bonos, deducciones, pago_neto, costo_patronal, fecha_pago,
+                    cuenta, estado, notas, created_by)
+                   VALUES (%s,%s,%s::date,%s::date,%s,%s,%s,%s,%s,%s,%s,%s::date,%s,%s,%s,%s)
+                   RETURNING nomina_id;""",
+                (sucursal_id, data.empleado, data.periodo_inicio, data.periodo_fin, data.salario_base, data.horas, data.comisiones, data.bonos, data.deducciones, data.pago_neto, data.costo_patronal, data.fecha_pago, data.cuenta, data.estado or "pendiente", data.notas, user["username"]),
+            )
+            new_id = cur.fetchone()[0]
+        conn.commit()
+    return {"nomina_id": new_id, "created": True}
+
+
+@app.post("/finanzas/cuentas-pagar", summary="Registrar cuenta por pagar")
+def crear_cuenta_pagar(data: FinanzasCuentaPagarIn, user=Depends(get_current_user)):
+    sucursal_id = _finanzas_scope(user, data.sucursal_id)
+    if data.monto_total <= 0 or data.monto_pagado < 0 or data.monto_pagado > data.monto_total:
+        raise HTTPException(status_code=400, detail="Importes de cuenta por pagar inválidos.")
+    estado = data.estado or ("pagada" if data.monto_pagado >= data.monto_total else "pendiente")
+    with psycopg.connect(DB_CONNINFO) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """INSERT INTO core.fin_cuentas_pagar
+                   (sucursal_id, proveedor, categoria, concepto, folio, fecha_emision,
+                    fecha_vencimiento, monto_total, monto_pagado, estado, comprobante_url, created_by)
+                   VALUES (%s,%s,%s,%s,%s,%s::date,%s::date,%s,%s,%s,%s,%s)
+                   RETURNING cuenta_pagar_id;""",
+                (sucursal_id, data.proveedor, data.categoria, data.concepto, data.folio, data.fecha_emision, data.fecha_vencimiento, data.monto_total, data.monto_pagado, estado, data.comprobante_url, user["username"]),
+            )
+            new_id = cur.fetchone()[0]
+            if data.monto_pagado > 0:
+                cur.execute(
+                    """INSERT INTO core.fin_movimientos
+                       (sucursal_id, fecha, cuenta, tipo, categoria, descripcion, monto, estado, referencia, created_by)
+                       VALUES (%s,%s::date,'Por definir','egreso','pago_cuenta_por_pagar',%s,%s,'registrado',%s,%s);""",
+                    (
+                        sucursal_id,
+                        data.fecha_emision,
+                        f"Pago inicial de obligación: {data.concepto}",
+                        data.monto_pagado,
+                        f"cuenta_pagar:{new_id}",
+                        user["username"],
+                    ),
+                )
+        conn.commit()
+    return {"cuenta_pagar_id": new_id, "created": True}
+
+
+@app.post("/finanzas/comprobantes", summary="Adjuntar comprobante financiero")
+async def subir_comprobante_financiero(
+    request: Request,
+    recurso: str,
+    registro_id: int,
+    nombre: str,
+    sucursal_id: int | None = None,
+    user=Depends(get_current_user),
+):
+    sucursal_id = _finanzas_scope(user, sucursal_id)
+    recurso = normalize_controlled_token(recurso) or ""
+    config = {
+        "gasto": ("core.fin_gastos", "gasto_id"),
+        "cuenta_pagar": ("core.fin_cuentas_pagar", "cuenta_pagar_id"),
+    }.get(recurso)
+    if config is None:
+        raise HTTPException(status_code=400, detail="Tipo de comprobante inválido.")
+    contenido = await request.body()
+    if not contenido or len(contenido) > 10 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="El comprobante debe medir entre 1 byte y 10 MB.")
+    mime_type = (request.headers.get("content-type") or "application/octet-stream").split(";", 1)[0].lower()
+    if mime_type not in {"application/pdf", "image/jpeg", "image/png", "image/webp"}:
+        raise HTTPException(status_code=400, detail="Solo se permiten archivos PDF, JPG, PNG o WEBP.")
+    nombre = re.sub(r"[^A-Za-z0-9._() -]", "_", str(nombre or "comprobante"))[:180]
+    table, key = config
+    with psycopg.connect(DB_CONNINFO) as conn:
+        with conn.cursor() as cur:
+            cur.execute(f"SELECT 1 FROM {table} WHERE {key}=%s AND sucursal_id=%s;", (registro_id, sucursal_id))
+            if cur.fetchone() is None:
+                raise HTTPException(status_code=404, detail="El registro financiero no existe en esta sucursal.")
+            cur.execute(
+                """INSERT INTO core.fin_comprobantes
+                   (sucursal_id, recurso, registro_id, nombre_archivo, mime_type, contenido, created_by)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s)
+                   RETURNING comprobante_id;""",
+                (sucursal_id, recurso, registro_id, nombre, mime_type, contenido, user["username"]),
+            )
+            comprobante_id = cur.fetchone()[0]
+        conn.commit()
+    return {"comprobante_id": comprobante_id, "uploaded": True}
+
+
+@app.get("/finanzas/comprobantes/{comprobante_id}", summary="Abrir comprobante financiero")
+def abrir_comprobante_financiero(
+    comprobante_id: int,
+    sucursal_id: int | None = None,
+    user=Depends(get_current_user),
+):
+    sucursal_id = _finanzas_scope(user, sucursal_id)
+    with psycopg.connect(DB_CONNINFO) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT nombre_archivo, mime_type, contenido
+                   FROM core.fin_comprobantes
+                   WHERE comprobante_id=%s AND sucursal_id=%s;""",
+                (comprobante_id, sucursal_id),
+            )
+            row = cur.fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Comprobante no encontrado.")
+    safe_name = str(row[0]).replace('"', "_")
+    return Response(
+        content=bytes(row[2]),
+        media_type=row[1],
+        headers={"Content-Disposition": f'inline; filename="{safe_name}"'},
+    )
+
+
+@app.patch("/finanzas/{recurso}/{registro_id}/estado", summary="Actualizar estado financiero")
+def actualizar_estado_financiero(
+    recurso: str,
+    registro_id: int,
+    estado: str,
+    sucursal_id: int,
+    monto_pagado: Decimal | None = None,
+    user=Depends(get_current_user),
+):
+    sucursal_id = _finanzas_scope(user, sucursal_id)
+    recurso = normalize_controlled_token(recurso) or ""
+    estado = normalize_controlled_token(estado) or ""
+    config = {
+        "gastos": ("core.fin_gastos", "gasto_id", {"pendiente", "pagado", "aprobado", "cancelado"}),
+        "nomina": ("core.fin_nomina", "nomina_id", {"pendiente", "pagada", "aprobada", "cancelada"}),
+        "cuentas_pagar": ("core.fin_cuentas_pagar", "cuenta_pagar_id", {"pendiente", "parcial", "pagada", "cancelada"}),
+    }.get(recurso)
+    if config is None or estado not in config[2]:
+        raise HTTPException(status_code=400, detail="Recurso o estado inválido.")
+    table, key, _ = config
+    with psycopg.connect(DB_CONNINFO) as conn:
+        with conn.cursor() as cur:
+            if recurso == "cuentas_pagar" and monto_pagado is not None:
+                cur.execute(
+                    f"SELECT monto_total, monto_pagado, concepto FROM {table} WHERE {key}=%s AND sucursal_id=%s FOR UPDATE;",
+                    (registro_id, sucursal_id),
+                )
+                deuda = cur.fetchone()
+                if deuda is None:
+                    raise HTTPException(status_code=404, detail="Registro no encontrado en esta sucursal.")
+                if monto_pagado < 0 or monto_pagado > deuda[0]:
+                    raise HTTPException(status_code=400, detail="El monto pagado debe estar entre 0 y el total de la obligación.")
+                monto_anterior = Decimal(str(deuda[1] or 0))
+                cur.execute(
+                    f"UPDATE {table} SET estado=%s, monto_pagado=%s, updated_at=NOW() WHERE {key}=%s AND sucursal_id=%s RETURNING {key};",
+                    (estado, monto_pagado, registro_id, sucursal_id),
+                )
+                diferencia = Decimal(str(monto_pagado)) - monto_anterior
+                if diferencia != 0:
+                    cur.execute(
+                        """INSERT INTO core.fin_movimientos
+                           (sucursal_id, fecha, cuenta, tipo, categoria, descripcion, monto, estado, referencia, created_by)
+                           VALUES (%s,NOW(),'Por definir',%s,%s,%s,%s,'registrado',%s,%s);""",
+                        (
+                            sucursal_id,
+                            "egreso" if diferencia > 0 else "ingreso",
+                            "pago_cuenta_por_pagar" if diferencia > 0 else "ajuste_cuenta_por_pagar",
+                            f"Pago de obligación: {deuda[2]}",
+                            abs(diferencia),
+                            f"cuenta_pagar:{registro_id}",
+                            user["username"],
+                        ),
+                    )
+            else:
+                cur.execute(
+                    f"UPDATE {table} SET estado=%s, updated_at=NOW() WHERE {key}=%s AND sucursal_id=%s RETURNING {key};",
+                    (estado, registro_id, sucursal_id),
+                )
+            row = cur.fetchone()
+            if row is None:
+                raise HTTPException(status_code=404, detail="Registro no encontrado en esta sucursal.")
+        conn.commit()
+    return {"updated": True, "id": row[0], "estado": estado}
+
+
+@app.get("/finanzas/datos", summary="Resumen y auxiliares financieros")
+def obtener_datos_finanzas(
+    sucursal_id: int | None = None,
+    fecha_desde: str | None = None,
+    fecha_hasta: str | None = None,
+    user=Depends(get_current_user),
+):
+    sucursal_id = _finanzas_scope(user, sucursal_id)
+    hoy = date.today()
+    desde = _finanzas_fecha(fecha_desde, hoy.replace(day=1))
+    hasta = _finanzas_fecha(fecha_hasta, hoy)
+    if desde > hasta:
+        raise HTTPException(status_code=400, detail="La fecha inicial no puede ser posterior a la final.")
+    params = (sucursal_id, desde, hasta)
+    with psycopg.connect(DB_CONNINFO) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT COALESCE(SUM(v.subtotal),0), COALESCE(SUM(v.subtotal-v.monto_total),0), COALESCE(SUM(v.monto_total),0)
+                FROM core.ventas v WHERE v.sucursal_id=%s AND v.activo=true
+                  AND COALESCE(v.estado_venta,'confirmada') NOT IN ('cancelada','devuelta')
+                  AND v.fecha_hora::date BETWEEN %s AND %s;
+                """, params,
+            )
+            ventas_brutas, descuentos, ventas_netas = cur.fetchone()
+            cur.execute(
+                """SELECT COALESCE(SUM(p.monto),0) FROM core.venta_pagos p
+                   JOIN core.ventas v ON v.venta_id=p.venta_id
+                   WHERE v.sucursal_id=%s AND p.activo=true AND p.created_at::date BETWEEN %s AND %s;""", params,
+            )
+            cobrado = cur.fetchone()[0]
+            cur.execute(
+                """SELECT COALESCE(SUM(GREATEST(v.monto_total-COALESCE(p.pagado,0),0)),0)
+                   FROM core.ventas v
+                   LEFT JOIN (SELECT venta_id,SUM(monto) pagado FROM core.venta_pagos WHERE activo=true GROUP BY venta_id) p ON p.venta_id=v.venta_id
+                   WHERE v.sucursal_id=%s AND v.activo=true
+                     AND COALESCE(v.estado_venta,'confirmada') NOT IN ('cancelada','devuelta')
+                     AND v.fecha_hora::date BETWEEN %s AND %s;""", params,
+            )
+            cuentas_cobrar_total = cur.fetchone()[0]
+            cur.execute(
+                """SELECT COALESCE(SUM(d.cantidad*COALESCE(d.costo_unitario,p.costo_unitario,0)),0)
+                   FROM core.venta_detalles d JOIN core.ventas v ON v.venta_id=d.venta_id
+                   JOIN core.productos p ON p.producto_id=d.producto_id
+                   WHERE v.sucursal_id=%s AND v.activo=true
+                     AND COALESCE(v.estado_venta,'confirmada') NOT IN ('cancelada','devuelta')
+                     AND v.fecha_hora::date BETWEEN %s AND %s;""", params,
+            )
+            costo_productos = cur.fetchone()[0]
+            cur.execute("SELECT COALESCE(SUM(monto),0) FROM core.fin_gastos WHERE sucursal_id=%s AND fecha BETWEEN %s AND %s AND estado IN ('pagado','aprobado');", params)
+            gastos_total = cur.fetchone()[0]
+            cur.execute("SELECT COALESCE(SUM(costo_patronal),0) FROM core.fin_nomina WHERE sucursal_id=%s AND periodo_inicio BETWEEN %s AND %s AND estado IN ('pagada','aprobada');", params)
+            nomina_total = cur.fetchone()[0]
+            cur.execute("SELECT COALESCE(SUM(costo_unitario*stock),0) FROM core.productos WHERE sucursal_id=%s AND activo=true AND controla_stock=true;", (sucursal_id,))
+            valor_inventario = cur.fetchone()[0]
+            cur.execute("SELECT COALESCE(SUM(GREATEST(monto_total-monto_pagado,0)),0) FROM core.fin_cuentas_pagar WHERE sucursal_id=%s AND estado NOT IN ('pagada','cancelada');", (sucursal_id,))
+            cuentas_pagar_total = cur.fetchone()[0]
+
+            cur.execute(
+                """SELECT v.venta_id,v.fecha_hora,
+                          COALESCE(NULLIF(TRIM(CONCAT_WS(' ',p.primer_nombre,p.apellido_paterno)),''),CONCAT('Cliente #',v.paciente_id)),
+                          v.monto_total,COALESCE(pg.pagado,0),GREATEST(v.monto_total-COALESCE(pg.pagado,0),0),v.estado_pago
+                   FROM core.ventas v LEFT JOIN core.pacientes p ON p.paciente_id=v.paciente_id
+                   LEFT JOIN (SELECT venta_id,SUM(monto) pagado FROM core.venta_pagos WHERE activo=true GROUP BY venta_id) pg ON pg.venta_id=v.venta_id
+                   WHERE v.sucursal_id=%s AND v.activo=true AND GREATEST(v.monto_total-COALESCE(pg.pagado,0),0)>0
+                     AND COALESCE(v.estado_venta,'confirmada') NOT IN ('cancelada','devuelta')
+                   ORDER BY v.fecha_hora DESC LIMIT 500;""", (sucursal_id,),
+            )
+            cuentas_cobrar = [{"venta_id":r[0],"fecha":r[1].isoformat() if r[1] else None,"cliente":r[2],"total":float(r[3]),"pagado":float(r[4]),"saldo":float(r[5]),"estado_pago":r[6]} for r in cur.fetchall()]
+            cur.execute("""SELECT g.gasto_id,g.fecha,g.categoria,g.proveedor,g.descripcion,g.monto,g.cuenta,g.estado,g.comprobante_url,g.fecha_pago,
+                                  c.comprobante_id,c.nombre_archivo
+                           FROM core.fin_gastos g
+                           LEFT JOIN LATERAL (SELECT comprobante_id,nombre_archivo FROM core.fin_comprobantes WHERE sucursal_id=g.sucursal_id AND recurso='gasto' AND registro_id=g.gasto_id ORDER BY created_at DESC LIMIT 1) c ON true
+                           WHERE g.sucursal_id=%s AND g.fecha BETWEEN %s AND %s ORDER BY g.fecha DESC,g.gasto_id DESC LIMIT 500;""", params)
+            gastos = [{"gasto_id":r[0],"fecha":str(r[1]),"categoria":r[2],"proveedor":r[3],"descripcion":r[4],"monto":float(r[5]),"cuenta":r[6],"estado":r[7],"comprobante_url":r[8],"fecha_pago":str(r[9]) if r[9] else None,"comprobante_id":r[10],"comprobante_nombre":r[11]} for r in cur.fetchall()]
+            cur.execute("SELECT nomina_id,empleado,periodo_inicio,periodo_fin,salario_base,horas,comisiones,bonos,deducciones,pago_neto,costo_patronal,fecha_pago,estado FROM core.fin_nomina WHERE sucursal_id=%s AND periodo_inicio BETWEEN %s AND %s ORDER BY periodo_inicio DESC,nomina_id DESC LIMIT 500;", params)
+            nomina = [{"nomina_id":r[0],"empleado":r[1],"periodo_inicio":str(r[2]),"periodo_fin":str(r[3]),"salario_base":float(r[4]),"horas":float(r[5]),"comisiones":float(r[6]),"bonos":float(r[7]),"deducciones":float(r[8]),"pago_neto":float(r[9]),"costo_patronal":float(r[10]),"fecha_pago":str(r[11]) if r[11] else None,"estado":r[12]} for r in cur.fetchall()]
+            cur.execute("""SELECT cp.cuenta_pagar_id,cp.proveedor,cp.categoria,cp.concepto,cp.folio,cp.fecha_emision,cp.fecha_vencimiento,cp.monto_total,cp.monto_pagado,cp.estado,cp.comprobante_url,
+                                  c.comprobante_id,c.nombre_archivo
+                           FROM core.fin_cuentas_pagar cp
+                           LEFT JOIN LATERAL (SELECT comprobante_id,nombre_archivo FROM core.fin_comprobantes WHERE sucursal_id=cp.sucursal_id AND recurso='cuenta_pagar' AND registro_id=cp.cuenta_pagar_id ORDER BY created_at DESC LIMIT 1) c ON true
+                           WHERE cp.sucursal_id=%s AND cp.fecha_emision BETWEEN %s AND %s ORDER BY cp.fecha_vencimiento NULLS LAST,cp.cuenta_pagar_id DESC LIMIT 500;""", params)
+            cuentas_pagar = [{"cuenta_pagar_id":r[0],"proveedor":r[1],"categoria":r[2],"concepto":r[3],"folio":r[4],"fecha_emision":str(r[5]),"fecha_vencimiento":str(r[6]) if r[6] else None,"monto_total":float(r[7]),"monto_pagado":float(r[8]),"saldo":float(r[7]-r[8]),"estado":r[9],"comprobante_url":r[10],"comprobante_id":r[11],"comprobante_nombre":r[12]} for r in cur.fetchall()]
+            cur.execute(
+                """SELECT fecha,cuenta,tipo,categoria,descripcion,monto,fuente FROM (
+                     SELECT p.created_at fecha,p.metodo cuenta,'ingreso' tipo,'venta' categoria,CONCAT('Pago venta #',v.venta_id) descripcion,p.monto,'venta' fuente
+                     FROM core.venta_pagos p JOIN core.ventas v ON v.venta_id=p.venta_id WHERE v.sucursal_id=%s AND p.activo=true AND p.created_at::date BETWEEN %s AND %s
+                     UNION ALL SELECT m.fecha,m.cuenta,m.tipo,m.categoria,m.descripcion,m.monto,'manual' FROM core.fin_movimientos m WHERE m.sucursal_id=%s AND m.estado<>'cancelado' AND m.fecha::date BETWEEN %s AND %s
+                     UNION ALL SELECT COALESCE(g.fecha_pago,g.fecha)::timestamptz,COALESCE(g.cuenta,'Sin cuenta'),'egreso','gasto',g.descripcion,g.monto,'gasto' FROM core.fin_gastos g WHERE g.sucursal_id=%s AND g.estado='pagado' AND COALESCE(g.fecha_pago,g.fecha) BETWEEN %s AND %s
+                     UNION ALL SELECT COALESCE(n.fecha_pago,n.periodo_fin)::timestamptz,COALESCE(n.cuenta,'Sin cuenta'),'egreso','nomina',CONCAT('Nómina: ',n.empleado),n.pago_neto,'nomina' FROM core.fin_nomina n WHERE n.sucursal_id=%s AND n.estado='pagada' AND COALESCE(n.fecha_pago,n.periodo_fin) BETWEEN %s AND %s
+                   ) movimientos ORDER BY fecha DESC LIMIT 1000;""", params + params + params + params,
+            )
+            movimientos = [{"fecha":r[0].isoformat() if r[0] else None,"cuenta":r[1],"tipo":r[2],"categoria":r[3],"descripcion":r[4],"monto":float(r[5]),"fuente":r[6]} for r in cur.fetchall()]
+            cur.execute(
+                """SELECT COALESCE(SUM(monto_firmado), 0) FROM (
+                     SELECT p.monto AS monto_firmado
+                     FROM core.venta_pagos p JOIN core.ventas v ON v.venta_id=p.venta_id
+                     WHERE v.sucursal_id=%s AND p.activo=true AND p.created_at::date < %s
+                     UNION ALL
+                     SELECT CASE WHEN m.tipo='ingreso' THEN m.monto ELSE -m.monto END
+                     FROM core.fin_movimientos m
+                     WHERE m.sucursal_id=%s AND m.estado<>'cancelado' AND m.fecha::date < %s
+                     UNION ALL
+                     SELECT -g.monto FROM core.fin_gastos g
+                     WHERE g.sucursal_id=%s AND g.estado='pagado' AND COALESCE(g.fecha_pago,g.fecha) < %s
+                     UNION ALL
+                     SELECT -n.pago_neto FROM core.fin_nomina n
+                     WHERE n.sucursal_id=%s AND n.estado='pagada' AND COALESCE(n.fecha_pago,n.periodo_fin) < %s
+                   ) saldo_anterior;""",
+                (sucursal_id, desde, sucursal_id, desde, sucursal_id, desde, sucursal_id, desde),
+            )
+            saldo_inicial = float(cur.fetchone()[0] or 0)
+
+    entradas = sum(item["monto"] for item in movimientos if item["tipo"] == "ingreso")
+    salidas = sum(item["monto"] for item in movimientos if item["tipo"] == "egreso")
+    utilidad_bruta = Decimal(str(ventas_netas)) - Decimal(str(costo_productos))
+    utilidad_neta = utilidad_bruta - Decimal(str(gastos_total)) - Decimal(str(nomina_total))
+    efectivo_final = saldo_inicial + entradas - salidas
+    activos = Decimal(str(efectivo_final)) + Decimal(str(cuentas_cobrar_total)) + Decimal(str(valor_inventario))
+    pasivos = Decimal(str(cuentas_pagar_total))
+    return {
+        "periodo":{"desde":str(desde),"hasta":str(hasta)},
+        "resumen":{"ingresos_ventas":float(ventas_brutas),"descuentos":float(descuentos),"ventas_netas":float(ventas_netas),"dinero_cobrado":float(cobrado),"saldos_pendientes":float(cuentas_cobrar_total),"costo_productos":float(costo_productos),"gastos":float(gastos_total),"nomina":float(nomina_total),"utilidad_bruta":float(utilidad_bruta),"utilidad_neta":float(utilidad_neta),"valor_inventario":float(valor_inventario)},
+        "movimientos":movimientos,"gastos":gastos,"nomina":nomina,"cuentas_cobrar":cuentas_cobrar,"cuentas_pagar":cuentas_pagar,
+        "estado_resultados":{"ventas_netas":float(ventas_netas),"costo_productos":float(costo_productos),"utilidad_bruta":float(utilidad_bruta),"gastos_operativos":float(gastos_total),"nomina":float(nomina_total),"utilidad_neta":float(utilidad_neta)},
+        "flujo_efectivo":{"saldo_inicial":saldo_inicial,"entradas":entradas,"salidas":salidas,"saldo_final":efectivo_final},
+        "balance_general":{"activos":float(activos),"efectivo":efectivo_final,"cuentas_cobrar":float(cuentas_cobrar_total),"inventario":float(valor_inventario),"pasivos":float(pasivos),"capital_contable":float(activos-pasivos)},
+    }
+
+
 def _restore_inventory_for_sales(
     cur,
     venta_ids: list[int],
     sucursal_id: int,
+    created_by: str,
 ) -> int:
     normalized_ids = sorted({int(venta_id) for venta_id in venta_ids if int(venta_id) > 0})
     if not normalized_ids:
@@ -5640,14 +6394,33 @@ def _restore_inventory_for_sales(
         )
 
     for producto_id in sorted(cantidades_por_producto):
+        cantidad_restaurada = cantidades_por_producto[producto_id]
         cur.execute(
             """
             UPDATE core.productos
             SET stock = stock + %s, updated_at = NOW()
             WHERE producto_id = %s
-              AND sucursal_id = %s;
+              AND sucursal_id = %s
+            RETURNING stock;
             """,
-            (cantidades_por_producto[producto_id], producto_id, sucursal_id),
+            (cantidad_restaurada, producto_id, sucursal_id),
+        )
+        stock_nuevo = int(cur.fetchone()[0])
+        cur.execute(
+            """INSERT INTO core.inventario_movimientos (
+                 sucursal_id, producto_id, tipo, cantidad, stock_anterior, stock_nuevo,
+                 fuente_tipo, fuente_id, notas, created_by
+               ) VALUES (%s, %s, 'venta_eliminada', %s, %s, %s, 'venta', %s, %s, %s);""",
+            (
+                sucursal_id,
+                producto_id,
+                cantidad_restaurada,
+                stock_nuevo - cantidad_restaurada,
+                stock_nuevo,
+                normalized_ids[0] if len(normalized_ids) == 1 else None,
+                f"Restauración por eliminación de {len(normalized_ids)} venta(s)",
+                created_by,
+            ),
         )
 
     cur.execute(
@@ -5834,7 +6607,7 @@ def crear_venta(v: VentaCreate, user=Depends(get_current_user)):
                         """
                         SELECT
                             nombre, sku, precio, stock, categoria, subcategoria,
-                            tipo_mica, controla_stock
+                            tipo_mica, controla_stock, costo_unitario
                         FROM core.productos
                         WHERE producto_id = %s
                           AND sucursal_id = %s
@@ -5858,6 +6631,7 @@ def crear_venta(v: VentaCreate, user=Depends(get_current_user)):
                         subcategoria_producto,
                         tipo_mica_producto,
                         controla_stock,
+                        costo_unitario_producto,
                     ) = producto_row
                     if not _inventory_product_matches_purchase(
                         categoria_producto,
@@ -5884,6 +6658,7 @@ def crear_venta(v: VentaCreate, user=Depends(get_current_user)):
                             "nombre": nombre_producto,
                             "sku": sku_producto,
                             "precio_unitario": precio_unitario,
+                            "costo_unitario": Decimal(str(costo_unitario_producto or 0)),
                             "subtotal": subtotal_producto,
                             "stock_actual": int(stock_actual or 0),
                             "controla_stock": controla_stock is True,
@@ -6044,12 +6819,28 @@ def crear_venta(v: VentaCreate, user=Depends(get_current_user)):
                                 v.sucursal_id,
                             ),
                         )
+                        cur.execute(
+                            """INSERT INTO core.inventario_movimientos (
+                                 sucursal_id, producto_id, tipo, cantidad, stock_anterior, stock_nuevo,
+                                 fuente_tipo, fuente_id, notas, created_by
+                               ) VALUES (%s, %s, 'venta', %s, %s, %s, 'venta', %s, %s, %s);""",
+                            (
+                                v.sucursal_id,
+                                producto["producto_id"],
+                                -producto["cantidad"],
+                                producto["stock_actual"],
+                                producto["stock_actual"] - producto["cantidad"],
+                                new_id,
+                                f"Venta #{new_id}",
+                                user["username"],
+                            ),
+                        )
                     cur.execute(
                         """
                         INSERT INTO core.venta_detalles (
-                            venta_id, producto_id, cantidad, precio_unitario, subtotal
+                            venta_id, producto_id, cantidad, precio_unitario, subtotal, costo_unitario
                         )
-                        VALUES (%s, %s, %s, %s, %s);
+                        VALUES (%s, %s, %s, %s, %s, %s);
                         """,
                         (
                             new_id,
@@ -6057,6 +6848,7 @@ def crear_venta(v: VentaCreate, user=Depends(get_current_user)):
                             producto["cantidad"],
                             producto["precio_unitario"],
                             producto["subtotal"],
+                            producto["costo_unitario"],
                         ),
                     )
                     inventario_descontado.append(
@@ -6284,6 +7076,354 @@ def actualizar_venta(venta_id: int, v: VentaCreate, user=Depends(get_current_use
                     raise HTTPException(status_code=404, detail="Venta no existe en esa sucursal o está inactiva.")
             conn.commit()
         return {"venta_id": row[0], "updated": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.put("/ventas/{venta_id}/edicion-completa", summary="Editar productos, pagos e importes de una venta")
+def editar_venta_completa(venta_id: int, v: VentaCreate, user=Depends(get_current_user)):
+    require_roles(user, ("admin",))
+    v.sucursal_id = force_sucursal(user, v.sucursal_id)
+    productos_input = list(v.productos or [])
+    pagos_input = list(v.pagos or [])
+    sanitize_model_strings(v)
+
+    if v.sucursal_id is None:
+        raise HTTPException(status_code=400, detail="Sucursal es requerida.")
+    if not v.compra or not v.compra.strip():
+        raise HTTPException(status_code=400, detail="Compra es obligatoria.")
+    if not productos_input:
+        raise HTTPException(status_code=400, detail="La venta debe conservar al menos un producto.")
+
+    v.compra = normalize_compra_tokens(v.compra)
+    compra_tokens = set(split_pipe_tokens(v.compra))
+    v.estado_venta = normalize_controlled_token(v.estado_venta) or "confirmada"
+    v.estado_pedido = normalize_controlled_token(v.estado_pedido) or "pendiente_fabricacion"
+    estado_pago_solicitado = normalize_controlled_token(v.estado_pago)
+    if v.estado_venta not in VENTA_ESTADO_ALLOWED:
+        raise HTTPException(status_code=400, detail="estado_venta inválido.")
+    if v.estado_pedido not in VENTA_ESTADO_PEDIDO_ALLOWED:
+        raise HTTPException(status_code=400, detail="estado_pedido inválido.")
+    if estado_pago_solicitado and estado_pago_solicitado not in VENTA_ESTADO_PAGO_ALLOWED:
+        raise HTTPException(status_code=400, detail="estado_pago inválido.")
+
+    v.forma_liquidacion = normalize_controlled_token(v.forma_liquidacion) or "pago_completo"
+    if v.forma_liquidacion not in VENTA_FORMA_LIQUIDACION_ALLOWED:
+        raise HTTPException(status_code=400, detail="forma_liquidacion inválida.")
+    if v.forma_liquidacion in {"meses_sin_intereses", "meses_con_intereses"}:
+        if v.plazo_meses not in VENTA_PLAZO_MESES_ALLOWED:
+            raise HTTPException(status_code=400, detail="Selecciona un plazo válido para el financiamiento.")
+    else:
+        v.plazo_meses = None
+
+    descuento_porcentaje = Decimal(str(v.descuento_porcentaje or 0))
+    descuento_monto = Decimal(str(v.descuento_monto or 0)).quantize(Decimal("0.01"))
+    if descuento_porcentaje < 0 or descuento_porcentaje > 100:
+        raise HTTPException(status_code=400, detail="descuento_porcentaje debe estar entre 0 y 100.")
+    if descuento_monto < 0:
+        raise HTTPException(status_code=400, detail="descuento_monto no puede ser negativo.")
+    if descuento_porcentaje > 0 and descuento_monto > 0:
+        raise HTTPException(status_code=400, detail="Usa porcentaje o monto fijo, no ambos.")
+    v.descuento_motivo, v.cupon_tipo = normalize_datos_descuento(
+        descuento_porcentaje,
+        descuento_monto,
+        v.descuento_motivo,
+        v.cupon_tipo,
+    )
+
+    productos_solicitados: dict[int, int] = {}
+    for item in productos_input:
+        producto_id = int(item.producto_id)
+        cantidad = int(item.cantidad)
+        if producto_id <= 0 or cantidad <= 0:
+            raise HTTPException(status_code=400, detail="Producto y cantidad inválidos.")
+        productos_solicitados[producto_id] = productos_solicitados.get(producto_id, 0) + cantidad
+
+    try:
+        with psycopg.connect(DB_CONNINFO) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT venta_id
+                    FROM core.ventas
+                    WHERE venta_id = %s AND sucursal_id = %s AND activo = true
+                    FOR UPDATE;
+                    """,
+                    (venta_id, v.sucursal_id),
+                )
+                if cur.fetchone() is None:
+                    raise HTTPException(status_code=404, detail="Venta no existe o está inactiva.")
+
+                cur.execute(
+                    """
+                    SELECT 1 FROM core.pacientes
+                    WHERE paciente_id = %s AND sucursal_id = %s AND activo = true;
+                    """,
+                    (v.paciente_id, v.sucursal_id),
+                )
+                if cur.fetchone() is None:
+                    raise HTTPException(status_code=400, detail="Paciente no existe/activo en esa sucursal.")
+
+                cur.execute(
+                    "SELECT producto_id, cantidad FROM core.venta_detalles WHERE venta_id = %s FOR UPDATE;",
+                    (venta_id,),
+                )
+                cantidades_anteriores = {int(row[0]): int(row[1] or 0) for row in cur.fetchall()}
+                ids_productos = sorted(set(cantidades_anteriores) | set(productos_solicitados))
+                catalogo: dict[int, dict[str, Any]] = {}
+                for producto_id in ids_productos:
+                    cur.execute(
+                        """
+                        SELECT nombre, sku, modelo, color, precio, stock, categoria,
+                               subcategoria, tipo_mica, controla_stock, activo, imagen_url, costo_unitario
+                        FROM core.productos
+                        WHERE producto_id = %s AND sucursal_id = %s
+                        FOR UPDATE;
+                        """,
+                        (producto_id, v.sucursal_id),
+                    )
+                    row = cur.fetchone()
+                    if row is None:
+                        raise HTTPException(status_code=404, detail=f"Producto #{producto_id} no existe.")
+                    catalogo[producto_id] = {
+                        "producto_id": producto_id,
+                        "nombre": row[0],
+                        "sku": row[1],
+                        "modelo": row[2],
+                        "color": row[3],
+                        "precio": Decimal(str(row[4] or 0)),
+                        "stock": int(row[5] or 0),
+                        "categoria": row[6],
+                        "subcategoria": row[7],
+                        "tipo_mica": row[8],
+                        "controla_stock": row[9] is True,
+                        "activo": row[10] is True,
+                        "imagen_url": row[11],
+                        "costo_unitario": Decimal(str(row[12] or 0)),
+                    }
+
+                productos_validados: list[dict[str, Any]] = []
+                subtotal_venta = Decimal("0.00")
+                for producto_id in sorted(productos_solicitados):
+                    producto = catalogo[producto_id]
+                    cantidad = productos_solicitados[producto_id]
+                    if not producto["activo"]:
+                        raise HTTPException(status_code=400, detail=f"{producto['nombre']} ya no está activo.")
+                    if not _inventory_product_matches_purchase(
+                        producto["categoria"], producto["subcategoria"], producto["tipo_mica"], compra_tokens
+                    ):
+                        raise HTTPException(
+                            status_code=400,
+                            detail=f"{producto['nombre']} no corresponde con la selección de compra.",
+                        )
+                    diferencia = cantidad - cantidades_anteriores.get(producto_id, 0)
+                    if producto["controla_stock"] and diferencia > producto["stock"]:
+                        raise HTTPException(
+                            status_code=409,
+                            detail=f"Stock insuficiente para {producto['nombre']}. Disponible adicional: {producto['stock']}.",
+                        )
+                    subtotal_producto = producto["precio"] * cantidad
+                    subtotal_venta += subtotal_producto
+                    productos_validados.append(
+                        {**producto, "cantidad": cantidad, "subtotal": subtotal_producto}
+                    )
+
+                tratamientos = [
+                    producto for producto in productos_validados
+                    if normalize_controlled_token(producto["categoria"]) == "micas"
+                    and normalize_controlled_token(producto["subcategoria"]) == "tratamiento"
+                ]
+                if len(tratamientos) > 1:
+                    raise HTTPException(status_code=400, detail="Solo se permite un tratamiento o tinte.")
+
+                subtotal_venta = subtotal_venta.quantize(Decimal("0.01"))
+                if descuento_monto > subtotal_venta:
+                    raise HTTPException(status_code=400, detail="El descuento supera el subtotal.")
+                descuento_calculado = (
+                    descuento_monto
+                    if descuento_monto > 0
+                    else subtotal_venta * descuento_porcentaje / Decimal("100")
+                ).quantize(Decimal("0.01"))
+                monto_total = (subtotal_venta - descuento_calculado).quantize(Decimal("0.01"))
+
+                cur.execute(
+                    """
+                    SELECT pago_id, metodo, monto, referencia, created_at
+                    FROM core.venta_pagos
+                    WHERE venta_id = %s AND activo = true
+                    ORDER BY created_at, pago_id
+                    FOR UPDATE;
+                    """,
+                    (venta_id,),
+                )
+                pagos_anteriores = list(cur.fetchall())
+                pagos_por_id = {int(row[0]): row for row in pagos_anteriores}
+                ids_recibidos: set[int] = set()
+                pagos_finales: list[tuple[Any, ...]] = []
+
+                for pago in pagos_input:
+                    metodo = normalize_controlled_token(pago.metodo)
+                    monto_pago = Decimal(str(pago.monto)).quantize(Decimal("0.01"))
+                    if metodo not in VENTA_METODO_PAGO_ALLOWED:
+                        raise HTTPException(status_code=400, detail="Método de pago inválido.")
+                    if monto_pago <= 0:
+                        raise HTTPException(status_code=400, detail="Cada pago debe ser mayor a 0.")
+                    referencia = (pago.referencia or "").strip() or None
+                    pago_id = int(pago.pago_id) if pago.pago_id is not None else None
+                    if pago_id is not None:
+                        if pago_id in ids_recibidos or pago_id not in pagos_por_id:
+                            raise HTTPException(status_code=400, detail="Pago inválido o repetido.")
+                        ids_recibidos.add(pago_id)
+                        cur.execute(
+                            """
+                            UPDATE core.venta_pagos
+                            SET metodo = %s, monto = %s, referencia = %s
+                            WHERE pago_id = %s AND venta_id = %s AND activo = true
+                            RETURNING pago_id, metodo, monto, referencia, created_at;
+                            """,
+                            (metodo, monto_pago, referencia, pago_id, venta_id),
+                        )
+                    else:
+                        cur.execute(
+                            """
+                            INSERT INTO core.venta_pagos (venta_id, metodo, monto, referencia, created_by)
+                            VALUES (%s, %s, %s, %s, %s)
+                            RETURNING pago_id, metodo, monto, referencia, created_at;
+                            """,
+                            (venta_id, metodo, monto_pago, referencia, user["username"]),
+                        )
+                    pagos_finales.append(cur.fetchone())
+
+                ids_quitados = set(pagos_por_id) - ids_recibidos
+                if ids_quitados:
+                    cur.execute(
+                        "UPDATE core.venta_pagos SET activo = false WHERE venta_id = %s AND pago_id = ANY(%s::bigint[]);",
+                        (venta_id, sorted(ids_quitados)),
+                    )
+                pagos_finales.sort(key=lambda row: (row[4], row[0]))
+                monto_pagado = sum(
+                    (Decimal(str(row[2] or 0)) for row in pagos_finales), Decimal("0.00")
+                ).quantize(Decimal("0.01"))
+                if monto_pagado > monto_total:
+                    raise HTTPException(status_code=400, detail="El total pagado supera el nuevo total de la venta.")
+
+                if estado_pago_solicitado == "reembolsada":
+                    estado_pago = "reembolsada"
+                elif monto_pagado <= 0:
+                    estado_pago = "sin_pago"
+                elif monto_pagado >= monto_total:
+                    estado_pago = "pagada"
+                elif len(pagos_finales) == 1:
+                    estado_pago = "anticipo"
+                else:
+                    estado_pago = "pago_parcial"
+                metodos = list(dict.fromkeys(str(row[1]) for row in pagos_finales))
+                metodo_pago = "|".join(metodos) if metodos else "efectivo"
+                tiene_plan = v.forma_liquidacion in {"meses_sin_intereses", "meses_con_intereses"}
+                if estado_pago == "pagada":
+                    forma_liquidacion = v.forma_liquidacion if tiene_plan else ("pago_mixto" if len(metodos) > 1 else "pago_completo")
+                    adelanto_aplica, adelanto_monto, adelanto_metodo = False, None, None
+                elif monto_pagado > 0:
+                    forma_liquidacion = v.forma_liquidacion if tiene_plan else "adelanto_apartado"
+                    adelanto_aplica = True
+                    adelanto_monto = monto_pagado
+                    adelanto_metodo = metodos[0] if len(metodos) == 1 else None
+                else:
+                    forma_liquidacion = v.forma_liquidacion
+                    adelanto_aplica, adelanto_monto, adelanto_metodo = False, None, None
+
+                for producto_id in ids_productos:
+                    producto = catalogo[producto_id]
+                    diferencia = productos_solicitados.get(producto_id, 0) - cantidades_anteriores.get(producto_id, 0)
+                    if producto["controla_stock"] and diferencia != 0:
+                        cur.execute(
+                            "UPDATE core.productos SET stock = stock - %s, updated_at = NOW() WHERE producto_id = %s AND sucursal_id = %s;",
+                            (diferencia, producto_id, v.sucursal_id),
+                        )
+                        cur.execute(
+                            """INSERT INTO core.inventario_movimientos (
+                                 sucursal_id, producto_id, tipo, cantidad, stock_anterior, stock_nuevo,
+                                 fuente_tipo, fuente_id, notas, created_by
+                               ) VALUES (%s, %s, 'edicion_venta', %s, %s, %s, 'venta', %s, %s, %s);""",
+                            (
+                                v.sucursal_id,
+                                producto_id,
+                                -diferencia,
+                                producto["stock"],
+                                producto["stock"] - diferencia,
+                                venta_id,
+                                f"Edición de venta #{venta_id}",
+                                user["username"],
+                            ),
+                        )
+                cur.execute("DELETE FROM core.venta_detalles WHERE venta_id = %s;", (venta_id,))
+                for producto in productos_validados:
+                    cur.execute(
+                        """
+                        INSERT INTO core.venta_detalles (venta_id, producto_id, cantidad, precio_unitario, subtotal, costo_unitario)
+                        VALUES (%s, %s, %s, %s, %s, %s);
+                        """,
+                        (venta_id, producto["producto_id"], producto["cantidad"], producto["precio"], producto["subtotal"], producto["costo_unitario"]),
+                    )
+
+                cur.execute(
+                    """
+                    UPDATE core.ventas
+                    SET paciente_id = %s, compra = %s, subtotal = %s,
+                        descuento_porcentaje = %s, descuento_monto = %s,
+                        descuento_motivo = %s, cupon_tipo = %s, monto_total = %s,
+                        metodo_pago = %s, forma_liquidacion = %s, plazo_meses = %s,
+                        adelanto_aplica = %s, adelanto_monto = %s, adelanto_metodo = %s,
+                        estado_venta = %s, estado_pago = %s, estado_pedido = %s,
+                        notas = %s, updated_at = NOW()
+                    WHERE venta_id = %s AND sucursal_id = %s AND activo = true;
+                    """,
+                    (
+                        v.paciente_id, v.compra, subtotal_venta, descuento_porcentaje,
+                        descuento_monto, v.descuento_motivo, v.cupon_tipo, monto_total,
+                        metodo_pago, forma_liquidacion, v.plazo_meses, adelanto_aplica,
+                        adelanto_monto, adelanto_metodo, v.estado_venta, estado_pago,
+                        v.estado_pedido, v.notas, venta_id, v.sucursal_id,
+                    ),
+                )
+            conn.commit()
+
+        return {
+            "venta_id": venta_id,
+            "updated": True,
+            "subtotal": float(subtotal_venta),
+            "descuento_porcentaje": float(descuento_porcentaje),
+            "descuento_monto": float(descuento_monto),
+            "monto_total": float(monto_total),
+            "monto_pagado": float(monto_pagado),
+            "saldo_pendiente": float(max(Decimal("0.00"), monto_total - monto_pagado)),
+            "metodo_pago": metodo_pago,
+            "forma_liquidacion": forma_liquidacion,
+            "estado_venta": v.estado_venta,
+            "estado_pago": estado_pago,
+            "estado_pedido": v.estado_pedido,
+            "notas": v.notas,
+            "pagos": [
+                {
+                    "pago_id": int(row[0]), "metodo": row[1], "monto": float(row[2] or 0),
+                    "referencia": row[3], "fecha_hora": str(row[4]) if row[4] else None,
+                }
+                for row in pagos_finales
+            ],
+            "productos": [
+                {
+                    "producto_id": producto["producto_id"], "sku": producto["sku"],
+                    "categoria": producto["categoria"], "subcategoria": producto["subcategoria"],
+                    "nombre": producto["nombre"], "modelo": producto["modelo"],
+                    "color": producto["color"], "tipo_mica": producto["tipo_mica"],
+                    "imagen_url": producto["imagen_url"], "cantidad": producto["cantidad"],
+                    "precio_unitario": float(producto["precio"]), "subtotal": float(producto["subtotal"]),
+                }
+                for producto in productos_validados
+            ],
+        }
     except HTTPException:
         raise
     except Exception as e:
@@ -6573,6 +7713,7 @@ def eliminar_venta(venta_id: int, sucursal_id: int, user=Depends(get_current_use
                 cur,
                 [venta_id],
                 sucursal_id,
+                user["username"],
             )
             cur.execute(
                 "DELETE FROM core.venta_pagos WHERE venta_id = %s;",
@@ -8167,6 +9308,7 @@ def eliminar_paciente(paciente_id: int, sucursal_id: int, user=Depends(get_curre
                     cur,
                     venta_ids,
                     sucursal_id,
+                    user["username"],
                 )
 
                 cur.execute(

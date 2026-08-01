@@ -239,6 +239,36 @@ type InventarioProducto = {
   orden_catalogo: number;
 };
 
+type InventarioMovimiento = {
+  movimiento_id: number;
+  fecha_hora: string;
+  tipo: string;
+  cantidad: number;
+  stock_anterior: number;
+  stock_nuevo: number;
+  costo_unitario: number | null;
+  proveedor: string | null;
+  folio: string | null;
+  notas: string | null;
+  usuario: string;
+  producto_id: number;
+  producto: string;
+  sku: string;
+};
+
+type FinanzasData = {
+  periodo: { desde: string; hasta: string };
+  resumen: Record<string, number>;
+  movimientos: Array<Record<string, any>>;
+  gastos: Array<Record<string, any>>;
+  nomina: Array<Record<string, any>>;
+  cuentas_cobrar: Array<Record<string, any>>;
+  cuentas_pagar: Array<Record<string, any>>;
+  estado_resultados: Record<string, number>;
+  flujo_efectivo: Record<string, number>;
+  balance_general: Record<string, number>;
+};
+
 type VentaCarritoItem = {
   producto_id: number;
   cantidad: number;
@@ -719,7 +749,7 @@ type LoginResponse = {
 
 type MeResponse = {
   username: string;
-  rol: "admin" | "recepcion" | "doctor";
+  rol: "admin" | "recepcion" | "doctor" | "contador";
   sucursal_id: number | null;
 };
 
@@ -2489,12 +2519,11 @@ function normalizeHistoriaForUi(data: any, fallbackDoctor: string) {
 }
 
 export default function App() {
-  const [tab, setTab] = useState<"pacientes" | "consultas" | "ventas" | "resumen_ventas" | "estadisticas" | "historia_clinica" | "inventario">("pacientes");
+  const [tab, setTab] = useState<"pacientes" | "consultas" | "ventas" | "resumen_ventas" | "estadisticas" | "historia_clinica" | "inventario" | "finanzas">("pacientes");
 
   // ---- Estado de sesión y búsqueda ----
   const [pacientes, setPacientes] = useState<Paciente[]>([]);
   const [consultas, setConsultas] = useState<Consulta[]>([]);
-  const [ventas, setVentas] = useState<Venta[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [editingPacienteId, setEditingPacienteId] = useState<number | null>(null);
   const [qPaciente, setQPaciente] = useState("");
@@ -2516,14 +2545,6 @@ export default function App() {
   const [consultaMes, setConsultaMes] = useState("");
   const [consultaAnio, setConsultaAnio] = useState(String(new Date().getFullYear()));
   const [consultaFiltroLabel, setConsultaFiltroLabel] = useState("Hoy");
-  const [ventaFiltroOpen, setVentaFiltroOpen] = useState(false);
-  const [ventaFiltroModo, setVentaFiltroModo] = useState<"hoy" | "rango" | "mes" | "anio">("hoy");
-  const [ventaFechaDesde, setVentaFechaDesde] = useState("");
-  const [ventaFechaHasta, setVentaFechaHasta] = useState("");
-  const [ventaMes, setVentaMes] = useState("");
-  const [ventaAnio, setVentaAnio] = useState(String(new Date().getFullYear()));
-  const [ventaFiltroLabel, setVentaFiltroLabel] = useState("Hoy");
-  const [qVenta, setQVenta] = useState("");
   const [ventasResumen, setVentasResumen] = useState<Venta[]>([]);
   const [loadingVentasResumen, setLoadingVentasResumen] = useState(false);
   const [ventasResumenError, setVentasResumenError] = useState<string | null>(null);
@@ -2613,15 +2634,39 @@ export default function App() {
   const [inventario, setInventario] = useState<InventarioProducto[]>([]);
   const [loadingInventario, setLoadingInventario] = useState(false);
   const [inventarioError, setInventarioError] = useState<string | null>(null);
-  const [inventarioStockDraft, setInventarioStockDraft] = useState<Record<number, number>>({});
+  const [inventarioStockDraft, setInventarioStockDraft] = useState<Record<number, number | string>>({});
   const [inventarioPrecioDraft, setInventarioPrecioDraft] = useState<Record<number, number>>({});
   const [inventarioCostoDraft, setInventarioCostoDraft] = useState<Record<number, number>>({});
   const [savingInventarioId, setSavingInventarioId] = useState<number | null>(null);
   const [inventarioBusqueda, setInventarioBusqueda] = useState("");
   const [inventarioCategoriaFiltro, setInventarioCategoriaFiltro] = useState("todos");
-  const [inventarioVista, setInventarioVista] = useState<"existencias" | "costos">("existencias");
+  const [inventarioVista, setInventarioVista] = useState<"existencias" | "movimientos" | "analisis" | "costos">("existencias");
   const [inventarioMetricaAyuda, setInventarioMetricaAyuda] = useState<"valor" | "ganancia" | null>(null);
   const [inventarioImagenAmpliada, setInventarioImagenAmpliada] = useState<InventarioProducto | null>(null);
+  const [inventarioMovimientos, setInventarioMovimientos] = useState<InventarioMovimiento[]>([]);
+  const [loadingInventarioMovimientos, setLoadingInventarioMovimientos] = useState(false);
+  const [savingInventarioMovimiento, setSavingInventarioMovimiento] = useState(false);
+  const [inventarioMovimientoForm, setInventarioMovimientoForm] = useState({
+    producto_id: "",
+    tipo: "entrada_compra",
+    cantidad: "",
+    costo_unitario: "",
+    proveedor: "",
+    folio: "",
+    notas: "",
+  });
+  const [finanzasSeccion, setFinanzasSeccion] = useState<"resumen" | "movimientos" | "gastos" | "nomina" | "cobrar" | "pagar" | "resultados" | "flujo" | "balance">("resumen");
+  const [finanzasDesde, setFinanzasDesde] = useState(() => {
+    const hoy = new Date();
+    return formatDateYYYYMMDD(new Date(hoy.getFullYear(), hoy.getMonth(), 1));
+  });
+  const [finanzasHasta, setFinanzasHasta] = useState(() => formatDateYYYYMMDD(new Date()));
+  const [finanzasData, setFinanzasData] = useState<FinanzasData | null>(null);
+  const [loadingFinanzas, setLoadingFinanzas] = useState(false);
+  const [savingFinanzas, setSavingFinanzas] = useState(false);
+  const [finanzasError, setFinanzasError] = useState<string | null>(null);
+  const [finanzasForm, setFinanzasForm] = useState<Record<string, any>>({});
+  const [finanzasCxpPagoDraft, setFinanzasCxpPagoDraft] = useState<Record<number, string>>({});
   const [ventaCategoria, setVentaCategoria] = useState<VentaCategoria | "">("");
   const [ventaCarrito, setVentaCarrito] = useState<VentaCarritoItem[]>([]);
   const [ventaDescuentoTipo, setVentaDescuentoTipo] = useState<"porcentaje" | "monto">("porcentaje");
@@ -2629,11 +2674,12 @@ export default function App() {
   const [ventaDescuentoMontoFijo, setVentaDescuentoMontoFijo] = useState(0);
   const [ventaDescuentoEntrada, setVentaDescuentoEntrada] = useState("");
   const ventaFormRef = useRef<HTMLFormElement | null>(null);
+  const ventaSubmitConfirmadoRef = useRef(false);
   const ventaPagoSeqRef = useRef(1);
   const [ventaPagos, setVentaPagos] = useState<VentaPagoDraft[]>([
     { ui_id: 1, metodo: "efectivo", monto: "" },
   ]);
-  const [ventaLentesPaso, setVentaLentesPaso] = useState(1);
+  const [, setVentaLentesPaso] = useState(1);
   const [ventaConfirmacionOpen, setVentaConfirmacionOpen] = useState(false);
   const [ventaAgregarTinte, setVentaAgregarTinte] = useState(false);
   const [ventaMostrarAntiblue, setVentaMostrarAntiblue] = useState(false);
@@ -2805,26 +2851,6 @@ export default function App() {
     return texto.includes(q);
   });
 }, [consultas, qConsulta]);
-
-  const ventasFiltradas = useMemo(() => {
-    const q = qVenta.trim().toLowerCase();
-    if (!q) return ventas;
-    return ventas.filter((v) => {
-      const texto = [
-        v.venta_id,
-        v.fecha_hora,
-        v.paciente_nombre,
-        v.estado_paciente,
-        v.compra,
-        v.monto_total,
-        v.como_nos_conocio,
-      ]
-        .filter(Boolean)
-        .join(" ")
-        .toLowerCase();
-      return texto.includes(q);
-    });
-  }, [ventas, qVenta]);
 
   const ventasResumenFiltradas = useMemo(() => {
     const q = normalizeForSearch(qVentasResumen);
@@ -3091,55 +3117,6 @@ export default function App() {
       .catch((e) => setError(e?.message ?? String(e)));
   }
 
-  function loadVentas(override?: {
-    modo?: "hoy" | "rango" | "mes" | "anio";
-    fechaDesde?: string;
-    fechaHasta?: string;
-    mes?: string;
-    anio?: string;
-    q?: string;
-  }) {
-    setError(null);
-
-    const modo = override?.modo ?? ventaFiltroModo;
-    const fechaDesde = override?.fechaDesde ?? ventaFechaDesde;
-    const fechaHasta = override?.fechaHasta ?? ventaFechaHasta;
-    const mes = override?.mes ?? ventaMes;
-    const anio = override?.anio ?? ventaAnio;
-    const q = override?.q ?? "";
-
-    const params = new URLSearchParams();
-    params.set("limit", "200");
-    params.set("sucursal_id", String(sucursalActivaId));
-
-    if (modo === "rango") {
-      if (fechaDesde) params.set("fecha_desde", fechaDesde);
-      if (fechaHasta) params.set("fecha_hasta", fechaHasta);
-      setVentaFiltroLabel(`Rango: ${fechaDesde || "..."} a ${fechaHasta || "..."}`);
-    } else if (modo === "mes") {
-      if (anio) params.set("anio", anio);
-      if (mes) params.set("mes", mes);
-      setVentaFiltroLabel(`Mes: ${mes || "?"}/${anio || "?"}`);
-    } else if (modo === "anio") {
-      if (anio) params.set("anio", anio);
-      setVentaFiltroLabel(`Año: ${anio || "?"}`);
-    } else {
-      setVentaFiltroLabel("Hoy");
-    }
-
-    if (q.trim()) {
-      params.set("q", q.trim());
-    }
-
-    apiFetch(`/ventas?${params.toString()}`)
-      .then((r) => {
-        if (!r.ok) throw new Error("No se pudo cargar la lista de ventas.");
-        return r.json();
-      })
-      .then(setVentas)
-      .catch((e) => setError(e?.message ?? String(e)));
-  }
-
   async function loadVentasResumen() {
     if (!me) return;
     setLoadingVentasResumen(true);
@@ -3187,7 +3164,12 @@ export default function App() {
   }
 
   async function guardarStockInventario(producto: InventarioProducto) {
-    const stock = Math.max(0, Math.trunc(Number(inventarioStockDraft[producto.producto_id] ?? producto.stock)));
+    const valorDraft = inventarioStockDraft[producto.producto_id];
+    if (valorDraft === "" || !Number.isFinite(Number(valorDraft))) {
+      setInventarioError("Escribe una cantidad de stock válida.");
+      return;
+    }
+    const stock = Math.max(0, Math.trunc(Number(valorDraft ?? producto.stock)));
     setSavingInventarioId(producto.producto_id);
     setInventarioError(null);
     try {
@@ -3209,6 +3191,61 @@ export default function App() {
       setInventarioError(e?.message ?? String(e));
     } finally {
       setSavingInventarioId(null);
+    }
+  }
+
+  async function loadInventarioMovimientos() {
+    if (!me || !["admin", "contador"].includes(me.rol)) return;
+    setLoadingInventarioMovimientos(true);
+    setInventarioError(null);
+    try {
+      const r = await apiFetch(`/inventario/movimientos?sucursal_id=${sucursalActivaId}&limit=500`);
+      if (!r.ok) throw new Error(await readErrorMessage(r));
+      setInventarioMovimientos(await r.json());
+    } catch (e: any) {
+      setInventarioMovimientos([]);
+      setInventarioError(e?.message ?? String(e));
+    } finally {
+      setLoadingInventarioMovimientos(false);
+    }
+  }
+
+  async function registrarInventarioMovimiento() {
+    if (!isAdmin) return;
+    const productoId = Number(inventarioMovimientoForm.producto_id);
+    const cantidad = Number(inventarioMovimientoForm.cantidad);
+    const producto = inventario.find((item) => item.producto_id === productoId);
+    if (!producto || !Number.isInteger(cantidad) || cantidad < 0 || (inventarioMovimientoForm.tipo !== "conteo_fisico" && cantidad === 0)) {
+      setInventarioError("Selecciona un producto y escribe una cantidad válida.");
+      return;
+    }
+    if (inventarioMovimientoForm.tipo === "entrada_compra" && (!inventarioMovimientoForm.costo_unitario || Number(inventarioMovimientoForm.costo_unitario) < 0)) {
+      setInventarioError("Captura el costo unitario de la compra.");
+      return;
+    }
+    setSavingInventarioMovimiento(true);
+    setInventarioError(null);
+    try {
+      const r = await apiFetch(`/inventario/${productoId}/movimientos`, {
+        method: "POST",
+        body: JSON.stringify({
+          sucursal_id: sucursalActivaId,
+          tipo: inventarioMovimientoForm.tipo,
+          cantidad,
+          expected_stock: producto.stock,
+          costo_unitario: inventarioMovimientoForm.costo_unitario === "" ? null : Number(inventarioMovimientoForm.costo_unitario),
+          proveedor: inventarioMovimientoForm.proveedor.trim() || null,
+          folio: inventarioMovimientoForm.folio.trim() || null,
+          notas: inventarioMovimientoForm.notas.trim() || null,
+        }),
+      });
+      if (!r.ok) throw new Error(await readErrorMessage(r));
+      setInventarioMovimientoForm((prev) => ({ ...prev, cantidad: "", costo_unitario: "", proveedor: "", folio: "", notas: "" }));
+      await Promise.all([loadInventario(), loadInventarioMovimientos()]);
+    } catch (e: any) {
+      setInventarioError(e?.message ?? String(e));
+    } finally {
+      setSavingInventarioMovimiento(false);
     }
   }
 
@@ -3322,17 +3359,6 @@ export default function App() {
     });
   }
 
-  function prepararMicasConDefaults() {
-    const productosDefault = [
-      inventario.find((item) => item.sku === "MIC-BASE-001"),
-      inventario.find((item) => item.sku === "MIC-MONO-001"),
-      inventario.find((item) => item.sku === "MIC-SINTRAT-001"),
-    ].filter((item): item is InventarioProducto => Boolean(item));
-    productosDefault.forEach((producto) =>
-      agregarProductoCarrito(producto, "reemplazar_subcategoria"),
-    );
-  }
-
   function seleccionarArmazonFlujoOptico(producto: InventarioProducto) {
     const yaSeleccionado = ventaCarrito.some((item) => item.producto_id === producto.producto_id);
     const idsArmazones = new Set(ventaArmazonesOpticos.map((item) => item.producto_id));
@@ -3376,16 +3402,12 @@ export default function App() {
           .filter((item) => idsArmazones.has(item.producto_id))
           .reduce((total, item) => total + item.cantidad, 0),
       );
-      let next = prev.filter((item) => !idsDisenos.has(item.producto_id));
+      // MIC-BASE-001 era un cargo legacy que se agregaba además del diseño.
+      // El diseño seleccionado ya representa el par de micas, por lo que se elimina.
+      let next = prev.filter((item) => !idsDisenos.has(item.producto_id) && item.producto_id !== micaBase?.producto_id);
       if (yaSeleccionado) {
-        next = next.filter((item) =>
-          item.producto_id !== micaBase?.producto_id
-          && !idsTratamientos.has(item.producto_id)
-        );
+        next = next.filter((item) => !idsTratamientos.has(item.producto_id));
         return next;
-      }
-      if (micaBase && !next.some((item) => item.producto_id === micaBase.producto_id)) {
-        next.push({ producto_id: micaBase.producto_id, cantidad: cantidadArmazones });
       }
       next.push({ producto_id: producto.producto_id, cantidad: cantidadArmazones });
       return next;
@@ -3721,60 +3743,6 @@ export default function App() {
     setConsultaFiltroOpen(false);
   }
 
-  function aplicarFiltroRapidoVenta(tipo: "ayer" | "ultimos7" | "semana_pasada" | "mes_pasado") {
-    const now = new Date();
-
-    if (tipo === "ayer") {
-      const y = new Date(now);
-      y.setDate(y.getDate() - 1);
-      const f = formatDateYYYYMMDD(y);
-      setVentaFiltroModo("rango");
-      setVentaFechaDesde(f);
-      setVentaFechaHasta(f);
-      loadVentas({ modo: "rango", fechaDesde: f, fechaHasta: f });
-      setVentaFiltroOpen(false);
-      return;
-    }
-    if (tipo === "ultimos7") {
-      const desde = new Date(now);
-      desde.setDate(desde.getDate() - 6);
-      const fDesde = formatDateYYYYMMDD(desde);
-      const fHasta = formatDateYYYYMMDD(now);
-      setVentaFiltroModo("rango");
-      setVentaFechaDesde(fDesde);
-      setVentaFechaHasta(fHasta);
-      loadVentas({ modo: "rango", fechaDesde: fDesde, fechaHasta: fHasta });
-      setVentaFiltroOpen(false);
-      return;
-    }
-    if (tipo === "semana_pasada") {
-      const mondayIndex = (now.getDay() + 6) % 7;
-      const inicioSemanaActual = new Date(now);
-      inicioSemanaActual.setDate(now.getDate() - mondayIndex);
-      const inicioSemanaPasada = new Date(inicioSemanaActual);
-      inicioSemanaPasada.setDate(inicioSemanaActual.getDate() - 7);
-      const finSemanaPasada = new Date(inicioSemanaActual);
-      finSemanaPasada.setDate(inicioSemanaActual.getDate() - 1);
-      const fDesde = formatDateYYYYMMDD(inicioSemanaPasada);
-      const fHasta = formatDateYYYYMMDD(finSemanaPasada);
-      setVentaFiltroModo("rango");
-      setVentaFechaDesde(fDesde);
-      setVentaFechaHasta(fHasta);
-      loadVentas({ modo: "rango", fechaDesde: fDesde, fechaHasta: fHasta });
-      setVentaFiltroOpen(false);
-      return;
-    }
-    const mesPasado = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-    const anio = String(mesPasado.getFullYear());
-    const mes = String(mesPasado.getMonth() + 1);
-    setVentaFiltroModo("mes");
-    setVentaAnio(anio);
-    setVentaMes(mes);
-    loadVentas({ modo: "mes", anio, mes });
-    setVentaFiltroOpen(false);
-  }
-
-
   function aplicarFiltroRapidoPaciente(tipo: "ayer" | "ultimos7" | "semana_pasada" | "mes_pasado") {
     const now = new Date();
 
@@ -4036,6 +4004,7 @@ export default function App() {
   }, [exportModalOpen, exportPacienteTexto, exportSucursalId, me?.rol, sucursalActivaId]);
 
   useEffect(() => {
+    if (!me || me.rol === "contador") return;
     const q = qPaciente.trim();
     if (!q) {
       buscarPacientesParaTabla("");
@@ -4045,7 +4014,7 @@ export default function App() {
       buscarPacientesParaTabla(q);
     }, 120);
     return () => clearTimeout(t);
-  }, [qPaciente, sucursalActivaId]);
+  }, [qPaciente, sucursalActivaId, me?.rol]);
 
   useEffect(() => {
     setHistoriaEstadoPaciente({});
@@ -4134,9 +4103,10 @@ export default function App() {
     setEditingVentaId(null);
     setSuccessVentaMsg(null);
     resetVentaWizard();
-    loadPacientes();
-    loadConsultas();
-    loadVentas();
+    if (me.rol !== "contador") {
+      loadPacientes();
+      loadConsultas();
+    }
   }, [sucursalActivaId, me]);
 
   useEffect(() => {
@@ -4145,7 +4115,7 @@ export default function App() {
   }, [me]);
 
   useEffect(() => {
-    if (me?.rol !== "admin") setInventarioVista("existencias");
+    if (me && !["admin", "contador"].includes(me.rol)) setInventarioVista("existencias");
   }, [me?.rol]);
 
   useEffect(() => {
@@ -4163,6 +4133,16 @@ export default function App() {
     if (!me || tab !== "resumen_ventas") return;
     loadVentasResumen();
   }, [me, tab, sucursalActivaId]);
+
+  useEffect(() => {
+    if (!me || tab !== "finanzas" || !["admin", "contador"].includes(me.rol)) return;
+    loadFinanzas();
+  }, [me, tab, sucursalActivaId]);
+
+  useEffect(() => {
+    if (!me || tab !== "inventario" || inventarioVista !== "movimientos") return;
+    loadInventarioMovimientos();
+  }, [me, tab, sucursalActivaId, inventarioVista]);
 
   useEffect(() => {
     if (!me) return;
@@ -4190,31 +4170,15 @@ export default function App() {
   ]);
 
   useEffect(() => {
-    if (!me || tab !== "ventas") return;
-    const t = setTimeout(() => {
-      loadVentas({ q: qVenta.trim() });
-    }, 220);
-    return () => clearTimeout(t);
-  }, [
-    me,
-    tab,
-    qVenta,
-    sucursalActivaId,
-    ventaFiltroModo,
-    ventaFechaDesde,
-    ventaFechaHasta,
-    ventaMes,
-    ventaAnio,
-  ]);
-
-  useEffect(() => {
     if (!me) return;
+    if (me.rol === "contador") {
+      if (!["finanzas", "resumen_ventas", "inventario"].includes(tab)) setTab("finanzas");
+      return;
+    }
     if ((me.rol === "recepcion") && tab === "historia_clinica") {
       setTab("pacientes");
     }
-    if (me.rol !== "admin" && tab === "inventario") {
-      setTab("pacientes");
-    }
+    if (tab === "finanzas" && !["admin", "contador"].includes(me.rol)) setTab("pacientes");
   }, [me, tab]);
 
   useEffect(() => {
@@ -4615,7 +4579,6 @@ export default function App() {
     try {
       const r = await apiFetch(`/ventas/${venta_id}?sucursal_id=${sucursalActivaId}`, { method: "DELETE" });
       if (!r.ok) throw new Error(await readErrorMessage(r));
-      loadVentas();
       loadVentasResumen();
       if (selectedVentaDetalle?.venta_id === venta_id) {
         closeVentaDetalle();
@@ -4957,7 +4920,6 @@ export default function App() {
       }));
       setVentaNuevoPagoMonto("");
       setVentaDetalleEditando(false);
-      setVentas((prev) => prev.map((venta) => venta.venta_id === ventaActualizada.venta_id ? ventaActualizada : venta));
       setVentasResumen((prev) => prev.map((venta) => venta.venta_id === ventaActualizada.venta_id ? ventaActualizada : venta));
       setPerfilVentas((prev) => prev.map((venta) => venta.venta_id === ventaActualizada.venta_id ? ventaActualizada : venta));
     } catch (e: any) {
@@ -4965,6 +4927,126 @@ export default function App() {
     } finally {
       setSavingVentaSeguimiento(false);
     }
+  }
+
+  async function loadFinanzas(desde = finanzasDesde, hasta = finanzasHasta) {
+    if (!me || !["admin", "contador"].includes(me.rol)) return;
+    setLoadingFinanzas(true);
+    setFinanzasError(null);
+    try {
+      const params = new URLSearchParams({
+        sucursal_id: String(sucursalActivaId),
+        fecha_desde: desde,
+        fecha_hasta: hasta,
+      });
+      const r = await apiFetch(`/finanzas/datos?${params.toString()}`);
+      if (!r.ok) throw new Error(await readErrorMessage(r));
+      setFinanzasData(await r.json());
+    } catch (e: any) {
+      setFinanzasError(e?.message ?? String(e));
+    } finally {
+      setLoadingFinanzas(false);
+    }
+  }
+
+  async function crearRegistroFinanzas(endpoint: string, payload: Record<string, any>) {
+    setSavingFinanzas(true);
+    setFinanzasError(null);
+    try {
+      const comprobante = payload.comprobante_file instanceof File ? payload.comprobante_file as File : null;
+      const payloadJson = { ...payload };
+      delete payloadJson.comprobante_file;
+      const r = await apiFetch(`/finanzas/${endpoint}`, {
+        method: "POST",
+        body: JSON.stringify(cleanPayload({ ...payloadJson, sucursal_id: sucursalActivaId })),
+      });
+      if (!r.ok) throw new Error(await readErrorMessage(r));
+      const creado = await r.json();
+      if (comprobante && (endpoint === "gastos" || endpoint === "cuentas-pagar")) {
+        const recurso = endpoint === "gastos" ? "gasto" : "cuenta_pagar";
+        const registroId = endpoint === "gastos" ? creado.gasto_id : creado.cuenta_pagar_id;
+        const params = new URLSearchParams({ recurso, registro_id: String(registroId), nombre: comprobante.name, sucursal_id: String(sucursalActivaId) });
+        const archivoR = await apiFetch(`/finanzas/comprobantes?${params.toString()}`, {
+          method: "POST",
+          headers: { "Content-Type": comprobante.type || "application/octet-stream" },
+          body: comprobante,
+        });
+        if (!archivoR.ok) throw new Error(`El registro se creó, pero el comprobante no pudo guardarse: ${await readErrorMessage(archivoR)}`);
+      }
+      setFinanzasForm({});
+      await loadFinanzas();
+    } catch (e: any) {
+      setFinanzasError(e?.message ?? String(e));
+    } finally {
+      setSavingFinanzas(false);
+    }
+  }
+
+  async function abrirComprobanteFinanzas(comprobanteId: number) {
+    setFinanzasError(null);
+    try {
+      const r = await apiFetch(`/finanzas/comprobantes/${comprobanteId}?sucursal_id=${sucursalActivaId}`);
+      if (!r.ok) throw new Error(await readErrorMessage(r));
+      const url = URL.createObjectURL(await r.blob());
+      window.open(url, "_blank", "noopener,noreferrer");
+      window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    } catch (e: any) {
+      setFinanzasError(e?.message ?? String(e));
+    }
+  }
+
+  async function actualizarEstadoFinanzas(recurso: "gastos" | "nomina" | "cuentas_pagar", registroId: number, estado: string, montoPagado?: number) {
+    setSavingFinanzas(true);
+    setFinanzasError(null);
+    try {
+      const params = new URLSearchParams({ estado, sucursal_id: String(sucursalActivaId) });
+      if (montoPagado !== undefined) params.set("monto_pagado", String(montoPagado));
+      const r = await apiFetch(`/finanzas/${recurso}/${registroId}/estado?${params.toString()}`, { method: "PATCH" });
+      if (!r.ok) throw new Error(await readErrorMessage(r));
+      await loadFinanzas();
+    } catch (e: any) {
+      setFinanzasError(e?.message ?? String(e));
+    } finally {
+      setSavingFinanzas(false);
+    }
+  }
+
+  function aplicarPeriodoFinanzas(tipo: "hoy" | "semana" | "mes" | "anio") {
+    const hoy = new Date();
+    let desde = new Date(hoy);
+    if (tipo === "semana") {
+      const dia = (hoy.getDay() + 6) % 7;
+      desde.setDate(hoy.getDate() - dia);
+    } else if (tipo === "mes") {
+      desde = new Date(hoy.getFullYear(), hoy.getMonth(), 1);
+    } else if (tipo === "anio") {
+      desde = new Date(hoy.getFullYear(), 0, 1);
+    }
+    const desdeTexto = formatDateYYYYMMDD(desde);
+    const hastaTexto = formatDateYYYYMMDD(hoy);
+    setFinanzasDesde(desdeTexto);
+    setFinanzasHasta(hastaTexto);
+    loadFinanzas(desdeTexto, hastaTexto);
+  }
+
+  function exportarFinanzasCsv() {
+    if (!finanzasData) return;
+    const filas: any[][] = [["seccion", "fecha_periodo", "concepto", "descripcion", "estado_fuente", "importe_1", "importe_2"]];
+    Object.entries(finanzasData.resumen).forEach(([concepto, monto]) => filas.push(["resumen", `${finanzasDesde} a ${finanzasHasta}`, concepto, "", "", monto, ""]));
+    Object.entries(finanzasData.estado_resultados).forEach(([concepto, monto]) => filas.push(["estado_resultados", `${finanzasDesde} a ${finanzasHasta}`, concepto, "", "", monto, ""]));
+    Object.entries(finanzasData.flujo_efectivo).forEach(([concepto, monto]) => filas.push(["flujo_efectivo", `${finanzasDesde} a ${finanzasHasta}`, concepto, "", "", monto, ""]));
+    Object.entries(finanzasData.balance_general).forEach(([concepto, monto]) => filas.push(["balance_general", finanzasHasta, concepto, "", "", monto, ""]));
+    finanzasData.movimientos.forEach((item) => filas.push(["movimiento", item.fecha, item.categoria, item.descripcion, `${item.tipo}/${item.fuente}`, item.monto, item.cuenta]));
+    finanzasData.gastos.forEach((item) => filas.push(["gasto", item.fecha, item.categoria, item.descripcion, item.estado, item.monto, item.proveedor]));
+    finanzasData.nomina.forEach((item) => filas.push(["nomina", `${item.periodo_inicio} a ${item.periodo_fin}`, item.empleado, "Pago neto / costo patronal", item.estado, item.pago_neto, item.costo_patronal]));
+    finanzasData.cuentas_cobrar.forEach((item) => filas.push(["cuenta_por_cobrar", item.fecha, `Venta #${item.venta_id}`, item.cliente, item.estado_pago, item.saldo, item.total]));
+    finanzasData.cuentas_pagar.forEach((item) => filas.push(["cuenta_por_pagar", item.fecha_emision, item.categoria, `${item.proveedor}: ${item.concepto}`, item.estado, item.saldo, item.monto_total]));
+    const contenido = filas.map((fila) => fila.map((valor) => `"${String(valor ?? "").replace(/"/g, '""')}"`).join(",")).join("\r\n");
+    const enlace = document.createElement("a");
+    enlace.href = URL.createObjectURL(new Blob(["\ufeff", contenido], { type: "text/csv;charset=utf-8" }));
+    enlace.download = `finanzas_${finanzasDesde}_${finanzasHasta}.csv`;
+    enlace.click();
+    URL.revokeObjectURL(enlace.href);
   }
 
   function startEditVenta(v: Venta) {
@@ -5088,8 +5170,19 @@ export default function App() {
     setPacientesVentaOpciones(pacientesOpciones);
   }
 
+  function completarEdicionVenta() {
+    cancelEditVenta();
+    setSuccessVentaMsg("Edición completada.");
+    setTimeout(() => setSuccessVentaMsg(null), 3000);
+  }
+
   async function onSubmitVenta(e: FormEvent) {
     e.preventDefault();
+    if (!ventaSubmitConfirmadoRef.current) {
+      setVentaConfirmacionOpen(true);
+      return;
+    }
+    ventaSubmitConfirmadoRef.current = false;
     setSavingVenta(true);
     setError(null);
     setSuccessVentaMsg(null);
@@ -5102,34 +5195,41 @@ export default function App() {
           return producto ? { ...item, producto } : null;
         })
         .filter((item): item is VentaCarritoItem & { producto: InventarioProducto } => Boolean(item));
-      if (editingVentaId === null && me?.rol === "admin" && carritoDetalle.length === 0) {
+      if (me?.rol === "admin" && carritoDetalle.length === 0) {
         throw new Error("Agrega al menos un producto al carrito.");
       }
-      if (editingVentaId === null) {
+      if (me?.rol === "admin") {
         carritoDetalle.forEach(({ producto, cantidad }) => {
-          if (producto.controla_stock && cantidad > producto.stock) {
-            throw new Error(`Solo quedan ${producto.stock} unidades de ${producto.nombre}.`);
+          const cantidadOriginal = editingVentaId === null
+            ? 0
+            : Number(
+                ventaEdicionOriginal?.productos?.find(
+                  (item) => item.producto_id === producto.producto_id,
+                )?.cantidad || 0,
+              );
+          const disponible = producto.stock + cantidadOriginal;
+          if (producto.controla_stock && cantidad > disponible) {
+            throw new Error(`Solo hay ${disponible} unidades disponibles de ${producto.nombre} para esta edición.`);
           }
         });
       }
-      const tieneMicasBase = carritoDetalle.some(({ producto }) => producto.sku === "MIC-BASE-001");
       const tieneArmazonOptico = carritoDetalle.some(
         ({ producto }) => producto.categoria === "lentes_opticos" && producto.subcategoria === "armazon",
       );
-      if (editingVentaId === null && (tieneMicasBase || tieneArmazonOptico)) {
+      if (me?.rol === "admin" && tieneArmazonOptico) {
         const tieneDiseno = carritoDetalle.some(({ producto }) => producto.categoria === "micas" && producto.subcategoria === "diseno");
         const tieneTratamiento = carritoDetalle.some(({ producto }) => producto.categoria === "micas" && producto.subcategoria === "tratamiento");
-        if (!tieneMicasBase || !tieneDiseno || !tieneTratamiento) {
+        if (!tieneDiseno || !tieneTratamiento) {
           throw new Error("Completa la selección de micas: diseño y tratamiento.");
         }
       }
       const tieneTinte = carritoDetalle.some(({ producto }) => producto.tipo_mica === "tinte")
         || ventasSeleccionadas.includes("micas_tinte");
-      if (editingVentaId === null && tieneTinte && !ventaTinteGrado) {
+      if (me?.rol === "admin" && tieneTinte && !ventaTinteGrado) {
         throw new Error("Selecciona el grado del tinte.");
       }
 
-      const compraTokensBase = editingVentaId === null && me?.rol === "admin"
+      const compraTokensBase = me?.rol === "admin"
         ? compraTokensDesdeCarrito(ventaCarrito)
         : ventasSeleccionadas;
       const compraTokens = [
@@ -5142,13 +5242,13 @@ export default function App() {
         (total, { producto, cantidad }) => total + Number(producto.precio || 0) * cantidad,
         0,
       );
-      const subtotalVenta = editingVentaId === null && me?.rol === "admin"
+      const subtotalVenta = me?.rol === "admin"
         ? subtotalCarrito
         : Number(formVenta.subtotal || formVenta.monto_total || 0);
-      const descuentoPorcentaje = editingVentaId === null && me?.rol === "admin"
+      const descuentoPorcentaje = me?.rol === "admin"
         ? ventaDescuentoPorcentaje
         : Number(formVenta.descuento_porcentaje || 0);
-      const descuentoMontoFijo = editingVentaId === null && me?.rol === "admin"
+      const descuentoMontoFijo = me?.rol === "admin"
         ? ventaDescuentoMontoFijo
         : Number(formVenta.descuento_monto || 0);
       const descuentoActivo = descuentoPorcentaje > 0 || descuentoMontoFijo > 0;
@@ -5171,8 +5271,10 @@ export default function App() {
       if (subtotalVenta <= 0) throw new Error("El carrito debe tener un subtotal mayor a 0.");
       const pagosPayload = ventaPagos
         .map((pago) => ({
+          ...(pago.pago_id ? { pago_id: pago.pago_id } : {}),
           metodo: pago.metodo,
           monto: Number(Number(pago.monto || 0).toFixed(2)),
+          referencia: pago.referencia || null,
         }))
         .filter((pago) => pago.monto > 0);
       if (editingVentaId === null && pagosPayload.length === 0) {
@@ -5181,7 +5283,7 @@ export default function App() {
       const montoPagado = Number(
         pagosPayload.reduce((total, pago) => total + pago.monto, 0).toFixed(2),
       );
-      if (editingVentaId === null && montoPagado > montoTotal) {
+      if (montoPagado > montoTotal) {
         throw new Error("La suma de los pagos no puede ser mayor al total.");
       }
       const metodosPago = Array.from(new Set(pagosPayload.map((pago) => pago.metodo)));
@@ -5197,25 +5299,6 @@ export default function App() {
       ) {
         throw new Error("Selecciona el plazo del financiamiento.");
       }
-      const nuevoPagoEdicion = editingVentaId !== null
-        ? Math.max(0, Number(ventaNuevoPagoMonto || 0))
-        : 0;
-      const montoPagadoExistente = editingVentaId !== null
-        ? Number(ventaEdicionOriginal?.monto_pagado || 0)
-        : montoPagado;
-      if (editingVentaId !== null && montoPagadoExistente > montoTotal) {
-        throw new Error("El descuento deja el total por debajo de lo que el cliente ya pagó.");
-      }
-      if (editingVentaId !== null && montoPagadoExistente + nuevoPagoEdicion > montoTotal) {
-        throw new Error("El pago nuevo es mayor que el saldo por pagar.");
-      }
-      if (
-        editingVentaId !== null
-        && nuevoPagoEdicion > 0
-        && ["cancelada", "devuelta"].includes(ventaSeguimientoDraft.estado_venta)
-      ) {
-        throw new Error("No puedes agregar un pago a una venta cancelada o devuelta.");
-      }
       const formaLiquidacion: VentaFormaLiquidacion = editingVentaId !== null
         ? (formVenta.forma_liquidacion ?? "pago_completo")
         : planFinanciamiento
@@ -5223,9 +5306,7 @@ export default function App() {
           : pagoCompleto
             ? (metodosPago.length > 1 ? "pago_mixto" : "pago_completo")
             : "adelanto_apartado";
-      const requiereAdelanto = editingVentaId === null
-        ? !pagoCompleto
-        : Boolean(formVenta.adelanto_aplica);
+      const requiereAdelanto = !pagoCompleto && montoPagado > 0;
 
       const payload = cleanPayload({
         ...formVenta,
@@ -5235,59 +5316,88 @@ export default function App() {
         descuento_porcentaje: descuentoPorcentaje,
         descuento_monto: descuentoMontoFijo,
         monto_total: montoTotal,
-        metodo_pago: editingVentaId !== null
-          ? formVenta.metodo_pago
-          : (metodosPago.join("|") || "efectivo"),
+        metodo_pago: metodosPago.join("|") || "efectivo",
         forma_liquidacion: formaLiquidacion,
         adelanto_aplica: requiereAdelanto,
-        adelanto_monto: requiereAdelanto
-          ? (editingVentaId !== null ? Number(formVenta.adelanto_monto || 0) : montoPagado)
-          : null,
+        adelanto_monto: requiereAdelanto ? montoPagado : null,
         adelanto_metodo: requiereAdelanto && metodosPago.length === 1
           ? metodosPago[0]
           : null,
-        ...(editingVentaId === null && me?.rol === "admin"
+        ...(me?.rol === "admin"
           ? {
               productos: ventaCarrito,
             }
           : {}),
-        ...(editingVentaId === null ? { pagos: pagosPayload } : {}),
+        pagos: pagosPayload,
+        ...(editingVentaId !== null
+          ? {
+              estado_venta: ventaSeguimientoDraft.estado_venta,
+              estado_pago: ventaSeguimientoDraft.estado_pago,
+              estado_pedido: ventaSeguimientoDraft.estado_pedido,
+            }
+          : {}),
       });
 
-      const endpoint = editingVentaId === null ? "/ventas" : `/ventas/${editingVentaId}`;
+      const endpoint = editingVentaId === null
+        ? "/ventas"
+        : me?.rol === "admin"
+          ? `/ventas/${editingVentaId}/edicion-completa`
+          : `/ventas/${editingVentaId}`;
       const method = editingVentaId === null ? "POST" : "PUT";
       const r = await apiFetch(endpoint, { method, body: JSON.stringify(payload) });
       if (!r.ok) throw new Error(await readErrorMessage(r));
       if (editingVentaId !== null) {
-        const estadoPagoActualizado = nuevoPagoEdicion > 0
-          ? deriveVentaEstadoPago(
-              montoTotal,
-              montoPagadoExistente + nuevoPagoEdicion,
-              (ventaEdicionOriginal?.pagos?.length || 0) + 1,
-            )
-          : ventaSeguimientoDraft.estado_pago;
-        const seguimientoPayload = {
-          sucursal_id: sucursalActivaId,
-          estado_venta: ventaSeguimientoDraft.estado_venta,
-          estado_pago: estadoPagoActualizado,
-          estado_pedido: ventaSeguimientoDraft.estado_pedido,
-          notas: formVenta.notas?.trim() || null,
-          ...(nuevoPagoEdicion > 0
-            ? {
-                nuevo_pago: {
-                  metodo: ventaNuevoPagoMetodo,
-                  monto: Number(nuevoPagoEdicion.toFixed(2)),
-                },
-              }
-            : {}),
+        const actualizado = await r.json();
+        const pacienteNombre = pacientesVentaOpciones.find(
+          (paciente) => paciente.id === formVenta.paciente_id,
+        )?.label || ventaEdicionOriginal?.paciente_nombre || `Paciente #${formVenta.paciente_id}`;
+        const ventaActualizada: Venta = {
+          ...(ventaEdicionOriginal as Venta),
+          ...actualizado,
+          paciente_id: formVenta.paciente_id,
+          paciente_nombre: pacienteNombre,
+          compra: compraTokens.join("|"),
+          descuento_motivo: formVenta.descuento_motivo,
+          cupon_tipo: formVenta.cupon_tipo,
+          plazo_meses: formVenta.plazo_meses,
+          productos: actualizado.productos || [],
+          pagos: actualizado.pagos || [],
         };
-        const seguimientoResponse = await apiFetch(
-          `/ventas/${editingVentaId}/seguimiento`,
-          { method: "PATCH", body: JSON.stringify(seguimientoPayload) },
+        const pagosActualizados: VentaPagoDraft[] = (actualizado.pagos || []).map(
+          (pago: VentaPago, index: number) => ({
+            ...pago,
+            ui_id: pago.pago_id ?? -(index + 1),
+            monto: Number(pago.monto || 0),
+          }),
         );
-        if (!seguimientoResponse.ok) {
-          throw new Error(await readErrorMessage(seguimientoResponse));
-        }
+        setVentaEdicionOriginal(ventaActualizada);
+        setVentaPagos(
+          pagosActualizados.length > 0
+            ? pagosActualizados
+            : [{ ui_id: ++ventaPagoSeqRef.current, metodo: "efectivo", monto: "" }],
+        );
+        setFormVenta((prev) => ({
+          ...prev,
+          subtotal: Number(actualizado.subtotal || 0),
+          monto_total: Number(actualizado.monto_total || 0),
+          metodo_pago: actualizado.metodo_pago || "efectivo",
+          forma_liquidacion: actualizado.forma_liquidacion || prev.forma_liquidacion,
+          adelanto_aplica: Number(actualizado.monto_pagado || 0) > 0 && Number(actualizado.saldo_pendiente || 0) > 0,
+          adelanto_monto: Number(actualizado.monto_pagado || 0) || null,
+        }));
+        setVentaSeguimientoDraft((prev) => ({
+          ...prev,
+          estado_venta: actualizado.estado_venta,
+          estado_pago: actualizado.estado_pago,
+          estado_pedido: actualizado.estado_pedido,
+        }));
+        setVentasResumen((prev) => prev.map((venta) => venta.venta_id === editingVentaId ? ventaActualizada : venta));
+        setPerfilVentas((prev) => prev.map((venta) => venta.venta_id === editingVentaId ? ventaActualizada : venta));
+        setSuccessVentaMsg("Cambios guardados. Puedes continuar editando esta venta.");
+        setTimeout(() => setSuccessVentaMsg(null), 3500);
+        loadInventario();
+        loadVentasResumen();
+        return;
       }
 
       setFormVenta((prev) => ({
@@ -5311,12 +5421,11 @@ export default function App() {
       resetVentaWizard();
       setEditingVentaId(null);
       setVentaEdicionOriginal(null);
-      loadVentas();
       if (me?.rol === "admin") {
         loadInventario();
       }
       setTab("ventas");
-      setSuccessVentaMsg(editingVentaId === null ? "Venta guardada con éxito." : "Venta actualizada con éxito.");
+      setSuccessVentaMsg("Venta guardada con éxito.");
       setTimeout(() => setSuccessVentaMsg(null), 3500);
     } catch (e: any) {
       setError(e?.message ?? String(e));
@@ -5847,19 +5956,21 @@ export default function App() {
   const isAdmin = me.rol === "admin";
   const isRecep = me.rol === "recepcion";
   const isDoctor = me.rol === "doctor";
+  const isContador = me.rol === "contador";
   const sessionUser = String(me.username || "").trim().toLowerCase();
   const hideVentasTabUsers = new Set(["edomex_doc", "playa_doc"]);
   const hideVentasMetodoPieUsers = new Set(["edomex_doc", "playa_doc"]);
   const hideVentasPeriodoKpiUsers = new Set(["edomex_doc", "playa_doc"]);
   const hideMoneyMonthlyChartUsers = new Set(["edomex_doc", "playa_doc", "playa_recep", "edomex_recep"]);
   const hideTopPacientesUsers = new Set(["edomex_doc", "playa_doc"]);
-  const canViewVentasTab = !hideVentasTabUsers.has(sessionUser);
+  const canViewVentasTab = !isContador && !hideVentasTabUsers.has(sessionUser);
+  const canViewResumenVentas = canViewVentasTab || isContador;
   const canViewVentasMetodoPie = !hideVentasMetodoPieUsers.has(sessionUser);
   const canViewVentasPeriodoKpi = !hideVentasPeriodoKpiUsers.has(sessionUser);
   const canViewMoneyMonthlyChart = !hideMoneyMonthlyChartUsers.has(sessionUser);
   const canViewTopPacientesMes = !hideTopPacientesUsers.has(sessionUser);
   const canViewVentasCantidadMensualChart = isAdmin || isRecep;
-  const canViewHistoriaTab = isAdmin || isDoctor;
+  const canViewHistoriaTab = !isContador && (isAdmin || isDoctor);
 
   const canCreatePaciente = isAdmin || isRecep || isDoctor;
   const canEditPaciente = isAdmin || isRecep || isDoctor;
@@ -5880,7 +5991,6 @@ export default function App() {
   const ventaArmazonesOpticos = productosPor("lentes_opticos", "armazon");
   const ventaLentesSol = productosPor("lentes_de_sol", "armazon");
   const ventaGraduacionSol = productosPor("lentes_de_sol", "graduacion");
-  const ventaMicasBase = productosPor("micas", "base");
   const ventaMicasDisenos = productosPor("micas", "diseno");
   const ventaMicasTratamientos = productosPor("micas", "tratamiento");
   const ventaTratamientoSin = ventaMicasTratamientos.find((producto) => producto.tipo_mica === "sin_tratamiento");
@@ -5899,6 +6009,9 @@ export default function App() {
     })
     .filter((item): item is VentaCarritoItem & { producto: InventarioProducto } => Boolean(item));
   const ventaCarritoIds = new Set(ventaCarrito.map((item) => item.producto_id));
+  const ventaCantidadOriginalPorProducto = new Map(
+    (ventaEdicionOriginal?.productos || []).map((producto) => [producto.producto_id, Number(producto.cantidad || 0)]),
+  );
   const ventaArmazonesSeleccionados = ventaArmazonesOpticos.filter((producto) => ventaCarritoIds.has(producto.producto_id));
   const ventaArmazonSeleccionado = ventaArmazonesSeleccionados[0];
   const ventaDisenoSeleccionado = ventaMicasDisenos.find((producto) => ventaCarritoIds.has(producto.producto_id));
@@ -5913,9 +6026,9 @@ export default function App() {
     (total, item) => total + Number(item.producto.precio || 0) * item.cantidad,
     0,
   );
-  const ventaSubtotalResumen = editingVentaId !== null
-    ? Number(formVenta.subtotal ?? formVenta.monto_total ?? 0)
-    : ventaSubtotalCarrito;
+  const ventaSubtotalResumen = me?.rol === "admin"
+    ? ventaSubtotalCarrito
+    : Number(formVenta.subtotal ?? formVenta.monto_total ?? 0);
   const ventaDescuentoMonto = Number(
     (
       ventaDescuentoTipo === "monto"
@@ -5988,19 +6101,51 @@ export default function App() {
       productos: inventarioFiltrado.filter((producto) => producto.categoria === categoria),
     }))
     .filter((grupo) => grupo.productos.length > 0);
+  const inventarioControladoFiltrado = inventarioFiltrado.filter((producto) => producto.controla_stock);
+  const inventarioAnalisisTotalUnidades = inventarioControladoFiltrado.reduce(
+    (total, producto) => total + Number(producto.stock || 0),
+    0,
+  );
+  const inventarioAnalisisAgotados = inventarioControladoFiltrado.filter((producto) => producto.stock <= 0);
+  const inventarioAnalisisBajos = inventarioControladoFiltrado.filter(
+    (producto) => producto.stock > 0 && producto.stock <= producto.stock_minimo,
+  );
+  const inventarioAnalisisSaludables = inventarioControladoFiltrado.filter(
+    (producto) => producto.stock > producto.stock_minimo,
+  );
+  const inventarioAnalisisValor = inventarioControladoFiltrado.reduce(
+    (total, producto) => total + Number(producto.costo_unitario || 0) * Number(producto.stock || 0),
+    0,
+  );
+  const inventarioAnalisisPorCategoria = Array.from(
+    inventarioControladoFiltrado.reduce((grupos, producto) => {
+      const actual = grupos.get(producto.categoria) || { categoria: producto.categoria, productos: 0, unidades: 0, valor: 0 };
+      actual.productos += 1;
+      actual.unidades += Number(producto.stock || 0);
+      actual.valor += Number(producto.costo_unitario || 0) * Number(producto.stock || 0);
+      grupos.set(producto.categoria, actual);
+      return grupos;
+    }, new Map<string, { categoria: string; productos: number; unidades: number; valor: number }>()),
+  ).map(([, item]) => item).sort((a, b) => b.unidades - a.unidades);
+  const inventarioAnalisisTopStock = [...inventarioControladoFiltrado]
+    .sort((a, b) => Number(b.stock || 0) - Number(a.stock || 0))
+    .slice(0, 10);
 
   const renderVentaProductoButton = (
     producto: InventarioProducto,
     onClick: () => void,
     selected = ventaCarritoIds.has(producto.producto_id),
   ) => {
-    const agotado = producto.controla_stock && producto.stock <= 0;
+    const disponibleEdicion = producto.stock + (editingVentaId !== null
+      ? Number(ventaCantidadOriginalPorProducto.get(producto.producto_id) || 0)
+      : 0);
+    const agotado = producto.controla_stock && disponibleEdicion <= 0;
     const esMica = producto.categoria === "micas";
     return (
       <button
         key={producto.producto_id}
         type="button"
-        disabled={agotado || editingVentaId !== null}
+        disabled={agotado}
         onClick={onClick}
         aria-pressed={selected}
         style={{
@@ -6013,7 +6158,7 @@ export default function App() {
           border: selected ? "2px solid #1677d2" : "1px solid #cdddeb",
           background: selected ? "#edf6ff" : agotado ? "#f4f5f6" : "#fff",
           textAlign: "left",
-          cursor: agotado || editingVentaId !== null ? "not-allowed" : "pointer",
+          cursor: agotado ? "not-allowed" : "pointer",
           opacity: agotado ? 0.62 : 1,
           boxShadow: selected ? "0 8px 20px rgba(37,99,235,.12)" : "none",
         }}
@@ -6043,7 +6188,7 @@ export default function App() {
           {!esMica && (
             <span style={{ display: "block", marginTop: 3, fontSize: 10, fontWeight: 800, color: agotado ? "#991b1b" : "#547087" }}>
               {producto.controla_stock
-                ? (agotado ? "AGOTADO" : `${producto.stock} EN EXISTENCIA`)
+                ? (agotado ? "AGOTADO" : `${disponibleEdicion} DISPONIBLE${editingVentaId !== null ? " PARA EDITAR" : ""}`)
                 : "SERVICIO / ADICIONAL"}
             </span>
           )}
@@ -6077,7 +6222,7 @@ export default function App() {
 
       {editingVentaId !== null && (
         <div style={{ padding: 9, border: "1px solid #bfdbfe", background: "#eff6ff", color: "#1e40af", fontSize: 11, fontWeight: 750 }}>
-          Los pagos anteriores se conservan. Puedes actualizar los estados y registrar un pago adicional abajo.
+          Puedes corregir pagos anteriores, eliminarlos o agregar nuevos. La fecha original se conserva en los pagos existentes.
         </div>
       )}
 
@@ -6099,7 +6244,6 @@ export default function App() {
               MÉTODO
               <select
                 value={pago.metodo}
-                disabled={editingVentaId !== null}
                 onChange={(e) => setVentaPagos((prev) => prev.map((item) => item.ui_id === pago.ui_id ? { ...item, metodo: e.target.value as VentaMetodoPago } : item))}
                 style={{ width: "100%", padding: 8, border: "1px solid #b9cce0", background: "#fff" }}
               >
@@ -6114,7 +6258,6 @@ export default function App() {
                 type="text"
                 inputMode="decimal"
                 value={String(pago.monto ?? "")}
-                disabled={editingVentaId !== null}
                 onChange={(e) => {
                   const siguiente = e.target.value.replace(",", ".");
                   if (siguiente === "" || /^\d+(?:\.\d{0,2})?$/.test(siguiente)) {
@@ -6126,20 +6269,29 @@ export default function App() {
                 placeholder=""
                 style={{ width: "100%", padding: 8, border: "1px solid #8cb4df", textAlign: "right", fontWeight: 900 }}
               />
+              {editingVentaId !== null && pago.pago_id && (
+                <span style={{ color: "#718397", fontSize: 9, fontWeight: 650 }}>
+                  Registrado: {pago.fecha_hora ? formatDateTimePretty(pago.fecha_hora) : "fecha no disponible"}
+                </span>
+              )}
             </label>
             <button
               type="button"
-              disabled={editingVentaId !== null || ventaPagos.length === 1}
-              onClick={() => setVentaPagos((prev) => prev.filter((item) => item.ui_id !== pago.ui_id))}
+              onClick={() => setVentaPagos((prev) => {
+                const restantes = prev.filter((item) => item.ui_id !== pago.ui_id);
+                return restantes.length > 0
+                  ? restantes
+                  : [{ ui_id: ++ventaPagoSeqRef.current, metodo: "efectivo", monto: "" }];
+              })}
               aria-label={`Eliminar pago ${index + 1}`}
               title="Eliminar pago"
               style={{
                 width: 32,
                 height: 34,
                 border: "1px solid #fecaca",
-                background: editingVentaId !== null || ventaPagos.length === 1 ? "#f1f5f9" : "#fff5f5",
+                background: "#fff5f5",
                 color: "#b91c1c",
-                cursor: editingVentaId !== null || ventaPagos.length === 1 ? "not-allowed" : "pointer",
+                cursor: "pointer",
                 fontWeight: 900,
               }}
             >
@@ -6169,9 +6321,8 @@ export default function App() {
               ESTADO DEL PAGO
               <select
                 value={ventaSeguimientoDraft.estado_pago}
-                disabled={Number(ventaNuevoPagoMonto || 0) > 0}
                 onChange={(e) => setVentaSeguimientoDraft((prev) => ({ ...prev, estado_pago: e.target.value as VentaEstadoPago }))}
-                style={{ width: "100%", padding: 8, border: "1px solid #b9cce0", background: Number(ventaNuevoPagoMonto || 0) > 0 ? "#eef2f6" : "#fff" }}
+                style={{ width: "100%", padding: 8, border: "1px solid #b9cce0", background: "#fff" }}
               >
                 {VENTA_ESTADO_PAGO_OPTIONS.map((opcion) => (
                   <option key={`edicion-pago-${opcion.value}`} value={opcion.value}>{opcion.label}</option>
@@ -6191,46 +6342,13 @@ export default function App() {
               </select>
             </label>
           </div>
-          {ventaSaldo > 0 && ventaSeguimientoDraft.estado_pago !== "reembolsada" && (
-            <div style={{ display: "grid", gridTemplateColumns: "minmax(170px, 1fr) minmax(170px, .8fr)", gap: 8, paddingTop: 9, borderTop: "1px solid #dbe6ef" }}>
-              <label style={{ display: "grid", gap: 4, color: "#40566c", fontSize: 10, fontWeight: 850 }}>
-                MÉTODO DEL PAGO NUEVO
-                <select
-                  value={ventaNuevoPagoMetodo}
-                  onChange={(e) => setVentaNuevoPagoMetodo(e.target.value as VentaMetodoPago)}
-                  style={{ width: "100%", padding: 8, border: "1px solid #b9cce0", background: "#fff" }}
-                >
-                  {VENTA_METODO_PAGO_OPTIONS.map((opcion) => (
-                    <option key={`pago-nuevo-${opcion.value}`} value={opcion.value}>{opcion.label}</option>
-                  ))}
-                </select>
-              </label>
-              <label style={{ display: "grid", gap: 4, color: "#40566c", fontSize: 10, fontWeight: 850 }}>
-                MONTO ADICIONAL
-                <input
-                  type="text"
-                  inputMode="decimal"
-                  value={ventaNuevoPagoMonto}
-                  onChange={(e) => {
-                    const entrada = e.target.value.replace(",", ".");
-                    if (entrada === "" || /^\d+(?:\.\d{0,2})?$/.test(entrada)) {
-                      setVentaNuevoPagoMonto(entrada);
-                    }
-                  }}
-                  placeholder="0"
-                  style={{ width: "100%", padding: 8, border: "1px solid #8cb4df", textAlign: "right", fontWeight: 900 }}
-                />
-              </label>
-            </div>
-          )}
           <div style={{ color: "#718397", fontSize: 10 }}>
-            Saldo actual: ${ventaSaldo.toFixed(2)}. Si registras un pago, el estado se calculará automáticamente.
+            El estado del pago se recalcula automáticamente con los importes guardados.
           </div>
         </div>
       )}
 
-      {editingVentaId === null && (
-        <>
+      <>
           <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
             <button
               type="button"
@@ -6297,7 +6415,6 @@ export default function App() {
             </div>
           )}
         </>
-      )}
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", border: "1px solid #dbe6ef" }}>
         <div style={{ padding: 9, background: "#eff6ff" }}>
@@ -6322,7 +6439,7 @@ export default function App() {
           <div style={{ fontWeight: 900, color: "#16385d" }}>Resumen de productos</div>
           <div style={{ fontSize: 12, color: "#6b7f93" }}>{ventaCarritoDetalle.length} producto(s) diferente(s)</div>
         </div>
-        {ventaCarritoDetalle.length > 0 && editingVentaId === null && (
+        {ventaCarritoDetalle.length > 0 && (
           <button
             type="button"
             onClick={() => setVentaCarrito([])}
@@ -6375,6 +6492,9 @@ export default function App() {
         <div style={{ display: "grid", gap: 7 }}>
           {ventaCarritoDetalle.map(({ producto, cantidad }) => {
             const esMica = producto.categoria === "micas";
+            const detalleTinte = producto.tipo_mica === "tinte" && ventaTinteGrado
+              ? ventaTinteGrado.replace("_", " ")
+              : null;
             return (
               <div
                 key={producto.producto_id}
@@ -6402,34 +6522,37 @@ export default function App() {
                 <div style={{ minWidth: 0 }}>
                   <strong style={{ display: "block", color: "#173b61", lineHeight: 1.2 }}>{producto.nombre}</strong>
                   <span style={{ display: "block", marginTop: 2, fontSize: 11, color: "#6b7f93" }}>{producto.sku}</span>
+                  {detalleTinte && (
+                    <span style={{ display: "inline-block", marginTop: 4, padding: "3px 7px", border: "1px solid #d8b98f", background: "#fff8ed", color: "#784718", fontSize: 10, fontWeight: 900, textTransform: "capitalize" }}>
+                      {detalleTinte}
+                    </span>
+                  )}
                 </div>
                 <input
                   type="number"
                   min={1}
-                  max={producto.controla_stock ? producto.stock : 99}
+                  max={producto.controla_stock
+                    ? producto.stock + Number(ventaCantidadOriginalPorProducto.get(producto.producto_id) || 0)
+                    : 99}
                   value={cantidad}
-                  disabled={editingVentaId !== null || (esMica && ventaArmazonesSeleccionados.length > 0)}
+                  disabled={esMica && ventaArmazonesSeleccionados.length > 0}
                   onChange={(e) => actualizarCantidadCarrito(producto, Number(e.target.value))}
                   aria-label={`Cantidad de ${producto.nombre}`}
                   title={esMica && ventaArmazonesSeleccionados.length > 0 ? "La cantidad se sincroniza con los armazones." : undefined}
-                  style={{ width: "100%", padding: 7, border: "1px solid #b9cce0", background: editingVentaId !== null || (esMica && ventaArmazonesSeleccionados.length > 0) ? "#eef2f6" : "#fff" }}
+                  style={{ width: "100%", padding: 7, border: "1px solid #b9cce0", background: esMica && ventaArmazonesSeleccionados.length > 0 ? "#eef2f6" : "#fff" }}
                 />
                 <strong style={{ textAlign: "right", color: "#174ea6" }}>
                   ${(Number(producto.precio || 0) * cantidad).toFixed(2)}
                 </strong>
-                {editingVentaId === null ? (
-                  <button
-                    type="button"
-                    onClick={() => quitarProductoCarrito(producto.producto_id)}
-                    aria-label={`Quitar ${producto.nombre}`}
-                    title="Quitar"
-                    style={{ width: 30, height: 30, border: "1px solid #fecaca", background: "#fff5f5", color: "#b91c1c", cursor: "pointer", fontWeight: 900 }}
-                  >
-                    ×
-                  </button>
-                ) : (
-                  <span aria-hidden="true" />
-                )}
+                <button
+                  type="button"
+                  onClick={() => quitarProductoCarrito(producto.producto_id)}
+                  aria-label={`Quitar ${producto.nombre}`}
+                  title="Quitar"
+                  style={{ width: 30, height: 30, border: "1px solid #fecaca", background: "#fff5f5", color: "#b91c1c", cursor: "pointer", fontWeight: 900 }}
+                >
+                  ×
+                </button>
               </div>
             );
           })}
@@ -6679,8 +6802,16 @@ export default function App() {
             {savingVenta ? "Guardando cambios..." : "Guardar cambios de la venta"}
           </button>
           <span style={{ textAlign: "center", color: "#718397", fontSize: 10 }}>
-            Actualiza cliente, descuento, notas, estados y pagos adicionales sin volver a descontar inventario.
+            Cada guardado pide confirmación y conserva abierta esta venta para continuar editando.
           </span>
+          <button
+            type="button"
+            onClick={completarEdicionVenta}
+            disabled={savingVenta}
+            style={{ ...actionBtnStyle, width: "100%", padding: 11, borderColor: "#8fb1d5", color: "#174ea6" }}
+          >
+            Completar edición
+          </button>
           {error && (
             <span style={{ padding: 9, border: "1px solid #fecaca", background: "#fef2f2", color: "#991b1b", fontSize: 11 }}>
               {error}
@@ -6695,39 +6826,10 @@ export default function App() {
     const precioTratamientoAzul = Number(ventaTratamientosAntiblue[0]?.precio || 0);
     const tratamientoEsSinOTinte = ventaTratamientoSeleccionado?.tipo_mica === "sin_tratamiento"
       || ventaTratamientoSeleccionado?.tipo_mica === "tinte";
-    const resumenPaso = (
-      etiqueta: string,
-      producto: InventarioProducto | undefined,
-      paso: number,
-      detalle?: string,
-    ) => (
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, padding: 10, background: "#f4f8fc" }}>
-        <div style={{ minWidth: 0 }}>
-          <span style={{ display: "block", color: "#6b7f93", fontSize: 11, fontWeight: 900 }}>{etiqueta}</span>
-          <strong style={{ display: "block", marginTop: 2, color: "#173b61" }}>
-            {producto?.nombre || "Pendiente"}
-          </strong>
-          {producto && (
-            <span style={{ display: "block", marginTop: 2, color: "#0e5fa8", fontSize: 12 }}>
-              {Number(producto.precio || 0) === 0 ? "+$0" : `+$${Number(producto.precio).toFixed(2)}`}
-              {detalle ? ` · ${detalle}` : ""}
-            </span>
-          )}
-        </div>
-        <button
-          type="button"
-          onClick={() => setVentaLentesPaso(paso)}
-          style={{ ...actionBtnStyle, padding: "7px 10px", flex: "0 0 auto" }}
-        >
-          Editar
-        </button>
-      </div>
-    );
 
     return (
       <div style={{ display: "grid", gap: 8 }}>
-        <section style={{ border: ventaLentesPaso === 1 ? "2px solid #1677d2" : "1px solid #cbd8e4", background: "#fff" }}>
-          {ventaLentesPaso === 1 ? (
+        <section style={{ border: "1px solid #cbd8e4", background: "#fff" }}>
             <div style={{ padding: 11 }}>
               <div style={{ marginBottom: 3, fontWeight: 900, color: "#173b61" }}>1. Selecciona uno o varios armazones</div>
               <div style={{ marginBottom: 8, color: "#718397", fontSize: 11 }}>
@@ -6742,33 +6844,17 @@ export default function App() {
                 )}
               </div>
               {ventaArmazonesSeleccionados.length > 0 && (
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, marginTop: 10, paddingTop: 10, borderTop: "1px solid #dbe6ef" }}>
+                <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid #dbe6ef" }}>
                   <strong style={{ color: "#174ea6" }}>
                     {ventaArmazonesSeleccionados.length} modelo(s) seleccionado(s)
                   </strong>
-                  <button
-                    type="button"
-                    onClick={() => setVentaLentesPaso(2)}
-                    style={{ padding: "9px 14px", border: "1px solid #1d4ed8", background: "#2563eb", color: "#fff", fontWeight: 900, cursor: "pointer" }}
-                  >
-                    Continuar con micas →
-                  </button>
                 </div>
               )}
             </div>
-          ) : (
-            resumenPaso(
-              "PASO 1 · ARMAZONES",
-              ventaArmazonSeleccionado,
-              1,
-              `${ventaArmazonesSeleccionados.length} modelo(s)`,
-            )
-          )}
         </section>
 
         {ventaArmazonSeleccionado && (
-          <section style={{ border: ventaLentesPaso === 2 ? "2px solid #1677d2" : "1px solid #cbd8e4", background: "#fff" }}>
-            {ventaLentesPaso === 2 ? (
+          <section style={{ border: "1px solid #cbd8e4", background: "#fff" }}>
               <div style={{ padding: 11 }}>
                 <div style={{ marginBottom: 8, fontWeight: 900, color: "#173b61" }}>2. Selecciona el diseño de la mica</div>
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(165px, 1fr))", gap: 7 }}>
@@ -6780,15 +6866,11 @@ export default function App() {
                   )}
                 </div>
               </div>
-            ) : (
-              resumenPaso("PASO 2 · DISEÑO", ventaDisenoSeleccionado, 2)
-            )}
           </section>
         )}
 
         {ventaDisenoSeleccionado && (
-          <section style={{ border: ventaLentesPaso === 3 ? "2px solid #1677d2" : "1px solid #cbd8e4", background: "#fff" }}>
-            {ventaLentesPaso === 3 ? (
+          <section style={{ border: "1px solid #cbd8e4", background: "#fff" }}>
               <div style={{ padding: 11 }}>
                 <div style={{ marginBottom: 3, fontWeight: 900, color: "#173b61" }}>3. Selecciona un tratamiento</div>
                 <div style={{ marginBottom: 9, color: "#718397", fontSize: 11 }}>Solo puedes seleccionar una opción.</div>
@@ -6922,7 +7004,6 @@ export default function App() {
                                   type="button"
                                   onClick={() => {
                                     setVentaTinteGrado(grado);
-                                    setVentaLentesPaso(0);
                                   }}
                                   style={{
                                     padding: "8px 13px",
@@ -6945,30 +7026,6 @@ export default function App() {
                   </div>
                 )}
               </div>
-            ) : (
-              <div>
-                {resumenPaso(
-                  ventaTinteSeleccionado ? "PASO 3 · TINTE" : "PASO 3 · TRATAMIENTO",
-                  ventaTratamientoSeleccionado,
-                  3,
-                  ventaTinteGrado ? ventaTinteGrado.replace("_", " ") : undefined,
-                )}
-                {ventaTratamientoSeleccionado?.tipo_mica === "sin_tratamiento" && (
-                  <div style={{ padding: "0 10px 10px", background: "#f4f8fc" }}>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setVentaAgregarTinte(true);
-                        setVentaLentesPaso(3);
-                      }}
-                      style={{ padding: "7px 10px", border: "1px solid #8a5a24", background: "#fff8ed", color: "#784718", fontWeight: 900, cursor: "pointer" }}
-                    >
-                      + Agregar tinte
-                    </button>
-                  </div>
-                )}
-              </div>
-            )}
           </section>
         )}
       </div>
@@ -7187,7 +7244,7 @@ export default function App() {
         <div style={{ fontWeight: 800, color: "#526b7b" }}>Sucursal</div>
         <select
           value={sucursalActivaId}
-          disabled={me?.rol !== "admin"}
+          disabled={!isAdmin && !isContador}
           onChange={(e) => setSucursalActivaId(Number(e.target.value))}
           style={{
             padding: 10,
@@ -7211,9 +7268,11 @@ export default function App() {
 
 
       <div className="olm-main-tabs" style={{ display: "flex", gap: 6, marginBottom: 22 }}>
-        <TabButton variant="pacientes" active={tab === "pacientes"} onClick={() => setTab("pacientes")}>
-          Pacientes
-        </TabButton>
+        {!isContador && (
+          <TabButton variant="pacientes" active={tab === "pacientes"} onClick={() => setTab("pacientes")}>
+            Pacientes
+          </TabButton>
+        )}
         {canViewHistoriaTab && (
           <TabButton
             variant="historia_clinica"
@@ -7223,10 +7282,12 @@ export default function App() {
             Historia clínica
           </TabButton>
         )}
-        <TabButton variant="consultas" active={tab === "consultas"} onClick={() => setTab("consultas")}>
-          Consultas
-        </TabButton>
-        {canViewVentasTab && (
+        {!isContador && (
+          <TabButton variant="consultas" active={tab === "consultas"} onClick={() => setTab("consultas")}>
+            Consultas
+          </TabButton>
+        )}
+        {canViewResumenVentas && (
           <TabButton variant="ventas" active={tab === "ventas"} onClick={() => setTab("ventas")}>
             Ventas
           </TabButton>
@@ -7240,12 +7301,19 @@ export default function App() {
             Resumen de ventas
           </TabButton>
         )}
-        <TabButton variant="estadisticas" active={tab === "estadisticas"} onClick={() => setTab("estadisticas")}>
-          Estadísticas
-        </TabButton>
-        {(isAdmin || isDoctor || isRecep) && (
+        {!isContador && (
+          <TabButton variant="estadisticas" active={tab === "estadisticas"} onClick={() => setTab("estadisticas")}>
+            Estadísticas
+          </TabButton>
+        )}
+        {(isAdmin || isDoctor || isRecep || isContador) && (
           <TabButton variant="inventario" active={tab === "inventario"} onClick={() => setTab("inventario")}>
             Inventario
+          </TabButton>
+        )}
+        {(isAdmin || isContador) && (
+          <TabButton variant="estadisticas" active={tab === "finanzas"} onClick={() => setTab("finanzas")}>
+            Finanzas
           </TabButton>
         )}
       </div>
@@ -7442,7 +7510,7 @@ export default function App() {
       )}
 
       {/* ========================= PACIENTES ========================= */}
-      {tab === "pacientes" && (
+      {!isContador && tab === "pacientes" && (
         pacientePerfil ? (
           <div style={{ display: "grid", gap: 16, width: "100%" }}>
             <div style={{ ...softCard, padding: 18 }}>
@@ -8183,7 +8251,7 @@ export default function App() {
 
       {/* ========================= CONSULTAS ========================= */}
       {
-        tab === "consultas" && (
+        !isContador && tab === "consultas" && (
           <div style={{ display: "flex", flexWrap: "wrap", gap: 18, alignItems: "flex-start", width: "100%" }}>
             <form onSubmit={onSubmitConsulta} style={{ ...softCard, padding: 18, background: "linear-gradient(180deg, #fffdf9 0%, #fff7ee 100%)", flex: "1 1 700px", minWidth: 520 }}>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginBottom: 4, flexWrap: "wrap" }}>
@@ -8770,7 +8838,7 @@ export default function App() {
                 <div style={{ display: "grid", gap: 12 }}>
                   {editingVentaId !== null && (
                     <div style={{ padding: 10, border: "1px solid #bfdbfe", background: "#eff6ff", color: "#1e40af", fontSize: 13, fontWeight: 700 }}>
-                      Estás editando la información de la venta. El inventario no se descuenta nuevamente.
+                      Estás editando toda la venta. El inventario se ajustará únicamente por la diferencia de productos y cantidades.
                     </div>
                   )}
 
@@ -8821,11 +8889,7 @@ export default function App() {
                         </div>
                       </div>
 
-                      {editingVentaId !== null ? (
-                        <div style={{ padding: 12, border: "1px dashed #9db6cf", color: "#526b7b", background: "#f8fafc" }}>
-                          Conservaremos los productos y el movimiento de inventario original de esta venta.
-                        </div>
-                      ) : loadingInventario ? (
+                      {loadingInventario ? (
                         <div style={{ padding: 16, color: "#526b7b" }}>Cargando catálogo...</div>
                       ) : inventarioError ? (
                         <div style={{ padding: 12, border: "1px solid #fecaca", background: "#fef2f2", color: "#991b1b" }}>
@@ -8838,37 +8902,22 @@ export default function App() {
                           )}
 
                           {ventaCategoria === "micas" && (
-                            <div>
-                              <div style={{ marginBottom: 8, fontWeight: 900, color: "#31475d" }}>1. Par de micas</div>
-                              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(230px, 1fr))", gap: 8 }}>
-                                {ventaMicasBase.map((producto) =>
-                                  renderVentaProductoButton(producto, () => {
-                                    const yaSeleccionado = ventaCarritoIds.has(producto.producto_id);
-                                    agregarProductoCarrito(producto, "reemplazar_subcategoria");
-                                    if (!yaSeleccionado) prepararMicasConDefaults();
-                                  }),
-                                )}
-                              </div>
-                            </div>
-                          )}
-
-                          {ventaCategoria === "micas" && (
                             <>
                               <div>
                                 <div style={{ marginBottom: 8, fontWeight: 900, color: "#31475d" }}>
-                                  2. Diseño de la mica
+                                  1. Diseño de la mica
                                 </div>
                                 <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 8 }}>
                                   {ventaMicasDisenos.map((producto) =>
                                     renderVentaProductoButton(
                                       producto,
-                                      () => agregarProductoCarrito(producto, "reemplazar_subcategoria"),
+                                      () => seleccionarDisenoFlujoOptico(producto),
                                     ),
                                   )}
                                 </div>
                               </div>
                               <div>
-                                <div style={{ marginBottom: 8, fontWeight: 900, color: "#31475d" }}>3. Tratamiento, antiblueray o tinte</div>
+                                <div style={{ marginBottom: 8, fontWeight: 900, color: "#31475d" }}>2. Tratamiento, antiblueray o tinte</div>
                                 <div style={{ marginBottom: 8, fontSize: 12, color: "#6b7f93" }}>
                                   Antiblueray está disponible en verde o azul. Los tintes incluyen 10 colores.
                                 </div>
@@ -9052,29 +9101,31 @@ export default function App() {
               </button>
             )}
 
-            <button
-              type="button"
-              onClick={cancelEditVenta}
-              disabled={savingVenta}
-              style={{
-                width: "100%",
-                padding: 12,
-                borderRadius: 12,
-                border: "1px solid #b9c9d8",
-                background: "#f8fafc",
-                color: "#40566c",
-                fontWeight: 800,
-                cursor: savingVenta ? "not-allowed" : "pointer",
-                marginTop: 8,
-              }}
-            >
-              Resetear venta
-            </button>
+            {editingVentaId === null && (
+              <button
+                type="button"
+                onClick={cancelEditVenta}
+                disabled={savingVenta}
+                style={{
+                  width: "100%",
+                  padding: 12,
+                  borderRadius: 12,
+                  border: "1px solid #b9c9d8",
+                  background: "#f8fafc",
+                  color: "#40566c",
+                  fontWeight: 800,
+                  cursor: savingVenta ? "not-allowed" : "pointer",
+                  marginTop: 8,
+                }}
+              >
+                Resetear venta
+              </button>
+            )}
 
             {editingVentaId !== null && (
               <button
                 type="button"
-                onClick={cancelEditVenta}
+                onClick={completarEdicionVenta}
                 style={{
                   width: "100%",
                   padding: 12,
@@ -9086,177 +9137,19 @@ export default function App() {
                   marginTop: 8,
                 }}
               >
-                Cancelar edición
+                Completar edición
               </button>
             )}
           </form>
 
           <div style={{ display: "grid", gap: 16, alignSelf: "start", minWidth: 0 }}>
-            <div style={{ ...softCard, overflowX: "auto" }}>
-            <div
-              style={{
-                padding: 14,
-                fontWeight: 700,
-                display: "flex",
-                justifyContent: "space-between",
-                alignItems: "center",
-                gap: 10,
-              }}
-            >
-              <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                <span>Ventas</span>
-                <span style={{ padding: "5px 10px", borderRadius: 999, border: "1px solid #d7c4b0", background: "#fff", fontSize: 12, fontWeight: 700, color: "#5a4633" }}>
-                  Filtro: {ventaFiltroLabel}
-                </span>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setVentaFiltroModo("hoy");
-                    setVentaFechaDesde("");
-                    setVentaFechaHasta("");
-                    setVentaMes("");
-                    setVentaAnio(String(new Date().getFullYear()));
-                    loadVentas({ modo: "hoy" });
-                  }}
-                  style={{ ...actionBtnStyle, padding: "6px 10px" }}
-                >
-                  Quitar filtro
-                </button>
-                <button type="button" onClick={() => aplicarFiltroRapidoVenta("ayer")} style={{ ...actionBtnStyle, padding: "6px 10px" }}>Ayer</button>
-                <button type="button" onClick={() => aplicarFiltroRapidoVenta("ultimos7")} style={{ ...actionBtnStyle, padding: "6px 10px" }}>Últimos 7 días</button>
-                <button type="button" onClick={() => aplicarFiltroRapidoVenta("semana_pasada")} style={{ ...actionBtnStyle, padding: "6px 10px" }}>Semana pasada</button>
-                <button type="button" onClick={() => aplicarFiltroRapidoVenta("mes_pasado")} style={{ ...actionBtnStyle, padding: "6px 10px" }}>Mes pasado</button>
-              </div>
-              <button
-                type="button"
-                onClick={() => setVentaFiltroOpen(true)}
-                style={{
-                  padding: "10px 14px",
-                  borderRadius: 12,
-                  border: "1px solid #5f4a32",
-                  background: "linear-gradient(90deg, #5f4a32 0%, #755639 100%)",
-                  color: "#fff",
-                  fontWeight: 800,
-                  cursor: "pointer",
-                  letterSpacing: 0.2,
-                }}
-              >
-                BUSCAR VENTA
-              </button>
-            </div>
-
-            <div style={{ padding: 14, paddingTop: 0 }}>
-              <input
-                value={qVenta}
-                onChange={(e) => setQVenta(e.target.value)}
-                placeholder="Buscar por ID, fecha, paciente, compra o monto..."
-                style={{ width: "100%", padding: 10, borderRadius: 10, border: "1px solid #ddd" }}
-              />
-            </div>
-
-            <table style={{ width: "100%", borderCollapse: "collapse" }}>
-              <thead>
-                <tr style={{ background: "#fafafa" }}>
-                  <th align="left" style={{ padding: 10 }}>ID</th>
-                  <th align="left" style={{ padding: 10 }}>Fecha</th>
-                  <th align="left" style={{ padding: 10 }}>Paciente</th>
-                  <th align="left" style={{ padding: 10 }}>Estado</th>
-                  <th align="left" style={{ padding: 10 }}>Compra</th>
-                  <th align="left" style={{ padding: 10 }}>Monto</th>
-                  <th align="left" style={{ padding: 10 }}>Método</th>
-                  <th align="left" style={{ padding: 10 }}>Saldo por pagar</th>
-                  <th align="left" style={{ padding: 10 }}>Acciones</th>
-                </tr>
-              </thead>
-              <tbody>
-                {ventasFiltradas.map((v) => (
-                  <tr key={v.venta_id} style={{ borderTop: "1px solid #eee" }}>
-                    <td style={{ padding: 10 }}>{v.venta_id}</td>
-                    <td style={{ padding: 10 }}>{formatDateTimePretty(v.fecha_hora)}</td>
-                    <td style={{ padding: 10 }}>{v.paciente_nombre}</td>
-                    <td style={{ padding: 10 }}>
-                      <span
-                        style={{
-                          display: "inline-flex",
-                          alignItems: "center",
-                          padding: "5px 10px",
-                          borderRadius: 999,
-                          fontSize: 12,
-                          fontWeight: 800,
-                          ...estadoPacienteBadgeStyle(v.estado_paciente),
-                        }}
-                      >
-                        {formatEstadoPacienteLabel(v.estado_paciente)}
-                      </span>
-                    </td>
-                    <td style={{ padding: 10 }}>
-                      <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-                        {(v.compra ?? "")
-                          .split("|")
-                          .map((x) => x.trim())
-                          .filter(Boolean)
-                          .map((item) => (
-                            <span key={`${v.venta_id}-${item}`} style={{ padding: "4px 8px", borderRadius: 999, border: "1px solid #d9c7b3", background: "#fff", fontSize: 12, fontWeight: 700, color: "#5a4633" }}>
-                              {formatVentaCompraLabel(item)}
-                            </span>
-                          ))}
-                      </div>
-                    </td>
-                    <td style={{ padding: 10 }}>${Number(v.monto_total || 0).toFixed(2)}</td>
-                    <td style={{ padding: 10 }}>
-                      <div>{formatMetodoPagoLabel(v.metodo_pago)}</div>
-                      <div style={{ marginTop: 3, color: "#718397", fontSize: 11 }}>
-                        {formatVentaEstadoPagoLabel(v.estado_pago)}
-                      </div>
-                    </td>
-                    <td style={{ padding: 10 }}>
-                      ${Number(v.saldo_pendiente || 0).toFixed(2)}
-                    </td>
-                    <td style={{ padding: 10 }}>
-                      <button
-                        type="button"
-                        onClick={() => openVentaDetalle(v)}
-                        style={{ padding: "6px 10px", borderRadius: 10, border: "1px solid #ddd", background: "#fff", fontWeight: 700, cursor: "pointer", marginRight: 8 }}
-                      >
-                        Ver
-                      </button>
-                      {canEditVenta && (
-                        <button
-                          type="button"
-                          onClick={() => startEditVenta(v)}
-                          style={{ padding: "6px 10px", borderRadius: 10, border: "1px solid #ddd", background: "#fff", fontWeight: 700, cursor: "pointer", marginRight: 8 }}
-                        >
-                          Editar
-                        </button>
-                      )}
-                      {canDeleteVenta ? (
-                        <button
-                          type="button"
-                          onClick={() => askDeleteVenta(v.venta_id)}
-                          style={{ padding: "6px 10px", borderRadius: 10, border: "1px solid #ddd", background: "#fff", fontWeight: 700, cursor: "pointer" }}
-                        >
-                          Eliminar
-                        </button>
-                      ) : null}
-                    </td>
-                  </tr>
-                ))}
-                {ventasFiltradas.length === 0 && (
-                  <tr>
-                    <td style={{ padding: 10 }} colSpan={9}>Sin ventas</td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-            </div>
-
             {isAdmin && renderVentaResumenProductos()}
           </div>
         </div>
       )}
 
       {/* ========================= RESUMEN DE VENTAS ========================= */}
-      {canViewVentasTab && tab === "resumen_ventas" && (
+      {canViewResumenVentas && tab === "resumen_ventas" && (
         <div style={{ display: "grid", gap: 16 }}>
           <section style={{ ...softCard, padding: 18, background: "#f8fbff", borderColor: "#c9dced" }}>
             <div style={{ display: "flex", justifyContent: "space-between", gap: 14, alignItems: "center", flexWrap: "wrap" }}>
@@ -9495,24 +9388,24 @@ export default function App() {
                         <td style={{ padding: 9, fontWeight: 900, color: "#173b61" }}>#{venta.venta_id}</td>
                         <td style={{ padding: 9, color: "#526b7b", fontSize: 12 }}>{formatDateTimePretty(venta.fecha_hora)}</td>
                         <td style={{ padding: 9 }}>
-                          <button
-                            type="button"
-                            onClick={() => openPacientePerfilDesdeVenta(venta)}
-                            title="Abrir información completa del paciente"
-                            style={{
-                              padding: 0,
-                              border: 0,
-                              background: "transparent",
-                              color: "#0e5fa8",
-                              fontWeight: 850,
-                              textAlign: "left",
-                              cursor: "pointer",
-                              textDecoration: "underline",
-                              textUnderlineOffset: 3,
-                            }}
-                          >
-                            {venta.paciente_nombre}
-                          </button>
+                          {isContador ? <strong style={{ color: "#40566c" }}>{venta.paciente_nombre}</strong> : <button
+                              type="button"
+                              onClick={() => openPacientePerfilDesdeVenta(venta)}
+                              title="Abrir información completa del paciente"
+                              style={{
+                                padding: 0,
+                                border: 0,
+                                background: "transparent",
+                                color: "#0e5fa8",
+                                fontWeight: 850,
+                                textAlign: "left",
+                                cursor: "pointer",
+                                textDecoration: "underline",
+                                textUnderlineOffset: 3,
+                              }}
+                            >
+                              {venta.paciente_nombre}
+                            </button>}
                         </td>
                         <td style={{ padding: 9, textAlign: "right", fontWeight: 800 }}>${Number(venta.monto_total || 0).toFixed(2)}</td>
                         <td style={{ padding: 9, textAlign: "right", color: "#174ea6", fontWeight: 800 }}>${pagado.toFixed(2)}</td>
@@ -9605,7 +9498,7 @@ export default function App() {
       )}
 
       {/* ========================= INVENTARIO ========================= */}
-      {(isAdmin || isDoctor || isRecep) && tab === "inventario" && (
+      {(isAdmin || isDoctor || isRecep || isContador) && tab === "inventario" && (
         <div style={{ display: "grid", gap: 16 }}>
           <div style={{ ...softCard, padding: 18, background: "#f8fbff", borderColor: "#cfdef0" }}>
             <div style={{ display: "flex", justifyContent: "space-between", gap: 14, alignItems: "center", flexWrap: "wrap" }}>
@@ -9652,7 +9545,39 @@ export default function App() {
               >
                 Existencias
               </button>
-              {isAdmin && (
+              <button
+                type="button"
+                onClick={() => setInventarioVista("analisis")}
+                aria-pressed={inventarioVista === "analisis"}
+                style={{
+                  padding: "9px 14px",
+                  border: inventarioVista === "analisis" ? "1px solid #6d4b9c" : "1px solid #b9cce0",
+                  background: inventarioVista === "analisis" ? "#6d4b9c" : "#fff",
+                  color: inventarioVista === "analisis" ? "#fff" : "#40566c",
+                  fontWeight: 900,
+                  cursor: "pointer",
+                }}
+              >
+                Análisis de inventario
+              </button>
+              {(isAdmin || isContador) && (
+                <button
+                  type="button"
+                  onClick={() => setInventarioVista("movimientos")}
+                  aria-pressed={inventarioVista === "movimientos"}
+                  style={{
+                    padding: "9px 14px",
+                    border: inventarioVista === "movimientos" ? "1px solid #9a4c0e" : "1px solid #b9cce0",
+                    background: inventarioVista === "movimientos" ? "#9a4c0e" : "#fff",
+                    color: inventarioVista === "movimientos" ? "#fff" : "#40566c",
+                    fontWeight: 900,
+                    cursor: "pointer",
+                  }}
+                >
+                  Movimientos y compras
+                </button>
+              )}
+              {(isAdmin || isContador) && (
                 <button
                   type="button"
                   onClick={() => setInventarioVista("costos")}
@@ -9821,9 +9746,10 @@ export default function App() {
                 </thead>
                 <tbody>
                   {grupo.productos.map((producto) => {
+                    const stockDraftRaw = inventarioStockDraft[producto.producto_id] ?? producto.stock;
                     const stockDraft = Math.max(
                       0,
-                      Math.trunc(Number(inventarioStockDraft[producto.producto_id] ?? producto.stock)),
+                      Math.trunc(Number(stockDraftRaw || 0)),
                     );
                     const stockBajo = producto.controla_stock && producto.stock <= producto.stock_minimo;
                     const guardando = savingInventarioId === producto.producto_id;
@@ -9908,8 +9834,22 @@ export default function App() {
                               <input
                                 type="number"
                                 min={0}
-                                value={stockDraft}
-                                onChange={(e) => setInventarioStockDraft((prev) => ({ ...prev, [producto.producto_id]: Math.max(0, Number(e.target.value || 0)) }))}
+                                step={1}
+                                value={stockDraftRaw}
+                                onFocus={(e) => e.currentTarget.select()}
+                                onBlur={() => {
+                                  if (stockDraftRaw === "") {
+                                    setInventarioStockDraft((prev) => ({ ...prev, [producto.producto_id]: producto.stock }));
+                                  }
+                                }}
+                                onChange={(e) => {
+                                  const valor = e.target.value;
+                                  if (valor === "" || /^\d+$/.test(valor)) {
+                                    setInventarioStockDraft((prev) => ({ ...prev, [producto.producto_id]: valor }));
+                                  }
+                                }}
+                                placeholder="Stock total"
+                                aria-label={`Nuevo stock total de ${producto.nombre}`}
                                 style={{ width: "100%", padding: 7, border: "1px solid #b9c9d8", textAlign: "center", fontWeight: 900 }}
                               />
                               <button
@@ -9954,7 +9894,256 @@ export default function App() {
             </>
           )}
 
-          {isAdmin && inventarioVista === "costos" && (
+          {inventarioVista === "analisis" && (
+            <div style={{ display: "grid", gap: 14 }}>
+              <section style={{ ...softCard, padding: 16, borderColor: "#d9c9ea", background: "#fcfaff" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "start", flexWrap: "wrap" }}>
+                  <div>
+                    <h3 style={{ margin: 0, color: "#46325f" }}>Análisis de inventario</h3>
+                    <div style={{ marginTop: 4, color: "#718397", fontSize: 12 }}>
+                      Sucursal #{sucursalActivaId}. Los resultados respetan la búsqueda y la categoría seleccionadas arriba.
+                    </div>
+                  </div>
+                  <span style={{ padding: "6px 10px", background: "#ede9fe", color: "#5b21b6", fontSize: 11, fontWeight: 900 }}>
+                    {inventarioControladoFiltrado.length} productos con stock
+                  </span>
+                </div>
+
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 9, marginTop: 14 }}>
+                  {[
+                    { label: "Unidades disponibles", value: inventarioAnalisisTotalUnidades, color: "#174ea6", bg: "#eff6ff" },
+                    { label: "Stock saludable", value: inventarioAnalisisSaludables.length, color: "#166534", bg: "#f0fdf4" },
+                    { label: "Stock bajo", value: inventarioAnalisisBajos.length, color: "#9a4c0e", bg: "#fff7ed" },
+                    { label: "Agotados", value: inventarioAnalisisAgotados.length, color: "#991b1b", bg: "#fef2f2" },
+                  ].map((item) => (
+                    <div key={item.label} style={{ padding: 12, border: "1px solid #dbe6ef", background: item.bg }}>
+                      <div style={{ color: "#60758a", fontSize: 10, fontWeight: 900, textTransform: "uppercase" }}>{item.label}</div>
+                      <div style={{ marginTop: 3, color: item.color, fontSize: 26, fontWeight: 950 }}>{item.value}</div>
+                    </div>
+                  ))}
+                  {(isAdmin || isContador) && (
+                    <div style={{ padding: 12, border: "1px solid #d8c9ea", background: "#faf7ff" }}>
+                      <div style={{ color: "#6d4b7d", fontSize: 10, fontWeight: 900, textTransform: "uppercase" }}>Valor actual</div>
+                      <div style={{ marginTop: 3, color: "#5b2166", fontSize: 22, fontWeight: 950 }}>${inventarioAnalisisValor.toFixed(2)}</div>
+                    </div>
+                  )}
+                </div>
+              </section>
+
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(340px, 1fr))", gap: 14 }}>
+                <section style={{ ...softCard, padding: 15 }}>
+                  <h3 style={{ margin: 0, color: "#173b61", fontSize: 16 }}>Estado de existencias</h3>
+                  <div style={{ marginTop: 4, color: "#718397", fontSize: 11 }}>Porcentaje de productos, no de unidades.</div>
+                  {inventarioControladoFiltrado.length === 0 ? (
+                    <div style={{ padding: 24, color: "#718397", textAlign: "center" }}>Sin productos para este filtro.</div>
+                  ) : (() => {
+                    const total = inventarioControladoFiltrado.length;
+                    const pctSaludable = inventarioAnalisisSaludables.length / total * 100;
+                    const pctBajo = inventarioAnalisisBajos.length / total * 100;
+                    return (
+                      <div style={{ display: "grid", gridTemplateColumns: "170px minmax(0, 1fr)", gap: 16, alignItems: "center", marginTop: 14 }}>
+                        <div
+                          aria-label="Gráfica circular del estado de existencias"
+                          style={{
+                            width: 160,
+                            height: 160,
+                            borderRadius: "50%",
+                            background: `conic-gradient(#22c55e 0 ${pctSaludable}%, #f59e0b ${pctSaludable}% ${pctSaludable + pctBajo}%, #ef4444 ${pctSaludable + pctBajo}% 100%)`,
+                            boxShadow: "inset 0 0 0 1px rgba(15,23,42,.08)",
+                          }}
+                        />
+                        <div style={{ display: "grid", gap: 9 }}>
+                          {[
+                            { label: "Saludable", count: inventarioAnalisisSaludables.length, color: "#22c55e" },
+                            { label: "Stock bajo", count: inventarioAnalisisBajos.length, color: "#f59e0b" },
+                            { label: "Agotado", count: inventarioAnalisisAgotados.length, color: "#ef4444" },
+                          ].map((item) => (
+                            <div key={item.label} style={{ display: "grid", gridTemplateColumns: "12px 1fr auto", gap: 7, alignItems: "center", borderBottom: "1px solid #edf1f5", paddingBottom: 6 }}>
+                              <span style={{ width: 10, height: 10, background: item.color }} />
+                              <span style={{ color: "#526b7b" }}>{item.label}</span>
+                              <strong>{item.count} ({Math.round(item.count / total * 100)}%)</strong>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  })()}
+                </section>
+
+                <section style={{ ...softCard, padding: 15 }}>
+                  <h3 style={{ margin: 0, color: "#173b61", fontSize: 16 }}>Unidades por categoría</h3>
+                  <div style={{ marginTop: 4, color: "#718397", fontSize: 11 }}>Cantidad física disponible en cada categoría.</div>
+                  {inventarioAnalisisPorCategoria.length === 0 ? (
+                    <div style={{ padding: 24, color: "#718397", textAlign: "center" }}>Sin existencias para mostrar.</div>
+                  ) : (
+                    <div style={{ display: "grid", gap: 10, marginTop: 14 }}>
+                      {inventarioAnalisisPorCategoria.map((item) => {
+                        const maximo = Math.max(1, ...inventarioAnalisisPorCategoria.map((categoria) => categoria.unidades));
+                        return (
+                          <div key={`analisis-categoria-${item.categoria}`} style={{ display: "grid", gridTemplateColumns: "130px minmax(100px, 1fr) 70px", gap: 8, alignItems: "center" }}>
+                            <span style={{ color: "#40566c", fontSize: 11, fontWeight: 800 }}>{formatVentaCompraLabel(item.categoria)}</span>
+                            <div style={{ height: 18, background: "#edf2f7", overflow: "hidden" }}>
+                              <div style={{ width: `${Math.max(3, item.unidades / maximo * 100)}%`, height: "100%", background: "linear-gradient(90deg, #315f89, #6d4b9c)" }} />
+                            </div>
+                            <strong style={{ textAlign: "right", color: "#173b61" }}>{item.unidades}</strong>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </section>
+              </div>
+
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(360px, 1fr))", gap: 14 }}>
+                <section style={{ ...softCard, padding: 15 }}>
+                  <h3 style={{ margin: 0, color: "#173b61", fontSize: 16 }}>Productos con más unidades</h3>
+                  <div style={{ display: "grid", gap: 9, marginTop: 13 }}>
+                    {inventarioAnalisisTopStock.length === 0 ? (
+                      <div style={{ color: "#718397" }}>Sin productos para mostrar.</div>
+                    ) : inventarioAnalisisTopStock.map((producto) => {
+                      const maximo = Math.max(1, ...inventarioAnalisisTopStock.map((item) => Number(item.stock || 0)));
+                      return (
+                        <div key={`top-stock-${producto.producto_id}`} style={{ display: "grid", gridTemplateColumns: "minmax(125px, 1fr) minmax(90px, 1fr) 48px", gap: 8, alignItems: "center" }}>
+                          <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "#40566c", fontSize: 11 }} title={producto.nombre}>{producto.nombre}</span>
+                          <div style={{ height: 14, background: "#edf2f7" }}>
+                            <div style={{ width: `${Math.max(2, Number(producto.stock || 0) / maximo * 100)}%`, height: "100%", background: "#0f766e" }} />
+                          </div>
+                          <strong style={{ textAlign: "right", color: "#0f766e" }}>{producto.stock}</strong>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </section>
+
+                <section style={{ ...softCard, padding: 15 }}>
+                  <h3 style={{ margin: 0, color: "#8a3d0a", fontSize: 16 }}>Atención de reabastecimiento</h3>
+                  <div style={{ marginTop: 4, color: "#718397", fontSize: 11 }}>Productos agotados o en su mínimo configurado.</div>
+                  {[...inventarioAnalisisAgotados, ...inventarioAnalisisBajos].length === 0 ? (
+                    <div style={{ marginTop: 14, padding: 16, background: "#f0fdf4", color: "#166534", fontWeight: 800 }}>No hay alertas para este filtro.</div>
+                  ) : (
+                    <div style={{ overflowX: "auto", marginTop: 12 }}>
+                      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
+                        <thead>
+                          <tr style={{ background: "#fff7ed", color: "#8a3d0a" }}>
+                            <th align="left" style={{ padding: 8 }}>PRODUCTO</th>
+                            <th align="right" style={{ padding: 8 }}>ACTUAL</th>
+                            <th align="right" style={{ padding: 8 }}>MÍNIMO</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {[...inventarioAnalisisAgotados, ...inventarioAnalisisBajos]
+                            .sort((a, b) => a.stock - b.stock)
+                            .map((producto) => (
+                              <tr key={`alerta-stock-${producto.producto_id}`} style={{ borderTop: "1px solid #f0e7dc" }}>
+                                <td style={{ padding: 8 }}><strong>{producto.nombre}</strong><div style={{ color: "#718397" }}>{producto.sku}</div></td>
+                                <td align="right" style={{ padding: 8, color: producto.stock <= 0 ? "#b91c1c" : "#c2410c", fontWeight: 900 }}>{producto.stock}</td>
+                                <td align="right" style={{ padding: 8 }}>{producto.stock_minimo}</td>
+                              </tr>
+                            ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </section>
+              </div>
+
+              {(isAdmin || isContador) && inventarioAnalisisPorCategoria.length > 0 && (
+                <section style={{ ...softCard, padding: 15, borderColor: "#d9c9ea" }}>
+                  <h3 style={{ margin: 0, color: "#5b2166", fontSize: 16 }}>Valor invertido por categoría</h3>
+                  <div style={{ marginTop: 4, color: "#718397", fontSize: 11 }}>Costo unitario × existencias actuales.</div>
+                  <div style={{ display: "grid", gap: 10, marginTop: 14 }}>
+                    {inventarioAnalisisPorCategoria.map((item) => {
+                      const maximo = Math.max(1, ...inventarioAnalisisPorCategoria.map((categoria) => categoria.valor));
+                      return (
+                        <div key={`valor-categoria-${item.categoria}`} style={{ display: "grid", gridTemplateColumns: "150px minmax(120px, 1fr) 120px", gap: 9, alignItems: "center" }}>
+                          <span style={{ color: "#40566c", fontSize: 11, fontWeight: 800 }}>{formatVentaCompraLabel(item.categoria)}</span>
+                          <div style={{ height: 18, background: "#f2edf7" }}>
+                            <div style={{ width: `${Math.max(2, item.valor / maximo * 100)}%`, height: "100%", background: "linear-gradient(90deg, #6d4b9c, #b45f91)" }} />
+                          </div>
+                          <strong style={{ textAlign: "right", color: "#5b2166" }}>${item.valor.toFixed(2)}</strong>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </section>
+              )}
+            </div>
+          )}
+
+          {(isAdmin || isContador) && inventarioVista === "movimientos" && (
+            <div style={{ display: "grid", gap: 12 }}>
+              {isAdmin && (
+                <section style={{ ...softCard, padding: 16, borderColor: "#f0c9a8", background: "#fffaf5" }}>
+                  <h3 style={{ margin: 0, color: "#7c3f12" }}>Registrar movimiento de inventario</h3>
+                  <div style={{ marginTop: 4, color: "#718397", fontSize: 11 }}>
+                    La fecha, hora y usuario se guardan automáticamente. En una compra, el costo promedio se actualiza sin duplicar el producto.
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(175px,1fr))", gap: 9, marginTop: 13 }}>
+                    <label style={{ display: "grid", gap: 4, fontSize: 11, fontWeight: 850 }}>PRODUCTO
+                      <select required value={inventarioMovimientoForm.producto_id} onChange={(e) => setInventarioMovimientoForm({ ...inventarioMovimientoForm, producto_id: e.target.value })} style={{ padding: 9, border: "1px solid #d3b89f", background: "#fff" }}>
+                        <option value="">Seleccionar...</option>
+                        {inventarioVisible.filter((item) => item.controla_stock).map((item) => <option key={item.producto_id} value={item.producto_id}>{item.sku} · {item.nombre} ({item.stock})</option>)}
+                      </select>
+                    </label>
+                    <label style={{ display: "grid", gap: 4, fontSize: 11, fontWeight: 850 }}>TIPO
+                      <select value={inventarioMovimientoForm.tipo} onChange={(e) => setInventarioMovimientoForm({ ...inventarioMovimientoForm, tipo: e.target.value })} style={{ padding: 9, border: "1px solid #d3b89f", background: "#fff" }}>
+                        <option value="entrada_compra">Entrada por compra</option>
+                        <option value="devolucion">Devolución recibida</option>
+                        <option value="merma">Merma o daño</option>
+                        <option value="ajuste_positivo">Ajuste positivo</option>
+                        <option value="ajuste_negativo">Ajuste negativo</option>
+                        <option value="conteo_fisico">Conteo físico (stock final)</option>
+                      </select>
+                    </label>
+                    <label style={{ display: "grid", gap: 4, fontSize: 11, fontWeight: 850 }}>{inventarioMovimientoForm.tipo === "conteo_fisico" ? "STOCK FINAL" : "CANTIDAD"}
+                      <input type="number" min={0} step={1} value={inventarioMovimientoForm.cantidad} onFocus={(e) => e.currentTarget.select()} onChange={(e) => setInventarioMovimientoForm({ ...inventarioMovimientoForm, cantidad: e.target.value })} style={{ padding: 9, border: "1px solid #d3b89f" }} />
+                    </label>
+                    {inventarioMovimientoForm.tipo === "entrada_compra" && (
+                      <label style={{ display: "grid", gap: 4, fontSize: 11, fontWeight: 850 }}>COSTO UNITARIO (MXN)
+                        <input type="number" min={0} step="0.01" value={inventarioMovimientoForm.costo_unitario} onFocus={(e) => e.currentTarget.select()} onChange={(e) => setInventarioMovimientoForm({ ...inventarioMovimientoForm, costo_unitario: e.target.value })} style={{ padding: 9, border: "1px solid #d3b89f" }} />
+                      </label>
+                    )}
+                    <label style={{ display: "grid", gap: 4, fontSize: 11, fontWeight: 850 }}>PROVEEDOR
+                      <input value={inventarioMovimientoForm.proveedor} onChange={(e) => setInventarioMovimientoForm({ ...inventarioMovimientoForm, proveedor: e.target.value })} style={{ padding: 9, border: "1px solid #d3b89f" }} />
+                    </label>
+                    <label style={{ display: "grid", gap: 4, fontSize: 11, fontWeight: 850 }}>FOLIO / FACTURA
+                      <input value={inventarioMovimientoForm.folio} onChange={(e) => setInventarioMovimientoForm({ ...inventarioMovimientoForm, folio: e.target.value })} style={{ padding: 9, border: "1px solid #d3b89f" }} />
+                    </label>
+                    <label style={{ display: "grid", gap: 4, fontSize: 11, fontWeight: 850, gridColumn: "span 2" }}>NOTAS
+                      <input value={inventarioMovimientoForm.notas} onChange={(e) => setInventarioMovimientoForm({ ...inventarioMovimientoForm, notas: e.target.value })} style={{ padding: 9, border: "1px solid #d3b89f" }} />
+                    </label>
+                    <button type="button" onClick={registrarInventarioMovimiento} disabled={savingInventarioMovimiento} style={{ padding: 10, border: 0, background: savingInventarioMovimiento ? "#d7c8bb" : "#9a4c0e", color: "#fff", fontWeight: 900, cursor: savingInventarioMovimiento ? "wait" : "pointer" }}>
+                      {savingInventarioMovimiento ? "Guardando..." : "Guardar movimiento"}
+                    </button>
+                  </div>
+                </section>
+              )}
+              <section style={{ ...softCard, overflowX: "auto", borderColor: "#efd8c4" }}>
+                <div style={{ padding: 13, display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center" }}>
+                  <div><strong style={{ color: "#7c3f12" }}>Historial auditable</strong><div style={{ color: "#718397", fontSize: 11 }}>Entradas, salidas y conteos de esta sucursal.</div></div>
+                  <button type="button" onClick={loadInventarioMovimientos} disabled={loadingInventarioMovimientos} style={{ ...actionBtnStyle, padding: "7px 10px" }}>{loadingInventarioMovimientos ? "Cargando..." : "Actualizar"}</button>
+                </div>
+                <table style={{ width: "100%", minWidth: 1080, borderCollapse: "collapse", fontSize: 11 }}>
+                  <thead><tr style={{ background: "#7c3f12", color: "#fff" }}>{["FECHA Y HORA","PRODUCTO","TIPO","CAMBIO","STOCK ANTERIOR","STOCK NUEVO","COSTO","PROVEEDOR / FOLIO","USUARIO","NOTAS"].map((label) => <th key={label} align="left" style={{ padding: 9 }}>{label}</th>)}</tr></thead>
+                  <tbody>
+                    {inventarioMovimientos.map((item) => <tr key={item.movimiento_id} style={{ borderTop: "1px solid #eadfd5" }}>
+                      <td style={{ padding: 8, whiteSpace: "nowrap" }}>{formatDateTimePretty(item.fecha_hora)}</td>
+                      <td style={{ padding: 8 }}><strong>{item.producto}</strong><div style={{ color: "#718397" }}>{item.sku}</div></td>
+                      <td style={{ padding: 8 }}>{formatStatsEtiqueta(item.tipo)}</td>
+                      <td style={{ padding: 8, color: item.cantidad < 0 ? "#b91c1c" : "#166534", fontWeight: 900 }}>{item.cantidad > 0 ? "+" : ""}{item.cantidad}</td>
+                      <td style={{ padding: 8 }}>{item.stock_anterior}</td><td style={{ padding: 8, fontWeight: 900 }}>{item.stock_nuevo}</td>
+                      <td style={{ padding: 8 }}>{item.costo_unitario == null ? "—" : `$${Number(item.costo_unitario).toFixed(2)}`}</td>
+                      <td style={{ padding: 8 }}>{item.proveedor || "—"}<div style={{ color: "#718397" }}>{item.folio || ""}</div></td>
+                      <td style={{ padding: 8 }}>{item.usuario}</td><td style={{ padding: 8 }}>{item.notas || "—"}</td>
+                    </tr>)}
+                    {!loadingInventarioMovimientos && inventarioMovimientos.length === 0 && <tr><td colSpan={10} style={{ padding: 24, textAlign: "center", color: "#718397" }}>Todavía no hay movimientos registrados.</td></tr>}
+                  </tbody>
+                </table>
+              </section>
+            </div>
+          )}
+
+          {(isAdmin || isContador) && inventarioVista === "costos" && (
             <>
               {inventarioMetricaAyuda && (
                 <div style={{ padding: 12, border: "1px solid #c4b5d9", background: "#faf7ff", color: "#46325f", lineHeight: 1.45 }}>
@@ -10018,8 +10207,9 @@ export default function App() {
                   {inventarioFiltrado.map((producto) => {
                     const costo = Math.max(0, Number(inventarioCostoDraft[producto.producto_id] ?? producto.costo_unitario ?? 0));
                     const precio = Math.max(0, Number(inventarioPrecioDraft[producto.producto_id] ?? producto.precio));
+                    const stockRaw = inventarioStockDraft[producto.producto_id] ?? producto.stock;
                     const stock = producto.controla_stock
-                      ? Math.max(0, Math.trunc(Number(inventarioStockDraft[producto.producto_id] ?? producto.stock)))
+                      ? Math.max(0, Math.trunc(Number(stockRaw || 0)))
                       : 0;
                     const ganancia = precio - costo;
                     const margen = precio > 0 ? (ganancia / precio) * 100 : 0;
@@ -10037,9 +10227,11 @@ export default function App() {
                         <td align="right" style={{ padding: "7px 6px", background: "#eff6ff" }}>
                           <input
                             type="number"
+                            disabled={isContador}
                             min={0}
                             step="0.01"
                             value={precio}
+                            onFocus={(e) => e.currentTarget.select()}
                             onChange={(e) => setInventarioPrecioDraft((prev) => ({ ...prev, [producto.producto_id]: Number(e.target.value || 0) }))}
                             aria-label={`Precio de venta de ${producto.nombre}`}
                             style={{ width: "100%", padding: "7px 6px", border: "1px solid #8cb4df", textAlign: "right", fontWeight: 850 }}
@@ -10048,9 +10240,11 @@ export default function App() {
                         <td align="right" style={{ padding: "7px 6px", background: "#effaf8" }}>
                           <input
                             type="number"
+                            disabled={isContador}
                             min={0}
                             step="0.01"
                             value={costo}
+                            onFocus={(e) => e.currentTarget.select()}
                             onChange={(e) => setInventarioCostoDraft((prev) => ({ ...prev, [producto.producto_id]: Number(e.target.value || 0) }))}
                             aria-label={`Costo unitario de ${producto.nombre}`}
                             style={{ width: "100%", padding: "7px 6px", border: "1px solid #75aaa3", textAlign: "right", fontWeight: 850 }}
@@ -10064,11 +10258,23 @@ export default function App() {
                           {producto.controla_stock ? (
                             <input
                               type="number"
+                              disabled={isContador}
                               min={0}
                               step={1}
-                              value={stock}
-                              onChange={(e) => setInventarioStockDraft((prev) => ({ ...prev, [producto.producto_id]: Math.max(0, Math.trunc(Number(e.target.value || 0))) }))}
-                              aria-label={`Stock de ${producto.nombre}`}
+                              value={stockRaw}
+                              onFocus={(e) => e.currentTarget.select()}
+                              onBlur={() => {
+                                if (stockRaw === "") {
+                                  setInventarioStockDraft((prev) => ({ ...prev, [producto.producto_id]: producto.stock }));
+                                }
+                              }}
+                              onChange={(e) => {
+                                const valor = e.target.value;
+                                if (valor === "" || /^\d+$/.test(valor)) {
+                                  setInventarioStockDraft((prev) => ({ ...prev, [producto.producto_id]: valor }));
+                                }
+                              }}
+                              aria-label={`Nuevo stock total de ${producto.nombre}`}
                               style={{ width: "100%", padding: "7px 5px", border: "1px solid #d9a45e", textAlign: "center", fontWeight: 900 }}
                             />
                           ) : "Servicio"}
@@ -10078,19 +10284,19 @@ export default function App() {
                         <td align="center" style={{ padding: "7px 6px", background: "#f9fafb" }}>
                           <button
                             type="button"
-                            disabled={guardando || sinCambios}
+                            disabled={isContador || guardando || sinCambios}
                             onClick={() => guardarProductoInventario(producto)}
                             style={{
                               width: "100%",
                               padding: "8px 7px",
                               border: "1px solid #1d4ed8",
-                              background: guardando || sinCambios ? "#e2e8f0" : "#2563eb",
-                              color: guardando || sinCambios ? "#64748b" : "#fff",
+                              background: isContador || guardando || sinCambios ? "#e2e8f0" : "#2563eb",
+                              color: isContador || guardando || sinCambios ? "#64748b" : "#fff",
                               fontWeight: 900,
                               cursor: guardando || sinCambios ? "not-allowed" : "pointer",
                             }}
                           >
-                            {guardando ? "Guardando..." : "Guardar"}
+                            {isContador ? "Solo lectura" : guardando ? "Guardando..." : "Guardar"}
                           </button>
                         </td>
                       </tr>
@@ -10104,7 +10310,147 @@ export default function App() {
         </div>
       )}
 
-      {tab === "estadisticas" && (
+      {(isAdmin || isContador) && tab === "finanzas" && (
+        <div style={{ display: "grid", gap: 14 }}>
+          <section style={{ ...softCard, padding: 16, background: "#f8fbff", borderColor: "#c7d9ec" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+              <div>
+                <h2 style={{ margin: 0, color: "#173b61" }}>Finanzas</h2>
+                <div style={{ marginTop: 4, color: "#6b7f93", fontSize: 12 }}>Ventas y pagos se integran automáticamente; no se capturan dos veces.</div>
+              </div>
+              <div style={{ display: "flex", gap: 7, flexWrap: "wrap" }}>
+                <button type="button" onClick={exportarFinanzasCsv} disabled={!finanzasData} style={{ ...actionBtnStyle, padding: "9px 12px" }}>Exportar CSV</button>
+                <button type="button" onClick={() => loadFinanzas()} disabled={loadingFinanzas} style={{ ...actionBtnStyle, padding: "9px 12px", borderColor: "#174ea6", color: "#174ea6" }}>{loadingFinanzas ? "Actualizando..." : "Actualizar"}</button>
+              </div>
+            </div>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 13 }}>
+              {(["hoy", "semana", "mes", "anio"] as const).map((periodo) => (
+                <button key={periodo} type="button" onClick={() => aplicarPeriodoFinanzas(periodo)} style={{ ...actionBtnStyle, padding: "7px 10px", textTransform: "capitalize" }}>{periodo === "anio" ? "Año" : periodo}</button>
+              ))}
+              <label style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11, fontWeight: 800 }}>DESDE <input type="date" value={finanzasDesde} onChange={(e) => setFinanzasDesde(e.target.value)} style={{ padding: 7, border: "1px solid #b9cce0" }} /></label>
+              <label style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11, fontWeight: 800 }}>HASTA <input type="date" value={finanzasHasta} onChange={(e) => setFinanzasHasta(e.target.value)} style={{ padding: 7, border: "1px solid #b9cce0" }} /></label>
+              <button type="button" onClick={() => loadFinanzas()} style={{ padding: "7px 12px", border: "1px solid #0f766e", background: "#0f766e", color: "#fff", fontWeight: 900 }}>Aplicar rango</button>
+            </div>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 13, paddingTop: 12, borderTop: "1px solid #dbe6ef" }}>
+              {([
+                ["resumen", "Resumen"], ["movimientos", "Movimientos"], ["gastos", "Gastos"], ["nomina", "Nómina"],
+                ["cobrar", "Cuentas por cobrar"], ["pagar", "Cuentas por pagar"], ["resultados", "Estado de resultados"],
+                ["flujo", "Flujo de efectivo"], ["balance", "Balance general"],
+              ] as Array<[typeof finanzasSeccion, string]>).map(([value, label]) => (
+                <button key={value} type="button" onClick={() => { setFinanzasSeccion(value); setFinanzasForm({}); }} style={{ padding: "8px 11px", border: finanzasSeccion === value ? "1px solid #174ea6" : "1px solid #cbd8e4", background: finanzasSeccion === value ? "#174ea6" : "#fff", color: finanzasSeccion === value ? "#fff" : "#40566c", fontWeight: 850, cursor: "pointer" }}>{label}</button>
+              ))}
+            </div>
+          </section>
+
+          {finanzasError && <div style={{ padding: 11, border: "1px solid #fecaca", background: "#fef2f2", color: "#991b1b", fontWeight: 750 }}>{finanzasError}</div>}
+          {loadingFinanzas && !finanzasData ? (
+            <div style={{ ...softCard, padding: 30, textAlign: "center", color: "#60758a" }}>Cargando información financiera...</div>
+          ) : finanzasData && (
+            <>
+              {finanzasSeccion === "resumen" && (
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: 10 }}>
+                  {[
+                    ["Ingresos por ventas", "ingresos_ventas", "#174ea6"], ["Descuentos", "descuentos", "#b45309"], ["Dinero cobrado", "dinero_cobrado", "#0f766e"],
+                    ["Saldos pendientes", "saldos_pendientes", "#c2410c"], ["Costo de productos", "costo_productos", "#6d4b9c"], ["Gastos", "gastos", "#b91c1c"],
+                    ["Nómina", "nomina", "#9f1239"], ["Utilidad bruta", "utilidad_bruta", "#166534"], ["Utilidad neta", "utilidad_neta", "#0f5132"], ["Valor de inventario", "valor_inventario", "#5b2166"],
+                  ].map(([label, key, color]) => (
+                    <div key={key} style={{ ...softCard, padding: 14, borderColor: "#dbe6ef" }}>
+                      <div style={{ color: "#60758a", fontSize: 10, fontWeight: 900, textTransform: "uppercase" }}>{label}</div>
+                      <div style={{ marginTop: 5, color, fontSize: 23, fontWeight: 950 }}>${Number(finanzasData.resumen[key] || 0).toFixed(2)}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {finanzasSeccion === "movimientos" && (
+                <div style={{ display: "grid", gap: 12 }}>
+                  <form onSubmit={(e) => { e.preventDefault(); crearRegistroFinanzas("movimientos", finanzasForm); }} style={{ ...softCard, padding: 14, display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))", gap: 8 }}>
+                    <input type="datetime-local" value={finanzasForm.fecha || ""} onChange={(e) => setFinanzasForm({ ...finanzasForm, fecha: e.target.value })} aria-label="Fecha del movimiento" style={{ padding: 9, border: "1px solid #cbd8e4" }} />
+                    <input required placeholder="Cuenta: caja, banco..." value={finanzasForm.cuenta || ""} onChange={(e) => setFinanzasForm({ ...finanzasForm, cuenta: e.target.value })} style={{ padding: 9, border: "1px solid #cbd8e4" }} />
+                    <select value={finanzasForm.tipo || "ingreso"} onChange={(e) => setFinanzasForm({ ...finanzasForm, tipo: e.target.value })} style={{ padding: 9, border: "1px solid #cbd8e4", background: "#fff" }}><option value="ingreso">Ingreso</option><option value="egreso">Egreso</option></select>
+                    <input required placeholder="Categoría" value={finanzasForm.categoria || ""} onChange={(e) => setFinanzasForm({ ...finanzasForm, categoria: e.target.value })} style={{ padding: 9, border: "1px solid #cbd8e4" }} />
+                    <input required placeholder="Descripción" value={finanzasForm.descripcion || ""} onChange={(e) => setFinanzasForm({ ...finanzasForm, descripcion: e.target.value })} style={{ padding: 9, border: "1px solid #cbd8e4" }} />
+                    <input required type="number" min="0.01" step="0.01" placeholder="Monto" value={finanzasForm.monto || ""} onChange={(e) => setFinanzasForm({ ...finanzasForm, monto: Number(e.target.value) })} style={{ padding: 9, border: "1px solid #cbd8e4" }} />
+                    <button disabled={savingFinanzas} style={{ padding: 10, border: 0, background: "#0f766e", color: "#fff", fontWeight: 900 }}>{savingFinanzas ? "Guardando..." : "Registrar movimiento"}</button>
+                  </form>
+                  <div style={{ ...softCard, overflowX: "auto" }}><table style={{ width: "100%", minWidth: 850, borderCollapse: "collapse", fontSize: 11 }}><thead><tr style={{ background: "#173b61", color: "#fff" }}>{["FECHA","CUENTA","TIPO","CATEGORÍA","DESCRIPCIÓN","FUENTE","MONTO"].map((h) => <th key={h} align={h === "MONTO" ? "right" : "left"} style={{ padding: 9 }}>{h}</th>)}</tr></thead><tbody>{finanzasData.movimientos.map((item, i) => <tr key={`${item.fuente}-${i}`} style={{ borderTop: "1px solid #e2e8f0" }}><td style={{ padding: 8 }}>{formatDateTimePretty(item.fecha)}</td><td style={{ padding: 8 }}>{formatMetodoPagoLabel(item.cuenta)}</td><td style={{ padding: 8, color: item.tipo === "ingreso" ? "#166534" : "#b91c1c", fontWeight: 900 }}>{item.tipo}</td><td style={{ padding: 8 }}>{item.categoria}</td><td style={{ padding: 8 }}>{item.descripcion}</td><td style={{ padding: 8 }}>{item.fuente}</td><td align="right" style={{ padding: 8, fontWeight: 900 }}>${Number(item.monto).toFixed(2)}</td></tr>)}</tbody></table></div>
+                </div>
+              )}
+
+              {finanzasSeccion === "gastos" && (
+                <div style={{ display: "grid", gap: 12 }}>
+                  <form onSubmit={(e) => { e.preventDefault(); crearRegistroFinanzas("gastos", finanzasForm); }} style={{ ...softCard, padding: 14, display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(170px,1fr))", gap: 8 }}>
+                    <input required type="date" value={finanzasForm.fecha || finanzasHasta} onChange={(e) => setFinanzasForm({ ...finanzasForm, fecha: e.target.value })} />
+                    <select required value={finanzasForm.categoria || ""} onChange={(e) => setFinanzasForm({ ...finanzasForm, categoria: e.target.value })}><option value="">Categoría...</option>{["renta","servicios","publicidad","software","reparaciones","proveedores","impuestos","otro"].map((x) => <option key={x} value={x}>{formatStatsEtiqueta(x)}</option>)}</select>
+                    <input placeholder="Proveedor" value={finanzasForm.proveedor || ""} onChange={(e) => setFinanzasForm({ ...finanzasForm, proveedor: e.target.value })} />
+                    <input required placeholder="Descripción" value={finanzasForm.descripcion || ""} onChange={(e) => setFinanzasForm({ ...finanzasForm, descripcion: e.target.value })} />
+                    <input required type="number" min="0.01" step="0.01" placeholder="Monto" value={finanzasForm.monto || ""} onChange={(e) => setFinanzasForm({ ...finanzasForm, monto: Number(e.target.value) })} />
+                    <input placeholder="Cuenta" value={finanzasForm.cuenta || ""} onChange={(e) => setFinanzasForm({ ...finanzasForm, cuenta: e.target.value })} />
+                    <select value={finanzasForm.estado || "pendiente"} onChange={(e) => setFinanzasForm({ ...finanzasForm, estado: e.target.value })}>{["pendiente","pagado","aprobado","cancelado"].map((x) => <option key={x} value={x}>{formatStatsEtiqueta(x)}</option>)}</select>
+                    <label style={{ display: "grid", gap: 3, fontSize: 10, fontWeight: 850 }}>COMPROBANTE (PDF O IMAGEN)
+                      <input type="file" accept="application/pdf,image/jpeg,image/png,image/webp" onChange={(e) => setFinanzasForm({ ...finanzasForm, comprobante_file: e.target.files?.[0] || null })} />
+                    </label>
+                    <button disabled={savingFinanzas} style={{ padding: 10, border: 0, background: "#0f766e", color: "#fff", fontWeight: 900 }}>Registrar gasto</button>
+                  </form>
+                  <div style={{ ...softCard, overflowX: "auto" }}><table style={{ width: "100%", minWidth: 900, borderCollapse: "collapse", fontSize: 11 }}><thead><tr style={{ background: "#7f1d1d", color: "#fff" }}>{["FECHA","CATEGORÍA","PROVEEDOR","DESCRIPCIÓN","ESTADO","MONTO","COMPROBANTE"].map((h) => <th key={h} align={h === "MONTO" ? "right" : "left"} style={{ padding: 9 }}>{h}</th>)}</tr></thead><tbody>{finanzasData.gastos.map((item) => <tr key={item.gasto_id} style={{ borderTop: "1px solid #e2e8f0" }}><td style={{ padding: 8 }}>{item.fecha}</td><td style={{ padding: 8 }}>{formatStatsEtiqueta(item.categoria)}</td><td style={{ padding: 8 }}>{item.proveedor || "—"}</td><td style={{ padding: 8 }}>{item.descripcion}</td><td style={{ padding: 8 }}><select value={item.estado} disabled={savingFinanzas} onChange={(e) => actualizarEstadoFinanzas("gastos", item.gasto_id, e.target.value)}>{["pendiente","pagado","aprobado","cancelado"].map((estado) => <option key={estado} value={estado}>{formatStatsEtiqueta(estado)}</option>)}</select></td><td align="right" style={{ padding: 8, fontWeight: 900 }}>${item.monto.toFixed(2)}</td><td style={{ padding: 8 }}>{item.comprobante_id ? <button type="button" onClick={() => abrirComprobanteFinanzas(item.comprobante_id)} style={{ ...actionBtnStyle, padding: "5px 8px" }}>Abrir</button> : "—"}</td></tr>)}</tbody></table></div>
+                </div>
+              )}
+
+              {finanzasSeccion === "nomina" && (
+                <div style={{ display: "grid", gap: 12 }}>
+                  <form onSubmit={(e) => { e.preventDefault(); crearRegistroFinanzas("nomina", finanzasForm); }} style={{ ...softCard, padding: 14, display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))", gap: 8 }}>
+                    <input required placeholder="Empleado" value={finanzasForm.empleado || ""} onChange={(e) => setFinanzasForm({ ...finanzasForm, empleado: e.target.value })} />
+                    <input required type="date" aria-label="Inicio del periodo" value={finanzasForm.periodo_inicio || ""} onChange={(e) => setFinanzasForm({ ...finanzasForm, periodo_inicio: e.target.value })} />
+                    <input required type="date" aria-label="Fin del periodo" value={finanzasForm.periodo_fin || ""} onChange={(e) => setFinanzasForm({ ...finanzasForm, periodo_fin: e.target.value })} />
+                    {[["salario_base","Salario"],["horas","Horas"],["comisiones","Comisiones"],["bonos","Bonos"],["deducciones","Deducciones"],["pago_neto","Pago neto"],["costo_patronal","Costo patronal"]].map(([key,label]) => <input key={key} type="number" min="0" step="0.01" placeholder={label} value={finanzasForm[key] || ""} onChange={(e) => setFinanzasForm({ ...finanzasForm, [key]: Number(e.target.value) })} />)}
+                    <input type="date" aria-label="Fecha de pago" value={finanzasForm.fecha_pago || ""} onChange={(e) => setFinanzasForm({ ...finanzasForm, fecha_pago: e.target.value })} />
+                    <select value={finanzasForm.estado || "pendiente"} onChange={(e) => setFinanzasForm({ ...finanzasForm, estado: e.target.value })}><option value="pendiente">Pendiente</option><option value="pagada">Pagada</option><option value="aprobada">Aprobada</option><option value="cancelada">Cancelada</option></select>
+                    <button disabled={savingFinanzas} style={{ padding: 10, border: 0, background: "#6d4b9c", color: "#fff", fontWeight: 900 }}>Registrar nómina</button>
+                  </form>
+                  <div style={{ ...softCard, overflowX: "auto" }}><table style={{ width: "100%", minWidth: 1050, borderCollapse: "collapse", fontSize: 11 }}><thead><tr style={{ background: "#5b2166", color: "#fff" }}>{["EMPLEADO","PERIODO","SALARIO","HORAS","COMISIONES","BONOS","DEDUCCIONES","NETO","COSTO PATRONAL","ESTADO"].map((h) => <th key={h} align="left" style={{ padding: 8 }}>{h}</th>)}</tr></thead><tbody>{finanzasData.nomina.map((item) => <tr key={item.nomina_id} style={{ borderTop: "1px solid #e2e8f0" }}><td style={{ padding: 8 }}>{item.empleado}</td><td style={{ padding: 8 }}>{item.periodo_inicio}–{item.periodo_fin}</td><td style={{ padding: 8 }}>${item.salario_base.toFixed(2)}</td><td style={{ padding: 8 }}>{item.horas}</td><td style={{ padding: 8 }}>${item.comisiones.toFixed(2)}</td><td style={{ padding: 8 }}>${item.bonos.toFixed(2)}</td><td style={{ padding: 8 }}>${item.deducciones.toFixed(2)}</td><td style={{ padding: 8, fontWeight: 900 }}>${item.pago_neto.toFixed(2)}</td><td style={{ padding: 8 }}>${item.costo_patronal.toFixed(2)}</td><td style={{ padding: 8 }}><select value={item.estado} disabled={savingFinanzas} onChange={(e) => actualizarEstadoFinanzas("nomina", item.nomina_id, e.target.value)}>{["pendiente","pagada","aprobada","cancelada"].map((estado) => <option key={estado} value={estado}>{formatStatsEtiqueta(estado)}</option>)}</select></td></tr>)}</tbody></table></div>
+                  <div style={{ color: "#718397", fontSize: 11 }}>Registro administrativo únicamente: no calcula impuestos mexicanos ni genera CFDI de nómina.</div>
+                </div>
+              )}
+
+              {finanzasSeccion === "cobrar" && (
+                <div style={{ ...softCard, overflowX: "auto" }}><table style={{ width: "100%", minWidth: 760, borderCollapse: "collapse", fontSize: 11 }}><thead><tr style={{ background: "#9a4c0e", color: "#fff" }}>{["VENTA","FECHA","CLIENTE","TOTAL","PAGADO","SALDO","ESTADO"].map((h) => <th key={h} align={h === "TOTAL" || h === "PAGADO" || h === "SALDO" ? "right" : "left"} style={{ padding: 9 }}>{h}</th>)}</tr></thead><tbody>{finanzasData.cuentas_cobrar.map((item) => <tr key={item.venta_id} style={{ borderTop: "1px solid #e2e8f0" }}><td style={{ padding: 8 }}>#{item.venta_id}</td><td style={{ padding: 8 }}>{formatDateTimePretty(item.fecha)}</td><td style={{ padding: 8 }}>{item.cliente}</td><td align="right" style={{ padding: 8 }}>${item.total.toFixed(2)}</td><td align="right" style={{ padding: 8 }}>${item.pagado.toFixed(2)}</td><td align="right" style={{ padding: 8, color: "#c2410c", fontWeight: 900 }}>${item.saldo.toFixed(2)}</td><td style={{ padding: 8 }}>{formatStatsEtiqueta(item.estado_pago)}</td></tr>)}</tbody></table></div>
+              )}
+
+              {finanzasSeccion === "pagar" && (
+                <div style={{ display: "grid", gap: 12 }}>
+                  <form onSubmit={(e) => { e.preventDefault(); crearRegistroFinanzas("cuentas-pagar", finanzasForm); }} style={{ ...softCard, padding: 14, display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(165px,1fr))", gap: 8 }}>
+                    <input required placeholder="Proveedor" value={finanzasForm.proveedor || ""} onChange={(e) => setFinanzasForm({ ...finanzasForm, proveedor: e.target.value })} />
+                    <input required placeholder="Categoría" value={finanzasForm.categoria || ""} onChange={(e) => setFinanzasForm({ ...finanzasForm, categoria: e.target.value })} />
+                    <input required placeholder="Concepto" value={finanzasForm.concepto || ""} onChange={(e) => setFinanzasForm({ ...finanzasForm, concepto: e.target.value })} />
+                    <input placeholder="Folio" value={finanzasForm.folio || ""} onChange={(e) => setFinanzasForm({ ...finanzasForm, folio: e.target.value })} />
+                    <input required type="date" aria-label="Fecha de emisión" value={finanzasForm.fecha_emision || ""} onChange={(e) => setFinanzasForm({ ...finanzasForm, fecha_emision: e.target.value })} />
+                    <input type="date" aria-label="Fecha de vencimiento" value={finanzasForm.fecha_vencimiento || ""} onChange={(e) => setFinanzasForm({ ...finanzasForm, fecha_vencimiento: e.target.value })} />
+                    <input required type="number" min="0.01" step="0.01" placeholder="Monto total" value={finanzasForm.monto_total || ""} onChange={(e) => setFinanzasForm({ ...finanzasForm, monto_total: Number(e.target.value) })} />
+                    <input type="number" min="0" step="0.01" placeholder="Monto pagado" value={finanzasForm.monto_pagado || ""} onChange={(e) => setFinanzasForm({ ...finanzasForm, monto_pagado: Number(e.target.value) })} />
+                    <label style={{ display: "grid", gap: 3, fontSize: 10, fontWeight: 850 }}>FACTURA / COMPROBANTE
+                      <input type="file" accept="application/pdf,image/jpeg,image/png,image/webp" onChange={(e) => setFinanzasForm({ ...finanzasForm, comprobante_file: e.target.files?.[0] || null })} />
+                    </label>
+                    <button disabled={savingFinanzas} style={{ padding: 10, border: 0, background: "#b46516", color: "#fff", fontWeight: 900 }}>Registrar obligación</button>
+                  </form>
+                  <div style={{ ...softCard, overflowX: "auto" }}><table style={{ width: "100%", minWidth: 1120, borderCollapse: "collapse", fontSize: 11 }}><thead><tr style={{ background: "#8a3d0a", color: "#fff" }}>{["PROVEEDOR","CATEGORÍA","CONCEPTO","FOLIO","EMISIÓN","VENCIMIENTO","TOTAL","PAGADO","SALDO","ESTADO","COMPROBANTE","ACCIÓN"].map((h) => <th key={h} align="left" style={{ padding: 8 }}>{h}</th>)}</tr></thead><tbody>{finanzasData.cuentas_pagar.map((item) => { const pagoDraft = finanzasCxpPagoDraft[item.cuenta_pagar_id] ?? String(item.monto_pagado); return <tr key={item.cuenta_pagar_id} style={{ borderTop: "1px solid #e2e8f0" }}><td style={{ padding: 8 }}>{item.proveedor}</td><td style={{ padding: 8 }}>{item.categoria}</td><td style={{ padding: 8 }}>{item.concepto}</td><td style={{ padding: 8 }}>{item.folio || "—"}</td><td style={{ padding: 8 }}>{item.fecha_emision}</td><td style={{ padding: 8 }}>{item.fecha_vencimiento || "—"}</td><td style={{ padding: 8 }}>${item.monto_total.toFixed(2)}</td><td style={{ padding: 8 }}><input type="number" min={0} max={item.monto_total} step="0.01" value={pagoDraft} onFocus={(e) => e.currentTarget.select()} onChange={(e) => setFinanzasCxpPagoDraft((prev) => ({ ...prev, [item.cuenta_pagar_id]: e.target.value }))} style={{ width: 90, padding: 6 }} /></td><td style={{ padding: 8, color: "#c2410c", fontWeight: 900 }}>${Math.max(0, item.monto_total - Number(pagoDraft || 0)).toFixed(2)}</td><td style={{ padding: 8 }}><select value={item.estado} disabled={savingFinanzas} onChange={(e) => actualizarEstadoFinanzas("cuentas_pagar", item.cuenta_pagar_id, e.target.value, Number(pagoDraft || 0))}>{["pendiente","parcial","pagada","cancelada"].map((estado) => <option key={estado} value={estado}>{formatStatsEtiqueta(estado)}</option>)}</select></td><td style={{ padding: 8 }}>{item.comprobante_id ? <button type="button" onClick={() => abrirComprobanteFinanzas(item.comprobante_id)} style={{ ...actionBtnStyle, padding: "5px 8px" }}>Abrir</button> : "—"}</td><td style={{ padding: 8 }}><button type="button" disabled={savingFinanzas} onClick={() => { const monto = Number(pagoDraft || 0); const estado = monto >= item.monto_total ? "pagada" : monto > 0 ? "parcial" : "pendiente"; actualizarEstadoFinanzas("cuentas_pagar", item.cuenta_pagar_id, estado, monto); }} style={{ ...actionBtnStyle, padding: "6px 9px" }}>Guardar</button></td></tr>; })}</tbody></table></div>
+                </div>
+              )}
+
+              {finanzasSeccion === "resultados" && (
+                <section style={{ ...softCard, padding: 18, maxWidth: 820 }}><h3 style={{ marginTop: 0, color: "#173b61" }}>Estado de resultados</h3>{Object.entries(finanzasData.estado_resultados).map(([key, value]) => <div key={key} style={{ display: "flex", justifyContent: "space-between", gap: 12, padding: 10, borderTop: "1px solid #e2e8f0", fontWeight: key.includes("utilidad") ? 900 : 650 }}><span>{formatStatsEtiqueta(key)}</span><strong style={{ color: Number(value) < 0 ? "#b91c1c" : "#173b61" }}>${Number(value).toFixed(2)}</strong></div>)}</section>
+              )}
+              {finanzasSeccion === "flujo" && (
+                <section style={{ ...softCard, padding: 18, maxWidth: 820 }}><h3 style={{ marginTop: 0, color: "#0f766e" }}>Flujo de efectivo</h3>{Object.entries(finanzasData.flujo_efectivo).map(([key, value]) => <div key={key} style={{ display: "flex", justifyContent: "space-between", gap: 12, padding: 10, borderTop: "1px solid #e2e8f0" }}><span>{formatStatsEtiqueta(key)}</span><strong>${Number(value).toFixed(2)}</strong></div>)}</section>
+              )}
+              {finanzasSeccion === "balance" && (
+                <section style={{ ...softCard, padding: 18, maxWidth: 820 }}><h3 style={{ marginTop: 0, color: "#5b2166" }}>Balance general</h3>{Object.entries(finanzasData.balance_general).map(([key, value]) => <div key={key} style={{ display: "flex", justifyContent: "space-between", gap: 12, padding: 10, borderTop: "1px solid #e2e8f0", fontWeight: ["activos","pasivos","capital_contable"].includes(key) ? 900 : 650 }}><span>{formatStatsEtiqueta(key)}</span><strong style={{ color: Number(value) < 0 ? "#b91c1c" : "#5b2166" }}>${Number(value).toFixed(2)}</strong></div>)}</section>
+              )}
+            </>
+          )}
+        </div>
+      )}
+
+      {!isContador && tab === "estadisticas" && (
         <div style={{ display: "grid", gap: 16 }}>
           <div style={{ ...softCard, padding: 14, display: "grid", gap: 10 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
@@ -11134,10 +11480,14 @@ export default function App() {
             padding: 16,
           }}
         >
-          <div style={{ width: 520, maxWidth: "96vw", background: "#fff", border: "1px solid #cbd8e4", boxShadow: "0 20px 55px rgba(15,23,42,.28)", padding: 18 }}>
-            <div style={{ fontWeight: 900, fontSize: 21, color: "#173b61" }}>Confirmar y guardar venta</div>
+          <div style={{ width: 860, maxWidth: "96vw", maxHeight: "92vh", overflowY: "auto", background: "#fff", border: "1px solid #cbd8e4", boxShadow: "0 20px 55px rgba(15,23,42,.28)", padding: 18 }}>
+            <div style={{ fontWeight: 900, fontSize: 21, color: "#173b61" }}>
+              {editingVentaId !== null ? "Confirmar edición de la venta" : "Confirmar y guardar venta"}
+            </div>
             <div style={{ marginTop: 5, color: "#6b7f93", fontSize: 12 }}>
-              Revisa una vez más antes de guardar y descontar las existencias.
+              {editingVentaId !== null
+                ? "¿Seguro que quieres proceder con esta edición?"
+                : "Revisa una vez más antes de guardar y descontar las existencias."}
             </div>
 
             <div style={{ display: "grid", gap: 8, marginTop: 14, padding: 12, border: "1px solid #dbe6ef", background: "#f8fbff" }}>
@@ -11173,8 +11523,78 @@ export default function App() {
               )}
             </div>
 
+            <div style={{ marginTop: 12, border: "1px solid #dbe6ef", background: "#fff" }}>
+              <div style={{ padding: "9px 11px", borderBottom: "1px solid #dbe6ef", background: "#eef5fb", color: "#173b61", fontWeight: 900 }}>
+                Detalle del pedido
+              </div>
+              <div style={{ display: "grid", gap: 0 }}>
+                {ventaCarritoDetalle.map(({ producto, cantidad }, index) => {
+                  const detalleGrado = producto.tipo_mica === "tinte" && ventaTinteGrado
+                    ? ` · ${ventaTinteGrado.replace("_", " ")}`
+                    : "";
+                  return (
+                    <div
+                      key={`confirmar-${producto.producto_id}`}
+                      style={{
+                        display: "grid",
+                        gridTemplateColumns: "28px minmax(0, 1fr) 90px 110px",
+                        gap: 10,
+                        alignItems: "center",
+                        padding: "9px 11px",
+                        borderTop: index === 0 ? "none" : "1px solid #edf1f5",
+                      }}
+                    >
+                      <strong style={{ color: "#6b7f93" }}>{index + 1}</strong>
+                      <span style={{ minWidth: 0 }}>
+                        <strong style={{ display: "block", color: "#173b61" }}>{producto.nombre}</strong>
+                        <span style={{ display: "block", marginTop: 2, color: "#718397", fontSize: 10 }}>
+                          {producto.sku}
+                          {producto.modelo ? ` · ${producto.modelo}` : ""}
+                          {producto.color ? ` · ${producto.color}` : ""}
+                          {detalleGrado}
+                        </span>
+                      </span>
+                      <span style={{ textAlign: "right", color: "#526b7b" }}>{cantidad} × ${Number(producto.precio || 0).toFixed(2)}</span>
+                      <strong style={{ textAlign: "right", color: "#174ea6" }}>${(cantidad * Number(producto.precio || 0)).toFixed(2)}</strong>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) minmax(250px, .75fr)", gap: 12, marginTop: 12 }}>
+              <section style={{ border: "1px solid #dbe6ef", background: "#f8fbff", padding: 11 }}>
+                <div style={{ marginBottom: 7, color: "#173b61", fontWeight: 900 }}>Configuración de micas</div>
+                <div style={{ display: "grid", gap: 5, fontSize: 11 }}>
+                  <div><span style={{ color: "#718397" }}>Armazón:</span> <strong>{ventaArmazonesSeleccionados.map((producto) => producto.nombre).join(", ") || "No aplica"}</strong></div>
+                  <div><span style={{ color: "#718397" }}>Diseño:</span> <strong>{ventaDisenoSeleccionado?.nombre || "No aplica"}</strong></div>
+                  <div>
+                    <span style={{ color: "#718397" }}>Tratamiento / tinte:</span>{" "}
+                    <strong>
+                      {ventaTratamientoSeleccionado
+                        ? `${ventaTratamientoSeleccionado.nombre}${ventaTinteGrado ? ` · ${ventaTinteGrado.replace("_", " ")}` : ""}`
+                        : "No aplica"}
+                    </strong>
+                  </div>
+                </div>
+              </section>
+              <section style={{ border: "1px solid #dbe6ef", background: "#fff", padding: 11 }}>
+                <div style={{ marginBottom: 7, color: "#173b61", fontWeight: 900 }}>Pagos capturados</div>
+                <div style={{ display: "grid", gap: 5 }}>
+                  {ventaPagos.filter((pago) => Number(pago.monto || 0) > 0).map((pago, index) => (
+                    <div key={`confirmar-pago-${pago.ui_id}`} style={{ display: "flex", justifyContent: "space-between", gap: 8, fontSize: 11 }}>
+                      <span style={{ color: "#526b7b" }}>Pago {index + 1} · {formatMetodoPagoLabel(pago.metodo)}</span>
+                      <strong>${Number(pago.monto || 0).toFixed(2)}</strong>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            </div>
+
             <div style={{ marginTop: 12, padding: 10, border: "1px solid #fde68a", background: "#fffbeb", color: "#92400e", fontSize: 12 }}>
-              Presiona “Sí, guardar venta” para completar el registro. Esta es la confirmación final.
+              {editingVentaId !== null
+                ? "Al confirmar se guardarán todos los cambios. Permanecerás en esta venta hasta presionar “Completar edición”."
+                : "Presiona “Sí, guardar venta” para completar el registro. Esta es la confirmación final."}
             </div>
 
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 14 }}>
@@ -11189,13 +11609,14 @@ export default function App() {
               <button
                 type="button"
                 onClick={() => {
+                  ventaSubmitConfirmadoRef.current = true;
                   setVentaConfirmacionOpen(false);
                   ventaFormRef.current?.requestSubmit();
                 }}
                 disabled={savingVenta}
                 style={{ padding: "10px 12px", border: "1px solid #0f766e", background: savingVenta ? "#dfe9e8" : "#0f766e", color: savingVenta ? "#526b7b" : "#fff", fontWeight: 900, cursor: savingVenta ? "wait" : "pointer" }}
               >
-                {savingVenta ? "Guardando..." : "Sí, guardar venta"}
+                {savingVenta ? "Guardando..." : editingVentaId !== null ? "Sí, guardar cambios" : "Sí, guardar venta"}
               </button>
             </div>
           </div>
@@ -11295,6 +11716,7 @@ export default function App() {
                         .split("|")
                         .map((token) => token.trim())
                         .filter((token) => token.includes("mica") || token.includes("tinte") || token.includes("bifocal") || token.includes("monofocal") || token.includes("progres"));
+                      const gradoTinteGuardado = tokensMicas.find((token) => /^tinte_grado_[123]$/.test(token));
                       if (micasGuardadas.length === 0 && tokensMicas.length === 0) return null;
                       return (
                         <div style={{ marginBottom: 10, padding: 10, border: "1px solid #b9d8d3", background: "#f0fdfa" }}>
@@ -11319,6 +11741,11 @@ export default function App() {
                                     {formatVentaCompraLabel(token)}
                                   </span>
                                 ))}
+                            {micasGuardadas.length > 0 && gradoTinteGuardado && (
+                              <span style={{ padding: "6px 9px", border: "1px solid #d8b98f", background: "#fff8ed", color: "#784718", fontSize: 11, fontWeight: 900, textTransform: "capitalize" }}>
+                                Grado del tinte: {gradoTinteGuardado.replace("tinte_grado_", "grado ")}
+                              </span>
+                            )}
                           </div>
                         </div>
                       );
@@ -11420,15 +11847,22 @@ export default function App() {
                     <div style={{ fontWeight: 900, color: "#16385d", marginBottom: 9 }}>Pagos registrados</div>
                     {selectedVentaDetalle.pagos && selectedVentaDetalle.pagos.length > 0 ? (
                       <div style={{ display: "grid", gap: 6 }}>
-                        {selectedVentaDetalle.pagos.map((pago, index) => (
-                          <div key={pago.pago_id ?? index} style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 12, padding: 9, border: "1px solid #dbe6ef", background: "#f8fbff" }}>
-                            <span>
-                              <strong>{formatMetodoPagoLabel(pago.metodo)}</strong>
-                              {pago.fecha_hora ? <span style={{ display: "block", marginTop: 2, color: "#718397", fontSize: 10 }}>{formatDateTimePretty(pago.fecha_hora)}</span> : null}
-                            </span>
-                            <strong style={{ color: "#174ea6" }}>${Number(pago.monto || 0).toFixed(2)}</strong>
-                          </div>
-                        ))}
+                        {selectedVentaDetalle.pagos.map((pago, index) => {
+                          const acumulado = (selectedVentaDetalle.pagos || [])
+                            .slice(0, index + 1)
+                            .reduce((total, item) => total + Number(item.monto || 0), 0);
+                          return (
+                            <div key={pago.pago_id ?? index} style={{ display: "grid", gridTemplateColumns: "60px minmax(0, 1fr) 100px 110px", gap: 10, alignItems: "center", padding: 9, border: "1px solid #dbe6ef", background: "#f8fbff", fontSize: 11 }}>
+                              <strong style={{ color: "#174ea6" }}>Pago {index + 1}</strong>
+                              <span>
+                                <strong>{formatMetodoPagoLabel(pago.metodo)}</strong>
+                                {pago.fecha_hora ? <span style={{ display: "block", marginTop: 2, color: "#718397", fontSize: 10 }}>{formatDateTimePretty(pago.fecha_hora)}</span> : <span style={{ display: "block", marginTop: 2, color: "#718397", fontSize: 10 }}>Fecha no disponible</span>}
+                              </span>
+                              <strong style={{ textAlign: "right", color: "#174ea6" }}>${Number(pago.monto || 0).toFixed(2)}</strong>
+                              <span style={{ textAlign: "right", color: "#526b7b" }}>Acumulado<br /><strong>${acumulado.toFixed(2)}</strong></span>
+                            </div>
+                          );
+                        })}
                       </div>
                     ) : (
                       <div style={{ color: "#718397", fontSize: 12 }}>
@@ -11824,97 +12258,6 @@ export default function App() {
           </div>
         </div>
       )}
-
-      {ventaFiltroOpen && (
-        <div
-          style={{
-            position: "fixed",
-            inset: 0,
-            background: "rgba(0,0,0,0.45)",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            zIndex: 999,
-          }}
-        >
-          <div
-            style={{
-              background: "#fff",
-              width: 820,
-              maxWidth: "96vw",
-              borderRadius: 14,
-              border: "1px solid #ddd",
-              padding: 18,
-            }}
-          >
-            <div style={{ fontWeight: 800, fontSize: 20, marginBottom: 14 }}>Buscar venta</div>
-
-            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 14 }}>
-              <button type="button" onClick={() => setVentaFiltroModo("hoy")} style={{ padding: "8px 12px", borderRadius: 10, border: "1px solid #ddd", background: ventaFiltroModo === "hoy" ? "#111" : "#fff", color: ventaFiltroModo === "hoy" ? "#fff" : "#111", fontWeight: 700, cursor: "pointer" }}>Hoy</button>
-              <button type="button" onClick={() => setVentaFiltroModo("rango")} style={{ padding: "8px 12px", borderRadius: 10, border: "1px solid #ddd", background: ventaFiltroModo === "rango" ? "#111" : "#fff", color: ventaFiltroModo === "rango" ? "#fff" : "#111", fontWeight: 700, cursor: "pointer" }}>Rango</button>
-              <button type="button" onClick={() => setVentaFiltroModo("mes")} style={{ padding: "8px 12px", borderRadius: 10, border: "1px solid #ddd", background: ventaFiltroModo === "mes" ? "#111" : "#fff", color: ventaFiltroModo === "mes" ? "#fff" : "#111", fontWeight: 700, cursor: "pointer" }}>Mes</button>
-              <button type="button" onClick={() => setVentaFiltroModo("anio")} style={{ padding: "8px 12px", borderRadius: 10, border: "1px solid #ddd", background: ventaFiltroModo === "anio" ? "#111" : "#fff", color: ventaFiltroModo === "anio" ? "#fff" : "#111", fontWeight: 700, cursor: "pointer" }}>Año</button>
-            </div>
-
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14 }}>
-              <button type="button" onClick={() => aplicarFiltroRapidoVenta("ayer")} style={{ padding: "7px 11px", borderRadius: 10, border: "1px solid #ddd", background: "#fff", fontWeight: 700, cursor: "pointer" }}>Ayer</button>
-              <button type="button" onClick={() => aplicarFiltroRapidoVenta("ultimos7")} style={{ padding: "7px 11px", borderRadius: 10, border: "1px solid #ddd", background: "#fff", fontWeight: 700, cursor: "pointer" }}>Últimos 7 días</button>
-              <button type="button" onClick={() => aplicarFiltroRapidoVenta("semana_pasada")} style={{ padding: "7px 11px", borderRadius: 10, border: "1px solid #ddd", background: "#fff", fontWeight: 700, cursor: "pointer" }}>Semana pasada</button>
-              <button type="button" onClick={() => aplicarFiltroRapidoVenta("mes_pasado")} style={{ padding: "7px 11px", borderRadius: 10, border: "1px solid #ddd", background: "#fff", fontWeight: 700, cursor: "pointer" }}>Mes pasado</button>
-            </div>
-
-            {ventaFiltroModo === "rango" && (
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 14 }}>
-                <DateInputPro value={ventaFechaDesde} onChange={setVentaFechaDesde} />
-                <DateInputPro value={ventaFechaHasta} onChange={setVentaFechaHasta} />
-              </div>
-            )}
-
-            {(ventaFiltroModo === "mes" || ventaFiltroModo === "anio") && (
-              <div style={{ display: "grid", gridTemplateColumns: ventaFiltroModo === "mes" ? "1fr 1fr" : "1fr", gap: 10, marginBottom: 14 }}>
-                <input type="number" min={2020} max={2100} value={ventaAnio} onChange={(e) => setVentaAnio(e.target.value)} placeholder="Año" style={{ padding: 10, borderRadius: 10, border: "1px solid #ddd" }} />
-                {ventaFiltroModo === "mes" && (
-                  <select value={ventaMes} onChange={(e) => setVentaMes(e.target.value)} style={{ padding: 10, borderRadius: 10, border: "1px solid #ddd", background: "#fff" }}>
-                    <option value="">Seleccionar mes</option>
-                    <option value="1">Enero</option><option value="2">Febrero</option><option value="3">Marzo</option><option value="4">Abril</option>
-                    <option value="5">Mayo</option><option value="6">Junio</option><option value="7">Julio</option><option value="8">Agosto</option>
-                    <option value="9">Septiembre</option><option value="10">Octubre</option><option value="11">Noviembre</option><option value="12">Diciembre</option>
-                  </select>
-                )}
-              </div>
-            )}
-
-            <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
-              <button
-                type="button"
-                onClick={() => {
-                  setVentaFiltroModo("hoy");
-                  setVentaFechaDesde("");
-                  setVentaFechaHasta("");
-                  setVentaMes("");
-                  setVentaAnio(String(new Date().getFullYear()));
-                  loadVentas({ modo: "hoy" });
-                  setVentaFiltroOpen(false);
-                }}
-                style={{ padding: "10px 14px", borderRadius: 10, border: "1px solid #ddd", background: "#fff", fontWeight: 700, cursor: "pointer" }}
-              >
-                Limpiar
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  loadVentas();
-                  setVentaFiltroOpen(false);
-                }}
-                style={{ padding: "10px 14px", borderRadius: 10, border: "1px solid #111", background: "#111", color: "#fff", fontWeight: 700, cursor: "pointer" }}
-              >
-                Buscar
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
 
       {logoutConfirmOpen && (
         <div
