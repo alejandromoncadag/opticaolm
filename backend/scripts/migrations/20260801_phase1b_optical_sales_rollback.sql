@@ -1,0 +1,16 @@
+-- Non-destructive Phase 1B isolation rollback.
+-- Existing rows are preserved under explicit rollback names.
+
+ALTER TABLE core.venta_ajustes_cliente RENAME TO venta_ajustes_cliente_phase1b_rollback;
+ALTER TABLE core.venta_cancelacion_objetivos RENAME TO venta_cancelacion_objetivos_phase1b_rollback;
+ALTER TABLE core.venta_cancelaciones RENAME TO venta_cancelaciones_phase1b_rollback;
+ALTER TABLE core.venta_descuento_asignaciones RENAME TO venta_descuento_asignaciones_phase1b_rollback;
+ALTER TABLE core.venta_calculo_revisiones RENAME TO venta_calculo_revisiones_phase1b_rollback;
+ALTER TABLE core.venta_descuento_objetivos RENAME TO venta_descuento_objetivos_phase1b_rollback;
+ALTER TABLE core.venta_descuentos RENAME TO venta_descuentos_phase1b_rollback;
+ALTER TABLE core.venta_catalogo_detalles RENAME TO venta_catalogo_detalles_phase1b_rollback;
+ALTER TABLE core.venta_configuraciones_opticas RENAME TO venta_configuraciones_opticas_phase1b_rollback;
+ALTER TABLE core.venta_catalogo_contextos RENAME TO venta_catalogo_contextos_phase1b_rollback;
+ALTER TABLE core.prescripciones_opticas RENAME TO prescripciones_opticas_phase1b_rollback;
+ALTER TABLE core.catalogo_inventario_movimientos RENAME TO catalogo_inventario_movimientos_phase1b_rollback;
+ALTER TABLE core.catalogo_productos RENAME COLUMN permite_graduacion TO permite_graduacion_phase1b_rollback;

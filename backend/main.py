@@ -2,15 +2,16 @@ from fastapi import FastAPI, HTTPException, Depends, Request
 from fastapi.security import OAuth2PasswordBearer
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, Response
+from fastapi.staticfiles import StaticFiles
 
 from jose import jwt, JWTError
 from passlib.hash import argon2
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 from typing import Optional, Any
 from datetime import datetime, timedelta, timezone, date, time
 import calendar
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, InvalidOperation, ROUND_DOWN
 from zoneinfo import ZoneInfo
 import json
 import csv
@@ -26,12 +27,15 @@ from urllib.error import HTTPError
 import psycopg
 import os
 from dotenv import load_dotenv
+from public_catalog import create_public_catalog_router
+from online_commerce import PURCHASABLE_CATEGORIES, create_online_commerce_router
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 load_dotenv(os.path.join(BASE_DIR, ".env"))
 load_dotenv()
 
 app = FastAPI(title="Optica OLM API")
+app.mount("/media", StaticFiles(directory=os.path.join(BASE_DIR, "media")), name="media")
 
 def _resolve_cors_origins() -> list[str]:
     configured = os.getenv("FRONTEND_ORIGIN", "").strip()
@@ -96,6 +100,9 @@ def _resolve_db_conninfo() -> str:
 
 
 DB_CONNINFO = _resolve_db_conninfo()
+
+app.include_router(create_public_catalog_router(DB_CONNINFO))
+app.include_router(create_online_commerce_router(DB_CONNINFO))
 
 
 
@@ -1418,6 +1425,13 @@ class InventarioProductoUpdate(BaseModel):
     costo_unitario: Decimal | None = None
 
 
+class ProductoComercioOnlineUpdate(BaseModel):
+    publicado_online: bool
+    comprable_online: bool
+    permite_favorito: bool
+    cantidad_maxima_por_linea: int | None = None
+
+
 class InventarioMovimientoIn(BaseModel):
     sucursal_id: int | None = 1
     tipo: str
@@ -1427,6 +1441,81 @@ class InventarioMovimientoIn(BaseModel):
     proveedor: str | None = None
     folio: str | None = None
     notas: str | None = None
+
+
+class PrescripcionOpticaCreate(BaseModel):
+    sucursal_captura_id: int | None = 1
+    origen: str
+    historia_id: int | None = None
+    referencia_externa: str | None = None
+    fecha_prescripcion: str | None = None
+    od_esfera: str | None = None
+    od_cilindro: str | None = None
+    od_eje: str | None = None
+    od_adicion: str | None = None
+    oi_esfera: str | None = None
+    oi_cilindro: str | None = None
+    oi_eje: str | None = None
+    oi_adicion: str | None = None
+    distancia_pupilar: str | None = None
+    prisma: str | None = None
+    base_prisma: str | None = None
+    notas: str | None = None
+
+
+class VentaCatalogoProductoIn(BaseModel):
+    linea_ref: str
+    producto_id: int
+    cantidad: int = 1
+
+
+class VentaConfiguracionOpticaIn(BaseModel):
+    configuracion_ref: str
+    tipo_configuracion: str
+    armazon_producto_id: int | None = None
+    diseno_producto_id: int | None = None
+    tratamiento_producto_id: int | None = None
+    variante_id: int | None = None
+    uso_visual: str
+    uso_visual_otro: str | None = None
+    prescripcion_id: int | None = None
+    comportamiento_abasto_usado: str | None = None
+    estado_produccion: str | None = None
+
+
+class VentaDescuentoFase1BIn(BaseModel):
+    descuento_ref: str
+    tipo: str
+    valor: Decimal
+    motivo: str
+    motivo_otro: str | None = None
+    cupon_tipo: str
+    alcance: str = "venta"
+    orden_aplicacion: int
+    configuracion_refs: list[str] | None = None
+    linea_refs: list[str] | None = None
+
+
+class VentaFase1BCreate(BaseModel):
+    paciente_id: int
+    sucursal_id: int | None = 1
+    notas: str | None = None
+    forma_liquidacion: str | None = None
+    plazo_meses: int | None = None
+    estado_venta: str | None = None
+    productos_catalogo: list[VentaCatalogoProductoIn] | None = None
+    configuraciones: list[VentaConfiguracionOpticaIn] | None = None
+    descuentos: list[VentaDescuentoFase1BIn] | None = None
+    pagos: list[VentaPagoIn] | None = None
+
+
+class VentaCancelacionFase1BIn(BaseModel):
+    sucursal_id: int | None = 1
+    alcance: str
+    motivo: str
+    configuracion_refs: list[str] | None = None
+    linea_refs: list[str] | None = None
+    cantidades_por_linea: dict[str, int] | None = None
 
 
 class FinanzasMovimientoIn(BaseModel):
@@ -4656,9 +4745,2317 @@ def crear_paciente(p: PacienteCreate, user=Depends(get_current_user)):
         raise HTTPException(status_code=400, detail=str(e))
 
 
+# ============================================================================
+# Phase 1B — global catalog, branch inventory and optical-sale configuration.
+# Legacy endpoints/tables above remain available for historical test records.
+# ============================================================================
+
+PHASE1B_CONFIG_TYPES = {"par_completo", "solo_micas", "solo_tratamiento"}
+PHASE1B_USO_VISUAL = {"lejos", "cerca", "intermedio", "multifocal", "sin_graduacion", "otro"}
+PHASE1B_ABASTO = {"inventario", "laboratorio_bajo_pedido", "fabricacion_interna", "servicio"}
+PHASE1B_PRODUCCION = {
+    "pendiente_anticipo", "listo_para_produccion", "en_produccion",
+    "listo_para_entregar", "entregado", "cancelado",
+}
+PHASE1B_DESCUENTO_TIPOS = {"porcentaje", "monto_fijo"}
+PHASE1B_DESCUENTO_MOTIVOS = {
+    "familiar", "cliente_referido", "promocion_especial",
+    "convenio_empresa_escuela_organizacion", "cortesia",
+    "cliente_frecuente", "otro",
+}
+PHASE1B_CUPON_TIPOS = {"online", "fisico", "sin_cupon"}
+PHASE1B_DESCUENTO_ALCANCES = {"venta", "configuracion", "linea"}
 
 
+def _phase1b_model_item(value: Any, model_class: type[BaseModel], label: str) -> BaseModel:
+    if isinstance(value, model_class):
+        return value
+    try:
+        if hasattr(model_class, "model_validate"):
+            return model_class.model_validate(value)
+        return model_class.parse_obj(value)
+    except (ValidationError, TypeError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=f"{label} inválido: {exc}")
 
+
+def _phase1b_normalize_sale_input(data: VentaFase1BCreate) -> VentaFase1BCreate:
+    raw = data.model_dump() if hasattr(data, "model_dump") else data.dict()
+    cleaned = sanitize_payload_strings(raw)
+    return _phase1b_model_item(cleaned, VentaFase1BCreate, "Venta Phase 1B")
+
+
+def _money(value: Any) -> Decimal:
+    try:
+        return Decimal(str(value or 0)).quantize(Decimal("0.01"))
+    except (InvalidOperation, ValueError, TypeError):
+        raise HTTPException(status_code=400, detail="Importe monetario inválido.")
+
+
+def _phase1b_patient_row(cur, paciente_id: int, *, lock: bool = False):
+    cur.execute(
+        f"""
+        SELECT paciente_id, sucursal_id, primer_nombre, apellido_paterno,
+               apellido_materno, telefono, activo
+        FROM core.pacientes
+        WHERE paciente_id = %s
+        {"FOR SHARE" if lock else ""};
+        """,
+        (paciente_id,),
+    )
+    row = cur.fetchone()
+    if row is None or row[6] is not True:
+        raise HTTPException(status_code=400, detail="El paciente no existe o está inactivo.")
+    if not str(row[2] or "").strip():
+        raise HTTPException(status_code=400, detail="El paciente debe tener primer nombre.")
+    if not (str(row[3] or "").strip() or str(row[4] or "").strip()):
+        raise HTTPException(status_code=400, detail="El paciente debe tener al menos un apellido.")
+    if not str(row[5] or "").strip():
+        raise HTTPException(status_code=400, detail="El paciente debe tener teléfono.")
+    return row
+
+
+def _phase1b_catalog_rows(cur, producto_ids: set[int], sucursal_id: int, *, lock: bool) -> dict[int, dict[str, Any]]:
+    if not producto_ids:
+        return {}
+    lock_clause = "FOR SHARE OF producto" if lock else ""
+    cur.execute(
+        f"""
+        SELECT
+            producto.producto_id, producto.sku, producto.slug, producto.nombre,
+            producto.descripcion, producto.categoria, producto.subcategoria,
+            producto.tipo_producto, producto.modalidad_precio, producto.precio,
+            producto.costo_unitario, producto.costo_confirmado,
+            producto.controla_stock, producto.comportamiento_abasto_default,
+            producto.unidad_medida, producto.permite_graduacion, producto.activo,
+            inventario.stock, inventario.stock_reservado, inventario.stock_minimo,
+            inventario.costo_promedio, inventario.version,
+            imagen.url
+        FROM core.catalogo_productos producto
+        LEFT JOIN core.catalogo_inventario_sucursal inventario
+          ON inventario.producto_id = producto.producto_id
+         AND inventario.sucursal_id = %s
+        LEFT JOIN LATERAL (
+            SELECT url
+            FROM core.catalogo_producto_imagenes
+            WHERE producto_id = producto.producto_id AND activo = true
+            ORDER BY es_principal DESC, display_order, producto_imagen_id
+            LIMIT 1
+        ) imagen ON true
+        WHERE producto.producto_id = ANY(%s::bigint[])
+        {lock_clause};
+        """,
+        (sucursal_id, sorted(producto_ids)),
+    )
+    rows: dict[int, dict[str, Any]] = {}
+    for row in cur.fetchall():
+        rows[int(row[0])] = {
+            "producto_id": int(row[0]), "sku": row[1], "slug": row[2],
+            "nombre": row[3], "descripcion": row[4], "categoria": row[5],
+            "subcategoria": row[6], "tipo_producto": row[7],
+            "modalidad_precio": row[8], "precio": _money(row[9]),
+            "costo_unitario": _money(row[10]) if row[10] is not None else None,
+            "costo_confirmado": row[11] is True, "controla_stock": row[12] is True,
+            "comportamiento_abasto_default": row[13], "unidad_medida": row[14],
+            "permite_graduacion": row[15] is True, "activo": row[16] is True,
+            "stock": int(row[17] or 0), "stock_reservado": int(row[18] or 0),
+            "stock_minimo": int(row[19] or 0),
+            "costo_promedio": _money(row[20]) if row[20] is not None else None,
+            "version": int(row[21] or 0), "imagen_url": row[22],
+        }
+    missing = producto_ids - set(rows)
+    if missing:
+        raise HTTPException(status_code=404, detail=f"Productos inexistentes: {sorted(missing)}")
+    for producto in rows.values():
+        if not producto["activo"]:
+            raise HTTPException(status_code=400, detail=f"{producto['nombre']} está inactivo.")
+        if producto["controla_stock"] and producto["comportamiento_abasto_default"] == "inventario" and producto["version"] == 0 and producto["stock"] == 0:
+            # A zero/version-zero row is valid; absence is detected through the join below.
+            pass
+    return rows
+
+
+@app.get("/catalogo/inventario", summary="Inventario global por sucursal (Phase 1B)")
+def listar_inventario_catalogo(
+    sucursal_id: int | None = None,
+    categoria: str | None = None,
+    incluir_inactivos: bool = False,
+    user=Depends(get_current_user),
+):
+    require_roles(user, ("admin", "recepcion", "doctor", "contador"))
+    sucursal_id = force_sucursal(user, sucursal_id)
+    if sucursal_id is None:
+        raise HTTPException(status_code=400, detail="Sucursal es requerida.")
+    where = [] if incluir_inactivos else ["producto.activo = true"]
+    params: list[Any] = [sucursal_id]
+    if categoria and categoria.strip():
+        where.append("producto.categoria = %s")
+        params.append(normalize_controlled_token(categoria))
+    where_sql = " AND ".join(where) if where else "true"
+    with psycopg.connect(DB_CONNINFO) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"""
+                SELECT
+                    producto.producto_id, producto.sku, producto.slug,
+                    producto.categoria, producto.subcategoria, producto.nombre,
+                    producto.descripcion, producto.precio, producto.costo_unitario,
+                    producto.costo_confirmado, producto.controla_stock,
+                    producto.comportamiento_abasto_default, producto.unidad_medida,
+                    producto.permite_graduacion, producto.orden_catalogo, producto.activo,
+                    producto.publicado_online,
+                    COALESCE(comercio.comprable_online, FALSE),
+                    COALESCE(comercio.permite_favorito, TRUE),
+                    comercio.cantidad_maxima_por_linea,
+                    COALESCE(inventario.stock, 0), COALESCE(inventario.stock_reservado, 0),
+                    COALESCE(inventario.stock_minimo, 0), COALESCE(inventario.version, 0),
+                    imagen.url,
+                    COALESCE((
+                        SELECT json_agg(json_build_object(
+                            'variante_id', variante.variante_id,
+                            'codigo', variante.codigo,
+                            'nombre', variante.nombre,
+                            'precio_ajuste_override', variante.precio_ajuste_override,
+                            'costo_unitario', CASE WHEN %s THEN variante.costo_unitario ELSE NULL END,
+                            'costo_confirmado', CASE WHEN %s THEN variante.costo_confirmado ELSE false END
+                        ) ORDER BY variante.orden, variante.variante_id)
+                        FROM core.catalogo_producto_variantes variante
+                        WHERE variante.producto_id = producto.producto_id AND variante.activo = true
+                    ), '[]'::json),
+                    producto.tipo_producto
+                FROM core.catalogo_productos producto
+                LEFT JOIN core.online_producto_configuracion comercio
+                  ON comercio.producto_id = producto.producto_id
+                LEFT JOIN core.catalogo_inventario_sucursal inventario
+                  ON inventario.producto_id = producto.producto_id
+                 AND inventario.sucursal_id = %s
+                LEFT JOIN LATERAL (
+                    SELECT url
+                    FROM core.catalogo_producto_imagenes
+                    WHERE producto_id = producto.producto_id AND activo = true
+                    ORDER BY es_principal DESC, display_order, producto_imagen_id
+                    LIMIT 1
+                ) imagen ON true
+                WHERE {where_sql}
+                ORDER BY producto.orden_catalogo, producto.categoria, producto.nombre;
+                """,
+                tuple([user["rol"] in ("admin", "contador"), user["rol"] in ("admin", "contador"), *params]),
+            )
+            rows = cur.fetchall()
+    can_see_cost = user["rol"] in ("admin", "contador")
+    return [
+        {
+            "producto_id": int(row[0]), "sucursal_id": sucursal_id, "sku": row[1],
+            "slug": row[2], "categoria": row[3], "subcategoria": row[4],
+            "nombre": row[5], "modelo": row[2], "color": None,
+            "tipo_mica": row[4], "descripcion": row[6], "precio": float(row[7] or 0),
+            "costo_unitario": float(row[8]) if can_see_cost and row[8] is not None else None,
+            "costo_confirmado": bool(row[9]) if can_see_cost else False,
+            "controla_stock": bool(row[10]), "comportamiento_abasto_default": row[11],
+            "unidad_medida": row[12], "permite_graduacion": bool(row[13]),
+            "orden_catalogo": int(row[14] or 100), "activo": bool(row[15]),
+            "publicado_online": bool(row[16]), "comprable_online": bool(row[17]),
+            "permite_favorito": bool(row[18]),
+            "cantidad_maxima_por_linea": int(row[19]) if row[19] is not None else None,
+            "stock": int(row[20] or 0), "stock_reservado": int(row[21] or 0),
+            "stock_minimo": int(row[22] or 0), "version": int(row[23] or 0),
+            "imagen_url": row[24], "variantes": row[25] or [],
+            "tipo_producto": row[26],
+        }
+        for row in rows
+    ]
+
+
+@app.patch(
+    "/catalogo/productos/{producto_id}/comercio-online",
+    summary="Configurar publicación, compra y favoritos en línea",
+)
+def actualizar_comercio_online_producto(
+    producto_id: int,
+    data: ProductoComercioOnlineUpdate,
+    user=Depends(get_current_user),
+):
+    require_roles(user, ("admin",))
+    if (
+        data.cantidad_maxima_por_linea is not None
+        and data.cantidad_maxima_por_linea <= 0
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="La cantidad máxima debe quedar vacía o ser un entero positivo.",
+        )
+
+    with psycopg.connect(DB_CONNINFO) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT producto_id, sku, nombre, categoria, tipo_producto,
+                       activo, publicado_online
+                FROM core.catalogo_productos
+                WHERE producto_id = %s
+                FOR UPDATE
+                """,
+                (producto_id,),
+            )
+            producto = cur.fetchone()
+            if producto is None:
+                raise HTTPException(status_code=404, detail="Producto no existe.")
+
+            cur.execute(
+                """
+                INSERT INTO core.online_producto_configuracion (
+                    producto_id, comprable_online, permite_favorito,
+                    cantidad_maxima_por_linea
+                ) VALUES (%s, FALSE, TRUE, NULL)
+                ON CONFLICT (producto_id) DO NOTHING
+                """,
+                (producto_id,),
+            )
+            cur.execute(
+                """
+                SELECT comprable_online, permite_favorito,
+                       cantidad_maxima_por_linea
+                FROM core.online_producto_configuracion
+                WHERE producto_id = %s
+                FOR UPDATE
+                """,
+                (producto_id,),
+            )
+            comercio_anterior = cur.fetchone()
+
+            categoria = str(producto[3])
+            tipo_producto = str(producto[4])
+            if data.comprable_online and (
+                categoria not in PURCHASABLE_CATEGORIES
+                or tipo_producto != "producto_fisico"
+            ):
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        "Esta categoría o tipo de producto no puede habilitarse "
+                        "para compra en línea durante Phase 1F-A."
+                    ),
+                )
+
+            anteriores = {
+                "publicado_online": bool(producto[6]),
+                "comprable_online": bool(comercio_anterior[0]),
+                "permite_favorito": bool(comercio_anterior[1]),
+                "cantidad_maxima_por_linea": comercio_anterior[2],
+            }
+            nuevos = {
+                "publicado_online": bool(data.publicado_online),
+                "comprable_online": bool(data.comprable_online),
+                "permite_favorito": bool(data.permite_favorito),
+                "cantidad_maxima_por_linea": data.cantidad_maxima_por_linea,
+            }
+
+            cur.execute(
+                """
+                UPDATE core.catalogo_productos
+                SET publicado_online = %s, updated_at = NOW()
+                WHERE producto_id = %s
+                """,
+                (data.publicado_online, producto_id),
+            )
+            cur.execute(
+                """
+                UPDATE core.online_producto_configuracion
+                SET comprable_online = %s,
+                    permite_favorito = %s,
+                    cantidad_maxima_por_linea = %s,
+                    updated_at = NOW()
+                WHERE producto_id = %s
+                """,
+                (
+                    data.comprable_online,
+                    data.permite_favorito,
+                    data.cantidad_maxima_por_linea,
+                    producto_id,
+                ),
+            )
+            if anteriores != nuevos:
+                cur.execute(
+                    """
+                    INSERT INTO core.online_producto_configuracion_auditoria (
+                        producto_id, valores_anteriores, valores_nuevos,
+                        admin_username
+                    ) VALUES (%s, %s::jsonb, %s::jsonb, %s)
+                    """,
+                    (
+                        producto_id,
+                        json.dumps(anteriores, default=str),
+                        json.dumps(nuevos, default=str),
+                        user["username"],
+                    ),
+                )
+        conn.commit()
+
+    storefront_activo = bool(producto[5]) and bool(data.publicado_online)
+    return {
+        "producto_id": producto_id,
+        **nuevos,
+        "comprable_efectivo": bool(
+            storefront_activo
+            and data.comprable_online
+            and categoria in PURCHASABLE_CATEGORIES
+            and tipo_producto == "producto_fisico"
+        ),
+        "favorito_efectivo": bool(storefront_activo and data.permite_favorito),
+        "updated": True,
+    }
+
+
+@app.get("/catalogo/inventario/movimientos", summary="Movimientos del inventario global")
+def listar_movimientos_catalogo(
+    sucursal_id: int | None = None,
+    limit: int = 500,
+    user=Depends(get_current_user),
+):
+    require_roles(user, ("admin", "contador"))
+    sucursal_id = force_sucursal(user, sucursal_id)
+    if sucursal_id is None:
+        raise HTTPException(status_code=400, detail="Sucursal es requerida.")
+    with psycopg.connect(DB_CONNINFO) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT movimiento.movimiento_id, movimiento.created_at, movimiento.tipo,
+                       movimiento.cantidad, movimiento.stock_anterior, movimiento.stock_nuevo,
+                       movimiento.costo_unitario, movimiento.proveedor, movimiento.folio,
+                       movimiento.notas, movimiento.created_by, producto.producto_id,
+                       producto.nombre, producto.sku
+                FROM core.catalogo_inventario_movimientos movimiento
+                JOIN core.catalogo_productos producto
+                  ON producto.producto_id = movimiento.producto_id
+                WHERE movimiento.sucursal_id = %s
+                ORDER BY movimiento.created_at DESC, movimiento.movimiento_id DESC
+                LIMIT %s;
+                """,
+                (sucursal_id, max(1, min(limit, 2000))),
+            )
+            rows = cur.fetchall()
+    return [
+        {
+            "movimiento_id": int(row[0]), "fecha_hora": str(row[1]), "tipo": row[2],
+            "cantidad": int(row[3]), "stock_anterior": int(row[4]), "stock_nuevo": int(row[5]),
+            "costo_unitario": float(row[6]) if row[6] is not None else None,
+            "proveedor": row[7], "folio": row[8], "notas": row[9], "usuario": row[10],
+            "producto_id": int(row[11]), "producto": row[12], "sku": row[13],
+        }
+        for row in rows
+    ]
+
+
+def _phase1b_update_inventory(cur, producto_id: int, sucursal_id: int, expected_stock: int, stock: int, user: dict[str, Any], *, tipo: str, notas: str, costo_unitario: Decimal | None = None, proveedor: str | None = None, folio: str | None = None):
+    cur.execute(
+        """
+        SELECT controla_stock
+        FROM core.catalogo_productos
+        WHERE producto_id = %s;
+        """,
+        (producto_id,),
+    )
+    product = cur.fetchone()
+    if product is None:
+        raise HTTPException(status_code=404, detail="Producto no existe.")
+    if product[0] is not True:
+        raise HTTPException(status_code=400, detail="Este producto no controla existencias.")
+
+    cur.execute(
+        """
+        INSERT INTO core.catalogo_inventario_sucursal (
+            producto_id, sucursal_id, stock, stock_reservado,
+            stock_minimo, disponible_venta, version
+        ) VALUES (%s, %s, 0, 0, 0, true, 0)
+        ON CONFLICT (producto_id, sucursal_id) DO NOTHING;
+        """,
+        (producto_id, sucursal_id),
+    )
+    cur.execute(
+        """
+        SELECT stock, version
+        FROM core.catalogo_inventario_sucursal
+        WHERE producto_id = %s
+          AND sucursal_id = %s
+        FOR UPDATE;
+        """,
+        (producto_id, sucursal_id),
+    )
+    inventory = cur.fetchone()
+    if inventory is None:
+        raise HTTPException(status_code=409, detail="No se pudo preparar el inventario para esta sucursal.")
+    current_stock = int(inventory[0])
+    current_version = int(inventory[1])
+    if current_stock != expected_stock:
+        raise HTTPException(status_code=409, detail=f"El stock cambió. Stock actual: {current_stock}.")
+    if stock < 0:
+        raise HTTPException(status_code=400, detail="El stock no puede ser negativo.")
+    cur.execute(
+        """
+        UPDATE core.catalogo_inventario_sucursal
+        SET stock = %s, version = version + 1, updated_at = NOW(),
+            costo_promedio = COALESCE(%s, costo_promedio)
+        WHERE producto_id = %s AND sucursal_id = %s AND version = %s
+        RETURNING stock, version;
+        """,
+        (stock, costo_unitario, producto_id, sucursal_id, current_version),
+    )
+    updated_inventory = cur.fetchone()
+    if updated_inventory is None:
+        raise HTTPException(status_code=409, detail="El inventario cambió durante la actualización. Recarga e intenta de nuevo.")
+    if stock != current_stock:
+        cur.execute(
+            """
+            INSERT INTO core.catalogo_inventario_movimientos (
+                producto_id, sucursal_id, tipo, cantidad, stock_anterior, stock_nuevo,
+                costo_unitario, proveedor, folio, notas, created_by
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s);
+            """,
+            (producto_id, sucursal_id, tipo, stock - current_stock, current_stock, stock,
+             costo_unitario, proveedor, folio, notas, user["username"]),
+        )
+    return stock
+
+
+@app.patch("/catalogo/inventario/{producto_id}/stock", summary="Actualizar stock del catálogo global")
+def actualizar_stock_catalogo(
+    producto_id: int,
+    data: InventarioStockUpdate,
+    sucursal_id: int | None = None,
+    user=Depends(get_current_user),
+):
+    require_roles(user, ("admin",))
+    sucursal_id = force_sucursal(user, sucursal_id)
+    if sucursal_id is None:
+        raise HTTPException(status_code=400, detail="Sucursal es requerida.")
+    with psycopg.connect(DB_CONNINFO) as conn:
+        with conn.cursor() as cur:
+            stock = _phase1b_update_inventory(
+                cur, producto_id, sucursal_id, data.expected_stock, data.stock, user,
+                tipo="conteo_fisico", notas="Ajuste rápido de existencias",
+            )
+        conn.commit()
+    return {"producto_id": producto_id, "stock": stock, "updated": True}
+
+
+@app.patch("/catalogo/inventario/{producto_id}", summary="Actualizar precio, costo o stock global")
+def actualizar_producto_catalogo(
+    producto_id: int,
+    data: InventarioProductoUpdate,
+    sucursal_id: int | None = None,
+    user=Depends(get_current_user),
+):
+    require_roles(user, ("admin",))
+    sucursal_id = force_sucursal(user, sucursal_id)
+    if sucursal_id is None:
+        raise HTTPException(status_code=400, detail="Sucursal es requerida.")
+    if data.precio is not None and data.precio < 0:
+        raise HTTPException(status_code=400, detail="El precio no puede ser negativo.")
+    if data.costo_unitario is not None and data.costo_unitario < 0:
+        raise HTTPException(status_code=400, detail="El costo no puede ser negativo.")
+    with psycopg.connect(DB_CONNINFO) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT controla_stock FROM core.catalogo_productos WHERE producto_id = %s FOR UPDATE;",
+                (producto_id,),
+            )
+            product = cur.fetchone()
+            if product is None:
+                raise HTTPException(status_code=404, detail="Producto no existe.")
+            if data.precio is not None or data.costo_unitario is not None:
+                cur.execute(
+                    """
+                    UPDATE core.catalogo_productos
+                    SET precio = COALESCE(%s, precio),
+                        costo_unitario = CASE WHEN %s THEN %s ELSE costo_unitario END,
+                        costo_confirmado = CASE WHEN %s THEN true ELSE costo_confirmado END,
+                        updated_at = NOW()
+                    WHERE producto_id = %s;
+                    """,
+                    (data.precio, data.costo_unitario is not None, data.costo_unitario,
+                     data.costo_unitario is not None, producto_id),
+                )
+            if data.stock is not None:
+                if data.expected_stock is None:
+                    raise HTTPException(status_code=400, detail="expected_stock es requerido.")
+                _phase1b_update_inventory(
+                    cur, producto_id, sucursal_id, data.expected_stock, data.stock, user,
+                    tipo="conteo_fisico", notas="Edición administrativa de producto",
+                    costo_unitario=data.costo_unitario,
+                )
+            cur.execute(
+                """
+                SELECT producto.precio, producto.costo_unitario,
+                       COALESCE(inventario.stock, 0)
+                FROM core.catalogo_productos producto
+                LEFT JOIN core.catalogo_inventario_sucursal inventario
+                  ON inventario.producto_id = producto.producto_id AND inventario.sucursal_id = %s
+                WHERE producto.producto_id = %s;
+                """,
+                (sucursal_id, producto_id),
+            )
+            row = cur.fetchone()
+        conn.commit()
+    return {
+        "producto_id": producto_id, "precio": float(row[0] or 0),
+        "costo_unitario": float(row[1]) if row[1] is not None else None,
+        "stock": int(row[2] or 0), "updated": True,
+    }
+
+
+@app.post("/catalogo/inventario/{producto_id}/movimientos", summary="Registrar movimiento del catálogo global")
+def registrar_movimiento_catalogo(
+    producto_id: int,
+    data: InventarioMovimientoIn,
+    user=Depends(get_current_user),
+):
+    require_roles(user, ("admin",))
+    data.sucursal_id = force_sucursal(user, data.sucursal_id)
+    sanitize_model_strings(data)
+    if data.sucursal_id is None:
+        raise HTTPException(status_code=400, detail="Sucursal es requerida.")
+    tipo = normalize_controlled_token(data.tipo)
+    if tipo not in {"entrada_compra", "conteo_fisico", "ajuste_manual"}:
+        raise HTTPException(status_code=400, detail="Tipo de movimiento inválido.")
+    if tipo == "conteo_fisico":
+        target_stock = int(data.cantidad)
+    else:
+        target_stock = int(data.expected_stock) + int(data.cantidad)
+    if tipo == "entrada_compra" and (data.costo_unitario is None or data.costo_unitario < 0):
+        raise HTTPException(status_code=400, detail="El costo unitario es requerido para una compra.")
+    with psycopg.connect(DB_CONNINFO) as conn:
+        with conn.cursor() as cur:
+            stock = _phase1b_update_inventory(
+                cur, producto_id, data.sucursal_id, data.expected_stock, target_stock, user,
+                tipo=tipo, notas=data.notas or "Movimiento de inventario",
+                costo_unitario=data.costo_unitario, proveedor=data.proveedor, folio=data.folio,
+            )
+            if data.costo_unitario is not None:
+                cur.execute(
+                    """
+                    UPDATE core.catalogo_productos
+                    SET costo_unitario = %s, costo_confirmado = true, updated_at = NOW()
+                    WHERE producto_id = %s;
+                    """,
+                    (data.costo_unitario, producto_id),
+                )
+        conn.commit()
+    return {"producto_id": producto_id, "stock": stock, "created": True}
+
+
+@app.get("/pacientes/{paciente_id}/prescripciones-opticas", summary="Listar recetas ópticas del paciente")
+def listar_prescripciones_opticas(paciente_id: int, user=Depends(get_current_user)):
+    require_roles(user, ("admin", "recepcion", "doctor"))
+    with psycopg.connect(DB_CONNINFO) as conn:
+        with conn.cursor() as cur:
+            _phase1b_patient_row(cur, paciente_id)
+            cur.execute(
+                """
+                SELECT prescripcion_id, paciente_id, sucursal_captura_id, historia_id,
+                       origen, referencia_externa, fecha_prescripcion,
+                       od_esfera, od_cilindro, od_eje, od_adicion,
+                       oi_esfera, oi_cilindro, oi_eje, oi_adicion,
+                       distancia_pupilar, prisma, base_prisma, notas,
+                       created_by, created_at
+                FROM core.prescripciones_opticas
+                WHERE paciente_id = %s AND activo = true
+                ORDER BY fecha_prescripcion DESC NULLS LAST, prescripcion_id DESC;
+                """,
+                (paciente_id,),
+            )
+            rows = cur.fetchall()
+    keys = (
+        "prescripcion_id", "paciente_id", "sucursal_captura_id", "historia_id",
+        "origen", "referencia_externa", "fecha_prescripcion", "od_esfera",
+        "od_cilindro", "od_eje", "od_adicion", "oi_esfera", "oi_cilindro",
+        "oi_eje", "oi_adicion", "distancia_pupilar", "prisma", "base_prisma",
+        "notas", "created_by", "created_at",
+    )
+    return [
+        {key: (str(value) if key in {"fecha_prescripcion", "created_at"} and value is not None else value)
+         for key, value in zip(keys, row)}
+        for row in rows
+    ]
+
+
+@app.post("/pacientes/{paciente_id}/prescripciones-opticas", summary="Crear receta óptica inmutable")
+def crear_prescripcion_optica(
+    paciente_id: int,
+    data: PrescripcionOpticaCreate,
+    user=Depends(get_current_user),
+):
+    require_roles(user, ("admin", "recepcion", "doctor"))
+    data.sucursal_captura_id = force_sucursal(user, data.sucursal_captura_id)
+    sanitize_model_strings(data)
+    origen = normalize_controlled_token(data.origen)
+    if origen not in {"interna", "externa_cliente"}:
+        raise HTTPException(status_code=400, detail="Origen de receta inválido.")
+    if data.sucursal_captura_id is None:
+        raise HTTPException(status_code=400, detail="Sucursal de captura requerida.")
+    fecha = None
+    if data.fecha_prescripcion:
+        try:
+            fecha = date.fromisoformat(data.fecha_prescripcion)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Fecha de receta inválida.")
+    with psycopg.connect(DB_CONNINFO) as conn:
+        with conn.cursor() as cur:
+            _phase1b_patient_row(cur, paciente_id, lock=True)
+            if data.historia_id is not None:
+                cur.execute(
+                    "SELECT paciente_id FROM core.historias_clinicas WHERE historia_id = %s AND activo = true;",
+                    (data.historia_id,),
+                )
+                history = cur.fetchone()
+                if history is None or int(history[0]) != paciente_id:
+                    raise HTTPException(status_code=400, detail="La historia clínica no pertenece al paciente.")
+            cur.execute(
+                """
+                INSERT INTO core.prescripciones_opticas (
+                    paciente_id, sucursal_captura_id, historia_id, origen,
+                    referencia_externa, fecha_prescripcion,
+                    od_esfera, od_cilindro, od_eje, od_adicion,
+                    oi_esfera, oi_cilindro, oi_eje, oi_adicion,
+                    distancia_pupilar, prisma, base_prisma, notas, created_by
+                ) VALUES (
+                    %s, %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s, %s
+                ) RETURNING prescripcion_id;
+                """,
+                (
+                    paciente_id, data.sucursal_captura_id, data.historia_id, origen,
+                    data.referencia_externa, fecha, data.od_esfera, data.od_cilindro,
+                    data.od_eje, data.od_adicion, data.oi_esfera, data.oi_cilindro,
+                    data.oi_eje, data.oi_adicion, data.distancia_pupilar,
+                    data.prisma, data.base_prisma, data.notas, user["username"],
+                ),
+            )
+            prescripcion_id = int(cur.fetchone()[0])
+        conn.commit()
+    return {"prescripcion_id": prescripcion_id, "created": True, "immutable": True}
+
+
+def _phase1b_variant_rows(cur, variante_ids: set[int]) -> dict[int, dict[str, Any]]:
+    if not variante_ids:
+        return {}
+    cur.execute(
+        """
+        SELECT variante_id, producto_id, codigo, nombre, precio_ajuste_override,
+               costo_unitario, costo_confirmado, activo
+        FROM core.catalogo_producto_variantes
+        WHERE variante_id = ANY(%s::bigint[]);
+        """,
+        (sorted(variante_ids),),
+    )
+    rows = {
+        int(row[0]): {
+            "variante_id": int(row[0]), "producto_id": int(row[1]),
+            "codigo": row[2], "nombre": row[3],
+            "precio_ajuste_override": _money(row[4]) if row[4] is not None else None,
+            "costo_unitario": _money(row[5]) if row[5] is not None else None,
+            "costo_confirmado": row[6] is True, "activo": row[7] is True,
+        }
+        for row in cur.fetchall()
+    }
+    missing = variante_ids - set(rows)
+    if missing:
+        raise HTTPException(status_code=404, detail=f"Variantes inexistentes: {sorted(missing)}")
+    if any(not row["activo"] for row in rows.values()):
+        raise HTTPException(status_code=400, detail="Una variante seleccionada está inactiva.")
+    return rows
+
+
+def _phase1b_validate_prescriptions(cur, paciente_id: int, prescripcion_ids: set[int]) -> dict[int, int]:
+    if not prescripcion_ids:
+        return {}
+    cur.execute(
+        """
+        SELECT prescripcion_id, paciente_id, sucursal_captura_id, activo
+        FROM core.prescripciones_opticas
+        WHERE prescripcion_id = ANY(%s::bigint[])
+        FOR SHARE;
+        """,
+        (sorted(prescripcion_ids),),
+    )
+    rows = cur.fetchall()
+    if len(rows) != len(prescripcion_ids):
+        raise HTTPException(status_code=400, detail="Una receta seleccionada no existe.")
+    result: dict[int, int] = {}
+    for prescription_id, owner_id, branch_id, active in rows:
+        if active is not True or int(owner_id) != paciente_id:
+            raise HTTPException(
+                status_code=400,
+                detail="Todas las recetas deben estar activas y pertenecer al paciente de la venta.",
+            )
+        result[int(prescription_id)] = int(branch_id)
+    return result
+
+
+def _phase1b_prepare_lines(
+    cur,
+    data: VentaFase1BCreate,
+    sucursal_id: int,
+    *,
+    lock: bool,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    productos_input = [
+        _phase1b_model_item(item, VentaCatalogoProductoIn, "Producto del catálogo")
+        for item in (data.productos_catalogo or [])
+    ]
+    configuraciones_input = [
+        _phase1b_model_item(item, VentaConfiguracionOpticaIn, "Configuración óptica")
+        for item in (data.configuraciones or [])
+    ]
+    if not productos_input and not configuraciones_input:
+        raise HTTPException(status_code=400, detail="Agrega al menos un producto o configuración óptica.")
+
+    product_ids: set[int] = {int(item.producto_id) for item in productos_input}
+    variant_ids: set[int] = set()
+    prescription_ids: set[int] = set()
+    for config in configuraciones_input:
+        for product_id in (
+            config.armazon_producto_id,
+            config.diseno_producto_id,
+            config.tratamiento_producto_id,
+        ):
+            if product_id is not None:
+                product_ids.add(int(product_id))
+        if config.variante_id is not None:
+            variant_ids.add(int(config.variante_id))
+        if config.prescripcion_id is not None:
+            prescription_ids.add(int(config.prescripcion_id))
+
+    products = _phase1b_catalog_rows(cur, product_ids, sucursal_id, lock=lock)
+    variants = _phase1b_variant_rows(cur, variant_ids)
+    prescription_branches = _phase1b_validate_prescriptions(cur, data.paciente_id, prescription_ids)
+
+    lines: list[dict[str, Any]] = []
+    configs: list[dict[str, Any]] = []
+    used_line_refs: set[str] = set()
+    used_config_refs: set[str] = set()
+
+    def add_line(*, line_ref: str, line_type: str, product: dict[str, Any], quantity: int,
+                 supply: str, config_ref: str | None = None,
+                 variant: dict[str, Any] | None = None, effective_price: Decimal | None = None):
+        clean_ref = str(line_ref or "").strip()
+        if not clean_ref or len(clean_ref) > 100:
+            raise HTTPException(status_code=400, detail="Referencia de línea inválida.")
+        if clean_ref in used_line_refs:
+            raise HTTPException(status_code=400, detail=f"Referencia de línea repetida: {clean_ref}")
+        used_line_refs.add(clean_ref)
+        if quantity <= 0:
+            raise HTTPException(status_code=400, detail="La cantidad debe ser mayor a cero.")
+        price = effective_price if effective_price is not None else product["precio"]
+        cost = variant["costo_unitario"] if variant and variant["costo_unitario"] is not None else product["costo_unitario"]
+        lines.append({
+            "linea_ref": clean_ref, "tipo_linea": line_type,
+            "producto_id": product["producto_id"], "variante_id": variant["variante_id"] if variant else None,
+            "configuracion_ref": config_ref, "sucursal_id": sucursal_id,
+            "sku": product["sku"], "nombre": product["nombre"],
+            "descripcion": product["descripcion"], "categoria": product["categoria"],
+            "subcategoria": product["subcategoria"], "unidad_medida": product["unidad_medida"],
+            "comportamiento_abasto": supply, "controla_stock": product["controla_stock"],
+            "cantidad": quantity, "precio_unitario": price, "costo_unitario": cost,
+            "subtotal": (price * quantity).quantize(Decimal("0.01")),
+            "imagen_url": product["imagen_url"], "slug": product["slug"],
+            "variante_codigo": variant["codigo"] if variant else None,
+            "variante_nombre": variant["nombre"] if variant else None,
+        })
+
+    for item in productos_input:
+        product = products[int(item.producto_id)]
+        if product["categoria"] == "micas":
+            raise HTTPException(
+                status_code=400,
+                detail="Los diseños y tratamientos deben pertenecer a una configuración óptica.",
+            )
+        add_line(
+            line_ref=item.linea_ref, line_type="producto", product=product,
+            quantity=int(item.cantidad), supply=product["comportamiento_abasto_default"],
+        )
+
+    for config in configuraciones_input:
+        config_ref = str(config.configuracion_ref or "").strip()
+        if not config_ref or len(config_ref) > 80 or config_ref in used_config_refs:
+            raise HTTPException(status_code=400, detail="Referencia de configuración inválida o repetida.")
+        used_config_refs.add(config_ref)
+        config_type = normalize_controlled_token(config.tipo_configuracion)
+        visual_use = normalize_controlled_token(config.uso_visual)
+        if config_type not in PHASE1B_CONFIG_TYPES:
+            raise HTTPException(status_code=400, detail="Tipo de configuración óptica inválido.")
+        if visual_use not in PHASE1B_USO_VISUAL:
+            raise HTTPException(status_code=400, detail="Uso visual inválido.")
+        visual_other = (config.uso_visual_otro or "").strip() or None
+        if visual_use == "otro" and not visual_other:
+            raise HTTPException(status_code=400, detail="Describe el uso visual 'otro'.")
+
+        frame = products.get(int(config.armazon_producto_id)) if config.armazon_producto_id else None
+        design = products.get(int(config.diseno_producto_id)) if config.diseno_producto_id else None
+        treatment = products.get(int(config.tratamiento_producto_id)) if config.tratamiento_producto_id else None
+        variant = variants.get(int(config.variante_id)) if config.variante_id else None
+
+        if config_type == "par_completo":
+            if frame is None or design is None:
+                raise HTTPException(status_code=400, detail="Un par completo requiere armazón y diseño.")
+            if frame["categoria"] not in {"lentes_opticos", "lentes_de_sol"} or frame["subcategoria"] != "armazon":
+                raise HTTPException(status_code=400, detail="El armazón seleccionado no es válido.")
+            if frame["categoria"] == "lentes_de_sol" and not frame["permite_graduacion"]:
+                raise HTTPException(status_code=400, detail="Este modelo de lentes de sol no permite graduación.")
+        elif config_type == "solo_micas":
+            if frame is not None or design is None:
+                raise HTTPException(status_code=400, detail="Solo micas usa el armazón del cliente y requiere diseño.")
+        elif frame is not None or design is not None or treatment is None:
+            raise HTTPException(status_code=400, detail="Solo tratamiento requiere exactamente un tratamiento y no compra diseño o armazón.")
+
+        if design is not None and not (design["categoria"] == "micas" and design["subcategoria"] == "diseno"):
+            raise HTTPException(status_code=400, detail="El diseño seleccionado no es válido.")
+        if treatment is not None and not (treatment["categoria"] == "micas" and treatment["subcategoria"] == "tratamiento"):
+            raise HTTPException(status_code=400, detail="El tratamiento seleccionado no es válido.")
+
+        requires_variant = treatment is not None and treatment["sku"] in {"DEMO-TRT-BLUE", "DEMO-TRT-TINT"}
+        if requires_variant and variant is None:
+            raise HTTPException(status_code=400, detail="El filtro azul o tinte requiere una variante.")
+        if variant is not None:
+            if treatment is None or variant["producto_id"] != treatment["producto_id"]:
+                raise HTTPException(status_code=400, detail="La variante no pertenece al tratamiento seleccionado.")
+            if not requires_variant:
+                raise HTTPException(status_code=400, detail="Este tratamiento no acepta variante.")
+
+        default_supply_product = treatment if config_type == "solo_tratamiento" else design
+        supply = normalize_controlled_token(config.comportamiento_abasto_usado)
+        supply = supply or (default_supply_product["comportamiento_abasto_default"] if default_supply_product else "laboratorio_bajo_pedido")
+        if supply not in {"inventario", "laboratorio_bajo_pedido", "fabricacion_interna"}:
+            raise HTTPException(status_code=400, detail="Comportamiento de abasto óptico inválido.")
+
+        non_rx = design is not None and design["sku"] == "DEMO-LENS-NONRX"
+        prescription_optional = config_type == "solo_tratamiento" or non_rx or visual_use == "sin_graduacion"
+        if config.prescripcion_id is None and not prescription_optional:
+            raise HTTPException(status_code=400, detail="La configuración graduada requiere una receta del paciente.")
+        prescription_branch = prescription_branches.get(int(config.prescripcion_id)) if config.prescripcion_id else None
+
+        requested_status = normalize_controlled_token(config.estado_produccion) or "pendiente_anticipo"
+        if requested_status not in PHASE1B_PRODUCCION or requested_status == "cancelado":
+            raise HTTPException(status_code=400, detail="Estado de producción inválido para una configuración activa.")
+
+        frame_price = frame["precio"] if frame else None
+        design_price = design["precio"] if design else None
+        treatment_price = treatment["precio"] if treatment else None
+        variant_override = variant["precio_ajuste_override"] if variant else None
+        effective_treatment_price = (
+            variant_override if variant_override is not None else treatment_price
+        ) if treatment else None
+        subtotal = sum(
+            (value for value in (frame_price, design_price, effective_treatment_price) if value is not None),
+            Decimal("0.00"),
+        ).quantize(Decimal("0.01"))
+
+        configs.append({
+            "configuracion_ref": config_ref, "tipo_configuracion": config_type,
+            "usa_armazon_cliente": config_type in {"solo_micas", "solo_tratamiento"},
+            "armazon_producto_id": frame["producto_id"] if frame else None,
+            "diseno_producto_id": design["producto_id"] if design else None,
+            "tratamiento_producto_id": treatment["producto_id"] if treatment else None,
+            "variante_id": variant["variante_id"] if variant else None,
+            "uso_visual": visual_use, "uso_visual_otro": visual_other,
+            "prescripcion_id": config.prescripcion_id,
+            "sucursal_prescripcion_snapshot": prescription_branch,
+            "comportamiento_abasto_usado": supply,
+            "estado_produccion": requested_status,
+            "precio_armazon_snapshot": frame_price,
+            "precio_diseno_snapshot": design_price,
+            "precio_tratamiento_snapshot": treatment_price,
+            "precio_variante_snapshot": variant_override,
+            "costo_armazon_snapshot": frame["costo_unitario"] if frame else None,
+            "costo_diseno_snapshot": design["costo_unitario"] if design else None,
+            "costo_tratamiento_snapshot": treatment["costo_unitario"] if treatment else None,
+            "costo_variante_snapshot": variant["costo_unitario"] if variant else None,
+            "subtotal_bruto_snapshot": subtotal,
+        })
+        if frame:
+            add_line(
+                line_ref=f"{config_ref}:armazon", line_type="armazon", product=frame,
+                quantity=1, supply="inventario", config_ref=config_ref,
+            )
+        if design:
+            add_line(
+                line_ref=f"{config_ref}:diseno", line_type="diseno", product=design,
+                quantity=1, supply=supply, config_ref=config_ref,
+            )
+        if treatment:
+            add_line(
+                line_ref=f"{config_ref}:tratamiento", line_type="tratamiento", product=treatment,
+                quantity=1, supply=supply, config_ref=config_ref, variant=variant,
+                effective_price=effective_treatment_price,
+            )
+
+    return lines, configs
+
+
+def _phase1b_normalize_discounts(
+    discounts_input: list[VentaDescuentoFase1BIn],
+    *,
+    role: str,
+) -> list[dict[str, Any]]:
+    if role != "admin" and len(discounts_input) > 1:
+        raise HTTPException(status_code=403, detail="Solo administración puede acumular varios descuentos.")
+    discounts: list[dict[str, Any]] = []
+    refs: set[str] = set()
+    orders: set[int] = set()
+    for raw_discount in discounts_input:
+        discount = _phase1b_model_item(raw_discount, VentaDescuentoFase1BIn, "Descuento")
+        ref = str(discount.descuento_ref or "").strip()
+        discount_type = normalize_controlled_token(discount.tipo)
+        reason = normalize_controlled_token(discount.motivo)
+        coupon = normalize_controlled_token(discount.cupon_tipo)
+        scope = normalize_controlled_token(discount.alcance)
+        value = _money(discount.valor)
+        order = int(discount.orden_aplicacion)
+        if not ref or len(ref) > 80 or ref in refs:
+            raise HTTPException(status_code=400, detail="Referencia de descuento inválida o repetida.")
+        if discount_type not in PHASE1B_DESCUENTO_TIPOS:
+            raise HTTPException(status_code=400, detail="Tipo de descuento inválido.")
+        if value <= 0 or (discount_type == "porcentaje" and value > 100):
+            raise HTTPException(status_code=400, detail="Valor de descuento inválido.")
+        if reason not in PHASE1B_DESCUENTO_MOTIVOS:
+            raise HTTPException(status_code=400, detail="Motivo de descuento inválido.")
+        reason_other = (discount.motivo_otro or "").strip() or None
+        if reason == "otro" and not reason_other:
+            raise HTTPException(status_code=400, detail="Describe el motivo de descuento.")
+        if coupon not in PHASE1B_CUPON_TIPOS:
+            raise HTTPException(status_code=400, detail="Tipo de cupón inválido.")
+        if scope not in PHASE1B_DESCUENTO_ALCANCES:
+            raise HTTPException(status_code=400, detail="Alcance de descuento inválido.")
+        if order <= 0 or order in orders:
+            raise HTTPException(status_code=400, detail="orden_aplicacion debe ser positivo y único.")
+        refs.add(ref)
+        orders.add(order)
+        discounts.append({
+            "descuento_ref": ref, "tipo": discount_type, "valor": value,
+            "motivo": reason, "motivo_otro": reason_other, "cupon_tipo": coupon,
+            "alcance": scope, "orden_aplicacion": order,
+            "configuracion_refs": list(dict.fromkeys(discount.configuracion_refs or [])),
+            "linea_refs": list(dict.fromkeys(discount.linea_refs or [])),
+        })
+    if discounts and sorted(orders) != list(range(1, len(discounts) + 1)):
+        raise HTTPException(status_code=400, detail="El orden de descuentos debe ser consecutivo desde 1.")
+    return sorted(discounts, key=lambda item: item["orden_aplicacion"])
+
+
+def _phase1b_allocate_cents(total_cents: int, balances: dict[str, int]) -> dict[str, int]:
+    eligible_total = sum(balances.values())
+    if total_cents < 0 or total_cents > eligible_total:
+        raise ValueError("Invalid allocation")
+    if total_cents == 0:
+        return {key: 0 for key in balances}
+    allocations: dict[str, int] = {}
+    remainders: list[tuple[int, int, str]] = []
+    assigned = 0
+    for key, balance in balances.items():
+        quotient, remainder = divmod(total_cents * balance, eligible_total)
+        allocations[key] = quotient
+        assigned += quotient
+        remainders.append((remainder, balance, key))
+    cents_left = total_cents - assigned
+    for _, _, key in sorted(remainders, key=lambda item: (-item[0], -item[1], item[2])):
+        if cents_left <= 0:
+            break
+        if allocations[key] < balances[key]:
+            allocations[key] += 1
+            cents_left -= 1
+    if cents_left:
+        raise ValueError("Unable to allocate discount exactly")
+    return allocations
+
+
+def _phase1b_calculate_discounts(
+    lines: list[dict[str, Any]],
+    discounts: list[dict[str, Any]],
+) -> dict[str, Any]:
+    line_map = {line["linea_ref"]: line for line in lines}
+    config_refs = {line["configuracion_ref"] for line in lines if line.get("configuracion_ref")}
+    balances = {
+        line["linea_ref"]: int((_money(line["subtotal"]) * 100).to_integral_value())
+        for line in lines
+    }
+    subtotal_cents = sum(balances.values())
+    results: list[dict[str, Any]] = []
+    for discount in discounts:
+        if discount["alcance"] == "venta":
+            eligible_refs = list(line_map)
+        elif discount["alcance"] == "configuracion":
+            requested = set(discount["configuracion_refs"])
+            if not requested or not requested.issubset(config_refs):
+                raise HTTPException(status_code=400, detail="Objetivo de configuración inválido para el descuento.")
+            eligible_refs = [ref for ref, line in line_map.items() if line.get("configuracion_ref") in requested]
+        else:
+            requested = set(discount["linea_refs"])
+            if not requested or not requested.issubset(line_map):
+                raise HTTPException(status_code=400, detail="Objetivo de línea inválido para el descuento.")
+            eligible_refs = [ref for ref in line_map if ref in requested]
+        eligible_balances = {ref: balances[ref] for ref in eligible_refs if balances[ref] > 0}
+        eligible_cents = sum(eligible_balances.values())
+        if eligible_cents <= 0:
+            raise HTTPException(status_code=400, detail="El descuento no tiene saldo elegible restante.")
+        if discount["tipo"] == "porcentaje":
+            amount_cents = int(
+                (Decimal(eligible_cents) * discount["valor"] / Decimal("100"))
+                .quantize(Decimal("1"), rounding=ROUND_DOWN)
+            )
+        else:
+            amount_cents = int((discount["valor"] * 100).to_integral_value())
+            if amount_cents > eligible_cents:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"El descuento fijo #{discount['orden_aplicacion']} supera el saldo elegible restante.",
+                )
+        allocations = _phase1b_allocate_cents(amount_cents, eligible_balances)
+        allocation_rows = []
+        for ref in eligible_refs:
+            if ref not in allocations:
+                continue
+            before = balances[ref]
+            assigned = allocations[ref]
+            after = before - assigned
+            if after < 0:
+                raise HTTPException(status_code=400, detail="Un descuento reduciría una línea por debajo de cero.")
+            balances[ref] = after
+            allocation_rows.append({
+                "linea_ref": ref, "base_antes": Decimal(before) / 100,
+                "monto_asignado": Decimal(assigned) / 100,
+                "base_despues": Decimal(after) / 100,
+            })
+        results.append({
+            **discount,
+            "base_elegible": Decimal(eligible_cents) / 100,
+            "monto_aplicado": Decimal(amount_cents) / 100,
+            "asignaciones": allocation_rows,
+        })
+    discount_total_cents = subtotal_cents - sum(balances.values())
+    return {
+        "subtotal": Decimal(subtotal_cents) / 100,
+        "descuento_total": Decimal(discount_total_cents) / 100,
+        "total": Decimal(sum(balances.values())) / 100,
+        "saldos_linea": {key: Decimal(value) / 100 for key, value in balances.items()},
+        "descuentos": results,
+    }
+
+
+def _phase1b_validate_payments(payments_input: list[VentaPagoIn]) -> list[dict[str, Any]]:
+    payments: list[dict[str, Any]] = []
+    seen_ids: set[int] = set()
+    for raw_payment in payments_input:
+        payment = _phase1b_model_item(raw_payment, VentaPagoIn, "Pago")
+        method = normalize_controlled_token(payment.metodo)
+        if method not in VENTA_METODO_PAGO_ALLOWED:
+            raise HTTPException(status_code=400, detail="Método de pago inválido.")
+        amount = _money(payment.monto)
+        if amount <= 0:
+            raise HTTPException(status_code=400, detail="Cada pago debe ser mayor a cero.")
+        payment_id = int(payment.pago_id) if payment.pago_id is not None else None
+        if payment_id is not None:
+            if payment_id in seen_ids:
+                raise HTTPException(status_code=400, detail="Pago repetido.")
+            seen_ids.add(payment_id)
+        reference = (payment.referencia or "").strip() or None
+        if reference and len(reference) > 120:
+            raise HTTPException(status_code=400, detail="La referencia del pago es demasiado larga.")
+        payments.append({"pago_id": payment_id, "metodo": method, "monto": amount, "referencia": reference})
+    return payments
+
+
+def _phase1b_payment_state(amount_paid: Decimal, total: Decimal, payment_count: int) -> str:
+    if amount_paid <= 0:
+        return "sin_pago"
+    if amount_paid >= total:
+        return "pagada"
+    return "anticipo" if payment_count == 1 else "pago_parcial"
+
+
+def _phase1b_purchase_tokens(lines: list[dict[str, Any]], configs: list[dict[str, Any]]) -> str:
+    tokens: list[str] = []
+    for config in configs:
+        tokens.append(config["tipo_configuracion"])
+    for line in lines:
+        if line.get("configuracion_ref"):
+            continue
+        category = line["categoria"]
+        token = {
+            "lentes_opticos": "armazon_solo",
+            "lentes_de_sol": "lentes_de_sol_sin_graduacion",
+            "examen_de_la_vista": "examen_de_la_vista",
+            "lentes_de_contacto": "lentes_de_contacto",
+            "accesorios_y_refacciones": "accesorios_y_refacciones",
+            "soluciones_y_cuidado": "soluciones_y_cuidado",
+        }.get(category, category)
+        tokens.append(token)
+    return "|".join(dict.fromkeys(tokens))
+
+
+def _phase1b_apply_inventory_delta(
+    cur,
+    *,
+    sucursal_id: int,
+    venta_id: int,
+    old_lines: list[dict[str, Any]],
+    new_lines: list[dict[str, Any]],
+    username: str,
+    movement_type: str,
+):
+    old_quantities: dict[int, int] = {}
+    new_quantities: dict[int, int] = {}
+    for line in old_lines:
+        if line["controla_stock"] and line["comportamiento_abasto"] == "inventario":
+            old_quantities[line["producto_id"]] = old_quantities.get(line["producto_id"], 0) + line["cantidad"]
+    for line in new_lines:
+        if line["controla_stock"] and line["comportamiento_abasto"] == "inventario":
+            new_quantities[line["producto_id"]] = new_quantities.get(line["producto_id"], 0) + line["cantidad"]
+
+    for product_id in sorted(set(old_quantities) | set(new_quantities)):
+        delta_sale = new_quantities.get(product_id, 0) - old_quantities.get(product_id, 0)
+        if delta_sale == 0:
+            continue
+        cur.execute(
+            """
+            SELECT stock
+            FROM core.catalogo_inventario_sucursal
+            WHERE producto_id = %s AND sucursal_id = %s
+            FOR UPDATE;
+            """,
+            (product_id, sucursal_id),
+        )
+        row = cur.fetchone()
+        if row is None:
+            raise HTTPException(status_code=409, detail="Falta inventario por sucursal para un producto físico.")
+        before = int(row[0])
+        after = before - delta_sale
+        if after < 0:
+            raise HTTPException(status_code=409, detail=f"Stock insuficiente para el producto #{product_id}. Disponible: {before}.")
+        cur.execute(
+            """
+            UPDATE core.catalogo_inventario_sucursal
+            SET stock = %s, version = version + 1, updated_at = NOW()
+            WHERE producto_id = %s AND sucursal_id = %s;
+            """,
+            (after, product_id, sucursal_id),
+        )
+        cur.execute(
+            """
+            INSERT INTO core.catalogo_inventario_movimientos (
+                producto_id, sucursal_id, tipo, cantidad, stock_anterior, stock_nuevo,
+                fuente_tipo, fuente_id, notas, created_by
+            ) VALUES (%s, %s, %s, %s, %s, %s, 'venta', %s, %s, %s);
+            """,
+            (
+                product_id, sucursal_id, movement_type, -delta_sale, before, after,
+                venta_id, f"Venta global #{venta_id}", username,
+            ),
+        )
+
+
+def _phase1b_write_payments(
+    cur,
+    *,
+    venta_id: int,
+    payments: list[dict[str, Any]] | None,
+    username: str,
+) -> list[dict[str, Any]]:
+    cur.execute(
+        """
+        SELECT pago_id, metodo, monto, referencia, created_at
+        FROM core.venta_pagos
+        WHERE venta_id = %s AND activo = true
+        ORDER BY created_at, pago_id
+        FOR UPDATE;
+        """,
+        (venta_id,),
+    )
+    existing_rows = cur.fetchall()
+    if payments is None:
+        return [
+            {"pago_id": int(row[0]), "metodo": row[1], "monto": _money(row[2]),
+             "referencia": row[3], "fecha_hora": row[4]}
+            for row in existing_rows
+        ]
+    existing = {int(row[0]): row for row in existing_rows}
+    received_ids: set[int] = set()
+    final: list[dict[str, Any]] = []
+    for payment in payments:
+        payment_id = payment["pago_id"]
+        if payment_id is not None:
+            if payment_id not in existing:
+                raise HTTPException(status_code=400, detail="Un pago no pertenece a esta venta.")
+            received_ids.add(payment_id)
+            cur.execute(
+                """
+                UPDATE core.venta_pagos
+                SET metodo = %s, monto = %s, referencia = %s
+                WHERE pago_id = %s AND venta_id = %s AND activo = true
+                RETURNING pago_id, metodo, monto, referencia, created_at;
+                """,
+                (payment["metodo"], payment["monto"], payment["referencia"], payment_id, venta_id),
+            )
+        else:
+            cur.execute(
+                """
+                INSERT INTO core.venta_pagos (venta_id, metodo, monto, referencia, created_by)
+                VALUES (%s, %s, %s, %s, %s)
+                RETURNING pago_id, metodo, monto, referencia, created_at;
+                """,
+                (venta_id, payment["metodo"], payment["monto"], payment["referencia"], username),
+            )
+        row = cur.fetchone()
+        final.append({
+            "pago_id": int(row[0]), "metodo": row[1], "monto": _money(row[2]),
+            "referencia": row[3], "fecha_hora": row[4],
+        })
+    removed_ids = set(existing) - received_ids
+    if removed_ids:
+        cur.execute(
+            """
+            UPDATE core.venta_pagos
+            SET activo = false
+            WHERE venta_id = %s AND pago_id = ANY(%s::bigint[]);
+            """,
+            (venta_id, sorted(removed_ids)),
+        )
+    return final
+
+
+def _phase1b_insert_configuration_rows(cur, *, venta_id: int, configs: list[dict[str, Any]], paid: Decimal, username: str) -> dict[str, int]:
+    mapping: dict[str, int] = {}
+    for config in configs:
+        status = config["estado_produccion"]
+        if paid > 0 and status == "pendiente_anticipo":
+            status = "listo_para_produccion"
+        cur.execute(
+            """
+            INSERT INTO core.venta_configuraciones_opticas (
+                venta_id, configuracion_ref, tipo_configuracion, usa_armazon_cliente,
+                armazon_producto_id, diseno_producto_id, tratamiento_producto_id,
+                variante_id, uso_visual, uso_visual_otro, prescripcion_id,
+                sucursal_prescripcion_snapshot, comportamiento_abasto_usado,
+                estado_produccion, precio_armazon_snapshot, precio_diseno_snapshot,
+                precio_tratamiento_snapshot, precio_variante_snapshot,
+                costo_armazon_snapshot, costo_diseno_snapshot,
+                costo_tratamiento_snapshot, costo_variante_snapshot,
+                subtotal_bruto_snapshot, created_by
+            ) VALUES (
+                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+            ) RETURNING configuracion_id;
+            """,
+            (
+                venta_id, config["configuracion_ref"], config["tipo_configuracion"],
+                config["usa_armazon_cliente"], config["armazon_producto_id"],
+                config["diseno_producto_id"], config["tratamiento_producto_id"],
+                config["variante_id"], config["uso_visual"], config["uso_visual_otro"],
+                config["prescripcion_id"], config["sucursal_prescripcion_snapshot"],
+                config["comportamiento_abasto_usado"], status,
+                config["precio_armazon_snapshot"], config["precio_diseno_snapshot"],
+                config["precio_tratamiento_snapshot"], config["precio_variante_snapshot"],
+                config["costo_armazon_snapshot"], config["costo_diseno_snapshot"],
+                config["costo_tratamiento_snapshot"], config["costo_variante_snapshot"],
+                config["subtotal_bruto_snapshot"], username,
+            ),
+        )
+        mapping[config["configuracion_ref"]] = int(cur.fetchone()[0])
+    return mapping
+
+
+def _phase1b_insert_detail_rows(cur, *, venta_id: int, lines: list[dict[str, Any]], config_ids: dict[str, int], username: str) -> dict[str, int]:
+    mapping: dict[str, int] = {}
+    for line in lines:
+        cur.execute(
+            """
+            INSERT INTO core.venta_catalogo_detalles (
+                venta_id, configuracion_id, linea_ref, tipo_linea, producto_id,
+                variante_id, sucursal_id, sku_snapshot, nombre_snapshot,
+                descripcion_snapshot, categoria_snapshot, subcategoria_snapshot,
+                unidad_medida_snapshot, comportamiento_abasto_snapshot,
+                controla_stock_snapshot, cantidad, precio_unitario_snapshot,
+                costo_unitario_snapshot, subtotal_bruto_snapshot, created_by
+            ) VALUES (
+                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+            ) RETURNING venta_catalogo_detalle_id;
+            """,
+            (
+                venta_id, config_ids.get(line.get("configuracion_ref")), line["linea_ref"],
+                line["tipo_linea"], line["producto_id"], line["variante_id"],
+                line["sucursal_id"], line["sku"], line["nombre"], line["descripcion"],
+                line["categoria"], line["subcategoria"], line["unidad_medida"],
+                line["comportamiento_abasto"], line["controla_stock"], line["cantidad"],
+                line["precio_unitario"], line["costo_unitario"], line["subtotal"], username,
+            ),
+        )
+        mapping[line["linea_ref"]] = int(cur.fetchone()[0])
+    return mapping
+
+
+def _phase1b_insert_discount_rows(
+    cur,
+    *,
+    venta_id: int,
+    calculation: dict[str, Any],
+    config_ids: dict[str, int],
+    detail_ids: dict[str, int],
+    revision_id: int,
+    username: str,
+):
+    for discount in calculation["descuentos"]:
+        cur.execute(
+            """
+            INSERT INTO core.venta_descuentos (
+                venta_id, descuento_ref, tipo, valor, motivo, motivo_otro,
+                cupon_tipo, alcance, orden_aplicacion, base_elegible_snapshot,
+                monto_aplicado_snapshot, created_by
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            RETURNING descuento_id;
+            """,
+            (
+                venta_id, discount["descuento_ref"], discount["tipo"], discount["valor"],
+                discount["motivo"], discount["motivo_otro"], discount["cupon_tipo"],
+                discount["alcance"], discount["orden_aplicacion"],
+                discount["base_elegible"], discount["monto_aplicado"], username,
+            ),
+        )
+        discount_id = int(cur.fetchone()[0])
+        if discount["alcance"] == "configuracion":
+            for ref in discount["configuracion_refs"]:
+                cur.execute(
+                    """
+                    INSERT INTO core.venta_descuento_objetivos (descuento_id, configuracion_id)
+                    VALUES (%s, %s);
+                    """,
+                    (discount_id, config_ids[ref]),
+                )
+        elif discount["alcance"] == "linea":
+            for ref in discount["linea_refs"]:
+                cur.execute(
+                    """
+                    INSERT INTO core.venta_descuento_objetivos (descuento_id, venta_catalogo_detalle_id)
+                    VALUES (%s, %s);
+                    """,
+                    (discount_id, detail_ids[ref]),
+                )
+        for allocation in discount["asignaciones"]:
+            cur.execute(
+                """
+                INSERT INTO core.venta_descuento_asignaciones (
+                    calculo_revision_id, descuento_id, venta_catalogo_detalle_id,
+                    base_antes, monto_asignado, base_despues
+                ) VALUES (%s, %s, %s, %s, %s, %s);
+                """,
+                (
+                    revision_id, discount_id, detail_ids[allocation["linea_ref"]],
+                    allocation["base_antes"], allocation["monto_asignado"],
+                    allocation["base_despues"],
+                ),
+            )
+
+
+def _phase1b_sale_detail(cur, venta_id: int, role: str) -> dict[str, Any]:
+    cur.execute(
+        """
+        SELECT venta.venta_id, venta.fecha_hora, venta.paciente_id,
+               CONCAT_WS(' ', paciente.primer_nombre, paciente.segundo_nombre,
+                         paciente.apellido_paterno, paciente.apellido_materno),
+               venta.sucursal_id, sucursal.nombre, venta.compra, venta.subtotal,
+               venta.monto_total, venta.metodo_pago, venta.forma_liquidacion,
+               venta.plazo_meses, venta.estado_venta, venta.estado_pago,
+               venta.estado_pedido, venta.notas, contexto.descuento_total,
+               contexto.credito_cliente, contexto.version, contexto.estado
+        FROM core.ventas venta
+        JOIN core.venta_catalogo_contextos contexto ON contexto.venta_id = venta.venta_id
+        JOIN core.pacientes paciente ON paciente.paciente_id = venta.paciente_id
+        JOIN core.sucursales sucursal ON sucursal.sucursal_id = venta.sucursal_id
+        WHERE venta.venta_id = %s;
+        """,
+        (venta_id,),
+    )
+    header = cur.fetchone()
+    if header is None:
+        raise HTTPException(status_code=404, detail="Venta de catálogo no existe.")
+    cur.execute(
+        """
+        SELECT pago_id, metodo, monto, referencia, created_at
+        FROM core.venta_pagos
+        WHERE venta_id = %s AND activo = true
+        ORDER BY created_at, pago_id;
+        """,
+        (venta_id,),
+    )
+    payments = [
+        {"pago_id": int(row[0]), "metodo": row[1], "monto": float(row[2]),
+         "referencia": row[3], "fecha_hora": str(row[4])}
+        for row in cur.fetchall()
+    ]
+    cur.execute(
+        """
+        SELECT detalle.venta_catalogo_detalle_id, detalle.linea_ref,
+               detalle.tipo_linea, detalle.producto_id, detalle.variante_id,
+               detalle.sku_snapshot, detalle.nombre_snapshot,
+               detalle.descripcion_snapshot, detalle.categoria_snapshot,
+               detalle.subcategoria_snapshot, detalle.cantidad,
+               detalle.precio_unitario_snapshot, detalle.costo_unitario_snapshot,
+               detalle.subtotal_bruto_snapshot, detalle.estado_registro,
+               detalle.cantidad_cancelada, imagen.url,
+               config.configuracion_ref, variante.codigo, variante.nombre
+        FROM core.venta_catalogo_detalles detalle
+        LEFT JOIN core.venta_configuraciones_opticas config
+          ON config.configuracion_id = detalle.configuracion_id
+        LEFT JOIN core.catalogo_producto_variantes variante
+          ON variante.variante_id = detalle.variante_id
+        LEFT JOIN LATERAL (
+            SELECT url FROM core.catalogo_producto_imagenes
+            WHERE producto_id = detalle.producto_id AND activo = true
+            ORDER BY es_principal DESC, display_order, producto_imagen_id LIMIT 1
+        ) imagen ON true
+        WHERE detalle.venta_id = %s AND detalle.estado_registro <> 'reemplazado'
+        ORDER BY detalle.venta_catalogo_detalle_id;
+        """,
+        (venta_id,),
+    )
+    products = []
+    for row in cur.fetchall():
+        products.append({
+            "venta_catalogo_detalle_id": int(row[0]), "linea_ref": row[1],
+            "tipo_linea": row[2], "producto_id": int(row[3]), "variante_id": int(row[4]) if row[4] else None,
+            "sku": row[5], "nombre": row[6], "descripcion": row[7], "categoria": row[8],
+            "subcategoria": row[9], "cantidad": int(row[10]), "precio_unitario": float(row[11]),
+            "costo_unitario": float(row[12]) if role in ("admin", "contador") and row[12] is not None else None,
+            "subtotal": float(row[13]), "estado_registro": row[14], "cantidad_cancelada": int(row[15]),
+            "imagen_url": row[16], "configuracion_ref": row[17],
+            "variante_codigo": row[18], "variante_nombre": row[19],
+        })
+    cur.execute(
+        """
+        SELECT configuracion_id, configuracion_ref, tipo_configuracion,
+               usa_armazon_cliente, armazon_producto_id, diseno_producto_id,
+               tratamiento_producto_id, variante_id, uso_visual, uso_visual_otro,
+               prescripcion_id, sucursal_prescripcion_snapshot,
+               comportamiento_abasto_usado, estado_produccion,
+               precio_armazon_snapshot, precio_diseno_snapshot,
+               precio_tratamiento_snapshot, precio_variante_snapshot,
+               costo_armazon_snapshot, costo_diseno_snapshot,
+               costo_tratamiento_snapshot, costo_variante_snapshot,
+               subtotal_bruto_snapshot, estado_registro
+        FROM core.venta_configuraciones_opticas
+        WHERE venta_id = %s AND estado_registro <> 'reemplazado'
+        ORDER BY configuracion_id;
+        """,
+        (venta_id,),
+    )
+    configurations = []
+    for row in cur.fetchall():
+        config = {
+            "configuracion_id": int(row[0]), "configuracion_ref": row[1],
+            "tipo_configuracion": row[2], "usa_armazon_cliente": bool(row[3]),
+            "armazon_producto_id": int(row[4]) if row[4] else None,
+            "diseno_producto_id": int(row[5]) if row[5] else None,
+            "tratamiento_producto_id": int(row[6]) if row[6] else None,
+            "variante_id": int(row[7]) if row[7] else None,
+            "uso_visual": row[8], "uso_visual_otro": row[9],
+            "prescripcion_id": int(row[10]) if row[10] else None,
+            "sucursal_prescripcion_snapshot": int(row[11]) if row[11] else None,
+            "comportamiento_abasto_usado": row[12], "estado_produccion": row[13],
+            "precio_armazon_snapshot": float(row[14]) if row[14] is not None else None,
+            "precio_diseno_snapshot": float(row[15]) if row[15] is not None else None,
+            "precio_tratamiento_snapshot": float(row[16]) if row[16] is not None else None,
+            "precio_variante_snapshot": float(row[17]) if row[17] is not None else None,
+            "subtotal_bruto_snapshot": float(row[22]), "estado_registro": row[23],
+        }
+        if role in ("admin", "contador"):
+            config.update({
+                "costo_armazon_snapshot": float(row[18]) if row[18] is not None else None,
+                "costo_diseno_snapshot": float(row[19]) if row[19] is not None else None,
+                "costo_tratamiento_snapshot": float(row[20]) if row[20] is not None else None,
+                "costo_variante_snapshot": float(row[21]) if row[21] is not None else None,
+            })
+        configurations.append(config)
+    cur.execute(
+        """
+        SELECT descuento.descuento_id, descuento.descuento_ref, descuento.tipo,
+               descuento.valor, descuento.motivo, descuento.motivo_otro,
+               descuento.cupon_tipo, descuento.alcance, descuento.orden_aplicacion,
+               descuento.base_elegible_snapshot, descuento.monto_aplicado_snapshot,
+               COALESCE(array_agg(DISTINCT config.configuracion_ref)
+                        FILTER (WHERE config.configuracion_ref IS NOT NULL), ARRAY[]::text[]),
+               COALESCE(array_agg(DISTINCT detalle.linea_ref)
+                        FILTER (WHERE detalle.linea_ref IS NOT NULL), ARRAY[]::text[])
+        FROM core.venta_descuentos descuento
+        LEFT JOIN core.venta_descuento_objetivos objetivo
+          ON objetivo.descuento_id = descuento.descuento_id
+        LEFT JOIN core.venta_configuraciones_opticas config
+          ON config.configuracion_id = objetivo.configuracion_id
+        LEFT JOIN core.venta_catalogo_detalles detalle
+          ON detalle.venta_catalogo_detalle_id = objetivo.venta_catalogo_detalle_id
+        WHERE descuento.venta_id = %s AND descuento.estado = 'activo'
+        GROUP BY descuento.descuento_id
+        ORDER BY descuento.orden_aplicacion;
+        """,
+        (venta_id,),
+    )
+    discounts = [
+        {
+            "descuento_id": int(row[0]), "descuento_ref": row[1], "tipo": row[2],
+            "valor": float(row[3]), "motivo": row[4], "motivo_otro": row[5],
+            "cupon_tipo": row[6], "alcance": row[7], "orden_aplicacion": int(row[8]),
+            "base_elegible": float(row[9]), "monto_aplicado": float(row[10]),
+            "configuracion_refs": list(row[11] or []), "linea_refs": list(row[12] or []),
+        }
+        for row in cur.fetchall()
+    ]
+    amount_paid = round(sum(item["monto"] for item in payments), 2)
+    total = float(header[8] or 0)
+    return {
+        "venta_id": int(header[0]), "fecha_hora": str(header[1]),
+        "paciente_id": int(header[2]), "paciente_nombre": header[3],
+        "sucursal_id": int(header[4]), "sucursal_nombre": header[5],
+        "compra": header[6], "subtotal": float(header[7] or 0), "monto_total": total,
+        "metodo_pago": header[9], "forma_liquidacion": header[10],
+        "plazo_meses": int(header[11]) if header[11] is not None else None,
+        "estado_venta": header[12], "estado_pago": header[13], "estado_pedido": header[14],
+        "notas": None if role == "contador" else header[15],
+        "descuento_porcentaje": 0, "descuento_monto": float(header[16] or 0),
+        "credito_cliente": float(header[17] or 0), "version_catalogo": int(header[18]),
+        "estado_catalogo": header[19], "origen_catalogo": "fase1b",
+        "pagos": payments, "productos": products, "configuraciones": configurations,
+        "descuentos": discounts, "monto_pagado": amount_paid,
+        "saldo_pendiente": max(0.0, round(total - amount_paid, 2)),
+    }
+
+
+def _phase1b_order_status(configs: list[dict[str, Any]]) -> str:
+    statuses = {config["estado_produccion"] for config in configs}
+    if not statuses:
+        return "entregado"
+    if statuses == {"entregado"}:
+        return "entregado"
+    if statuses.issubset({"listo_para_entregar", "entregado"}):
+        return "listo_entregar"
+    if statuses & {"en_produccion", "listo_para_produccion"}:
+        return "en_fabricacion"
+    return "pendiente_fabricacion"
+
+
+def _phase1b_save_sale(
+    data: VentaFase1BCreate,
+    user: dict[str, Any],
+    *,
+    venta_id: int | None = None,
+) -> dict[str, Any]:
+    require_roles(user, ("admin", "recepcion", "doctor"))
+    data.sucursal_id = force_sucursal(user, data.sucursal_id)
+    data = _phase1b_normalize_sale_input(data)
+    payments_input_raw = data.pagos
+    if data.sucursal_id is None:
+        raise HTTPException(status_code=400, detail="Sucursal es requerida.")
+    branch_id = int(data.sucursal_id)
+    sale_state = normalize_controlled_token(data.estado_venta) or "confirmada"
+    if sale_state not in VENTA_ESTADO_ALLOWED or sale_state in {"cancelada", "devuelta"}:
+        raise HTTPException(status_code=400, detail="Estado de venta inválido para guardar una venta activa.")
+    liquidation = normalize_controlled_token(data.forma_liquidacion) or "pago_completo"
+    if liquidation not in VENTA_FORMA_LIQUIDACION_ALLOWED:
+        raise HTTPException(status_code=400, detail="Forma de liquidación inválida.")
+    if liquidation in {"meses_sin_intereses", "meses_con_intereses"}:
+        if data.plazo_meses not in VENTA_PLAZO_MESES_ALLOWED:
+            raise HTTPException(status_code=400, detail="Selecciona un plazo válido.")
+    else:
+        data.plazo_meses = None
+    payments_normalized = (
+        _phase1b_validate_payments(list(payments_input_raw or []))
+        if payments_input_raw is not None
+        else None
+    )
+    discounts_normalized = _phase1b_normalize_discounts(list(data.descuentos or []), role=user["rol"])
+
+    with psycopg.connect(DB_CONNINFO) as conn:
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SELECT activa FROM core.sucursales WHERE sucursal_id = %s FOR SHARE;", (branch_id,))
+                branch = cur.fetchone()
+                if branch is None or branch[0] is not True:
+                    raise HTTPException(status_code=400, detail="Sucursal inexistente o inactiva.")
+                _phase1b_patient_row(cur, data.paciente_id, lock=True)
+
+                is_edit = venta_id is not None
+                previous_version = 0
+                old_lines: list[dict[str, Any]] = []
+                old_status_by_ref: dict[str, str] = {}
+                if is_edit:
+                    cur.execute(
+                        """
+                        SELECT contexto.version
+                        FROM core.ventas venta
+                        JOIN core.venta_catalogo_contextos contexto
+                          ON contexto.venta_id = venta.venta_id
+                        WHERE venta.venta_id = %s AND venta.sucursal_id = %s
+                          AND venta.activo = true AND contexto.estado = 'activo'
+                        FOR UPDATE OF venta, contexto;
+                        """,
+                        (venta_id, branch_id),
+                    )
+                    context = cur.fetchone()
+                    if context is None:
+                        raise HTTPException(status_code=404, detail="Venta Phase 1B no existe o no está activa.")
+                    previous_version = int(context[0])
+                    cur.execute(
+                        """
+                        SELECT producto_id, GREATEST(cantidad - cantidad_cancelada, 0),
+                               controla_stock_snapshot, comportamiento_abasto_snapshot
+                        FROM core.venta_catalogo_detalles
+                        WHERE venta_id = %s AND estado_registro = 'activo'
+                        FOR UPDATE;
+                        """,
+                        (venta_id,),
+                    )
+                    old_lines = [
+                        {"producto_id": int(row[0]), "cantidad": int(row[1]),
+                         "controla_stock": bool(row[2]), "comportamiento_abasto": row[3]}
+                        for row in cur.fetchall()
+                    ]
+                    cur.execute(
+                        """
+                        SELECT configuracion_ref, estado_produccion
+                        FROM core.venta_configuraciones_opticas
+                        WHERE venta_id = %s AND estado_registro = 'activo';
+                        """,
+                        (venta_id,),
+                    )
+                    old_status_by_ref = {row[0]: row[1] for row in cur.fetchall()}
+
+                lines, configs = _phase1b_prepare_lines(cur, data, branch_id, lock=True)
+                config_inputs = {item.configuracion_ref: item for item in (data.configuraciones or [])}
+                for config in configs:
+                    source = config_inputs.get(config["configuracion_ref"])
+                    if source is not None and source.estado_produccion is None:
+                        config["estado_produccion"] = old_status_by_ref.get(
+                            config["configuracion_ref"], config["estado_produccion"]
+                        )
+                calculation = _phase1b_calculate_discounts(lines, discounts_normalized)
+                subtotal = _money(calculation["subtotal"])
+                discount_total = _money(calculation["descuento_total"])
+                final_total = _money(calculation["total"])
+                purchase_tokens = _phase1b_purchase_tokens(lines, configs)
+
+                if not is_edit:
+                    cur.execute(
+                        """
+                        INSERT INTO core.ventas (
+                            sucursal_id, paciente_id, compra, subtotal,
+                            descuento_porcentaje, descuento_monto, descuento_motivo,
+                            cupon_tipo, monto_total, metodo_pago, forma_liquidacion,
+                            plazo_meses, adelanto_aplica, adelanto_monto,
+                            adelanto_metodo, estado_venta, estado_pago,
+                            estado_pedido, notas, created_by
+                        ) VALUES (
+                            %s, %s, %s, %s, 0, %s, %s, %s, %s,
+                            'efectivo', %s, %s, false, NULL, NULL,
+                            %s, 'sin_pago', %s, %s, %s
+                        ) RETURNING venta_id;
+                        """,
+                        (
+                            branch_id, data.paciente_id, purchase_tokens, subtotal,
+                            discount_total,
+                            calculation["descuentos"][0]["motivo"] if calculation["descuentos"] else None,
+                            calculation["descuentos"][0]["cupon_tipo"] if calculation["descuentos"] else None,
+                            final_total, liquidation, data.plazo_meses, sale_state,
+                            _phase1b_order_status(configs), data.notas, user["username"],
+                        ),
+                    )
+                    venta_id = int(cur.fetchone()[0])
+                    payments_for_write = payments_normalized or []
+                else:
+                    payments_for_write = payments_normalized
+
+                payments = _phase1b_write_payments(
+                    cur, venta_id=venta_id, payments=payments_for_write, username=user["username"]
+                )
+                amount_paid = sum((item["monto"] for item in payments), Decimal("0.00")).quantize(Decimal("0.01"))
+                if not is_edit and amount_paid > final_total:
+                    raise HTTPException(status_code=400, detail="La suma de pagos supera el total de la venta.")
+                customer_credit = max(Decimal("0.00"), amount_paid - final_total)
+                payment_state = _phase1b_payment_state(amount_paid, final_total, len(payments))
+                payment_methods = list(dict.fromkeys(item["metodo"] for item in payments))
+                payment_method = "|".join(payment_methods) if payment_methods else "efectivo"
+                if liquidation not in {"meses_sin_intereses", "meses_con_intereses"}:
+                    if amount_paid <= 0:
+                        liquidation = "pago_completo"
+                    elif amount_paid < final_total:
+                        liquidation = "adelanto_apartado"
+                    else:
+                        liquidation = "pago_mixto" if len(payment_methods) > 1 else "pago_completo"
+                deposit_applies = amount_paid > 0 and amount_paid < final_total
+                deposit_method = payment_methods[0] if deposit_applies and len(payment_methods) == 1 else None
+
+                _phase1b_apply_inventory_delta(
+                    cur, sucursal_id=branch_id, venta_id=venta_id,
+                    old_lines=old_lines, new_lines=lines, username=user["username"],
+                    movement_type="edicion_venta" if is_edit else "salida_venta",
+                )
+
+                if is_edit:
+                    cur.execute(
+                        """
+                        UPDATE core.venta_configuraciones_opticas
+                        SET estado_registro = 'reemplazado'
+                        WHERE venta_id = %s AND estado_registro = 'activo';
+                        """,
+                        (venta_id,),
+                    )
+                    cur.execute(
+                        """
+                        UPDATE core.venta_catalogo_detalles
+                        SET estado_registro = 'reemplazado'
+                        WHERE venta_id = %s AND estado_registro = 'activo';
+                        """,
+                        (venta_id,),
+                    )
+                    cur.execute(
+                        """
+                        UPDATE core.venta_descuentos
+                        SET estado = 'reemplazado'
+                        WHERE venta_id = %s AND estado = 'activo';
+                        """,
+                        (venta_id,),
+                    )
+                    cur.execute(
+                        "UPDATE core.venta_calculo_revisiones SET es_actual = false WHERE venta_id = %s AND es_actual = true;",
+                        (venta_id,),
+                    )
+
+                config_ids = _phase1b_insert_configuration_rows(
+                    cur, venta_id=venta_id, configs=configs, paid=amount_paid, username=user["username"]
+                )
+                detail_ids = _phase1b_insert_detail_rows(
+                    cur, venta_id=venta_id, lines=lines, config_ids=config_ids, username=user["username"]
+                )
+                revision_number = previous_version + 1
+                cur.execute(
+                    """
+                    INSERT INTO core.venta_calculo_revisiones (
+                        venta_id, numero_revision, motivo, subtotal_bruto,
+                        descuento_total, total_neto, monto_pagado_snapshot,
+                        saldo_pendiente, credito_cliente, es_actual, created_by
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, true, %s)
+                    RETURNING calculo_revision_id;
+                    """,
+                    (
+                        venta_id, revision_number, "edicion" if is_edit else "creacion",
+                        subtotal, discount_total, final_total, amount_paid,
+                        max(Decimal("0.00"), final_total - amount_paid), customer_credit,
+                        user["username"],
+                    ),
+                )
+                revision_id = int(cur.fetchone()[0])
+                _phase1b_insert_discount_rows(
+                    cur, venta_id=venta_id, calculation=calculation,
+                    config_ids=config_ids, detail_ids=detail_ids,
+                    revision_id=revision_id, username=user["username"],
+                )
+
+                if is_edit:
+                    cur.execute(
+                        """
+                        UPDATE core.venta_catalogo_contextos
+                        SET version = %s, subtotal_bruto = %s, descuento_total = %s,
+                            total_neto = %s, credito_cliente = %s,
+                            updated_by = %s, updated_at = NOW()
+                        WHERE venta_id = %s;
+                        """,
+                        (revision_number, subtotal, discount_total, final_total,
+                         customer_credit, user["username"], venta_id),
+                    )
+                else:
+                    cur.execute(
+                        """
+                        INSERT INTO core.venta_catalogo_contextos (
+                            venta_id, version, subtotal_bruto, descuento_total,
+                            total_neto, credito_cliente, created_by
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s);
+                        """,
+                        (venta_id, revision_number, subtotal, discount_total,
+                         final_total, customer_credit, user["username"]),
+                    )
+
+                order_status = _phase1b_order_status([
+                    {**config, "estado_produccion": (
+                        "listo_para_produccion"
+                        if amount_paid > 0 and config["estado_produccion"] == "pendiente_anticipo"
+                        else config["estado_produccion"]
+                    )}
+                    for config in configs
+                ])
+                cur.execute(
+                    """
+                    UPDATE core.ventas
+                    SET paciente_id = %s, compra = %s, subtotal = %s,
+                        descuento_porcentaje = 0, descuento_monto = %s,
+                        descuento_motivo = %s, cupon_tipo = %s,
+                        monto_total = %s, metodo_pago = %s,
+                        forma_liquidacion = %s, plazo_meses = %s,
+                        adelanto_aplica = %s, adelanto_monto = %s,
+                        adelanto_metodo = %s, estado_venta = %s,
+                        estado_pago = %s, estado_pedido = %s,
+                        notas = %s, updated_at = NOW()
+                    WHERE venta_id = %s AND sucursal_id = %s AND activo = true;
+                    """,
+                    (
+                        data.paciente_id, purchase_tokens, subtotal, discount_total,
+                        calculation["descuentos"][0]["motivo"] if calculation["descuentos"] else None,
+                        calculation["descuentos"][0]["cupon_tipo"] if calculation["descuentos"] else None,
+                        final_total, payment_method, liquidation, data.plazo_meses,
+                        deposit_applies, amount_paid if deposit_applies else None,
+                        deposit_method, sale_state, payment_state, order_status,
+                        data.notas, venta_id, branch_id,
+                    ),
+                )
+                result = _phase1b_sale_detail(cur, venta_id, user["rol"])
+            conn.commit()
+            return result
+        except HTTPException:
+            conn.rollback()
+            raise
+        except Exception as exc:
+            conn.rollback()
+            raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.post("/ventas/fase1b/preview", summary="Previsualizar venta y descuentos Phase 1B")
+def previsualizar_venta_fase1b(data: VentaFase1BCreate, user=Depends(get_current_user)):
+    require_roles(user, ("admin", "recepcion", "doctor"))
+    data.sucursal_id = force_sucursal(user, data.sucursal_id)
+    data = _phase1b_normalize_sale_input(data)
+    if data.sucursal_id is None:
+        raise HTTPException(status_code=400, detail="Sucursal es requerida.")
+    with psycopg.connect(DB_CONNINFO) as conn:
+        with conn.cursor() as cur:
+            _phase1b_patient_row(cur, data.paciente_id)
+            lines, configs = _phase1b_prepare_lines(cur, data, int(data.sucursal_id), lock=False)
+            discounts = _phase1b_normalize_discounts(list(data.descuentos or []), role=user["rol"])
+            calculation = _phase1b_calculate_discounts(lines, discounts)
+    return {
+        "subtotal": float(calculation["subtotal"]),
+        "descuento_total": float(calculation["descuento_total"]),
+        "total": float(calculation["total"]),
+        "descuentos": [
+            {
+                "descuento_ref": item["descuento_ref"], "tipo": item["tipo"],
+                "valor": float(item["valor"]), "orden_aplicacion": item["orden_aplicacion"],
+                "base_elegible": float(item["base_elegible"]),
+                "monto_aplicado": float(item["monto_aplicado"]),
+                "asignaciones": [
+                    {key: (float(value) if isinstance(value, Decimal) else value) for key, value in allocation.items()}
+                    for allocation in item["asignaciones"]
+                ],
+            }
+            for item in calculation["descuentos"]
+        ],
+        "lineas": [
+            {
+                "linea_ref": line["linea_ref"], "configuracion_ref": line.get("configuracion_ref"),
+                "producto_id": line["producto_id"], "nombre": line["nombre"],
+                "cantidad": line["cantidad"], "precio_unitario": float(line["precio_unitario"]),
+                "subtotal": float(line["subtotal"]),
+                "saldo_despues_descuentos": float(calculation["saldos_linea"][line["linea_ref"]]),
+            }
+            for line in lines
+        ],
+        "configuraciones": [
+            {key: (float(value) if isinstance(value, Decimal) else value)
+             for key, value in config.items() if not key.startswith("costo_") or user["rol"] == "admin"}
+            for config in configs
+        ],
+    }
+
+
+@app.post("/ventas/fase1b", summary="Crear venta con catálogo global")
+def crear_venta_fase1b(data: VentaFase1BCreate, user=Depends(get_current_user)):
+    return _phase1b_save_sale(data, user)
+
+
+@app.put("/ventas/{venta_id}/fase1b", summary="Editar venta con catálogo global")
+def editar_venta_fase1b(venta_id: int, data: VentaFase1BCreate, user=Depends(get_current_user)):
+    if user["rol"] != "admin":
+        raise HTTPException(status_code=403, detail="Solo administración puede editar una venta completa.")
+    return _phase1b_save_sale(data, user, venta_id=venta_id)
+
+
+@app.get("/ventas/{venta_id}/fase1b", summary="Detalle de venta con catálogo global")
+def detalle_venta_fase1b(venta_id: int, user=Depends(get_current_user)):
+    require_roles(user, ("admin", "recepcion", "doctor", "contador"))
+    with psycopg.connect(DB_CONNINFO) as conn:
+        with conn.cursor() as cur:
+            detail = _phase1b_sale_detail(cur, venta_id, user["rol"])
+    requested_branch = force_sucursal(user, detail["sucursal_id"])
+    if requested_branch != detail["sucursal_id"]:
+        raise HTTPException(status_code=403, detail="Venta fuera de la sucursal permitida.")
+    return detail
+
+
+def _phase1b_cancel_sale_scope(
+    venta_id: int,
+    data: VentaCancelacionFase1BIn,
+    user: dict[str, Any],
+) -> dict[str, Any]:
+    require_roles(user, ("admin",))
+    data.sucursal_id = force_sucursal(user, data.sucursal_id)
+    sanitize_model_strings(data)
+    scope = normalize_controlled_token(data.alcance)
+    reason = (data.motivo or "").strip()
+    if scope not in {"configuracion", "linea", "venta"}:
+        raise HTTPException(status_code=400, detail="Alcance de cancelación inválido.")
+    if not reason:
+        raise HTTPException(status_code=400, detail="El motivo de cancelación es obligatorio.")
+    if data.sucursal_id is None:
+        raise HTTPException(status_code=400, detail="Sucursal requerida.")
+    with psycopg.connect(DB_CONNINFO) as conn:
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT contexto.version, contexto.subtotal_bruto,
+                           contexto.descuento_total, contexto.total_neto,
+                           contexto.credito_cliente
+                    FROM core.ventas venta
+                    JOIN core.venta_catalogo_contextos contexto
+                      ON contexto.venta_id = venta.venta_id
+                    WHERE venta.venta_id = %s AND venta.sucursal_id = %s
+                      AND venta.activo = true AND contexto.estado = 'activo'
+                    FOR UPDATE OF venta, contexto;
+                    """,
+                    (venta_id, data.sucursal_id),
+                )
+                context = cur.fetchone()
+                if context is None:
+                    raise HTTPException(status_code=404, detail="Venta Phase 1B no existe o ya está cancelada.")
+                version, subtotal_before, discount_before, total_before, old_credit = context
+                cur.execute(
+                    """
+                    SELECT detalle.venta_catalogo_detalle_id, detalle.linea_ref,
+                           detalle.configuracion_id, config.configuracion_ref,
+                           detalle.producto_id, detalle.cantidad,
+                           detalle.cantidad_cancelada, detalle.controla_stock_snapshot,
+                           detalle.comportamiento_abasto_snapshot,
+                           detalle.precio_unitario_snapshot,
+                           detalle.subtotal_bruto_snapshot
+                    FROM core.venta_catalogo_detalles detalle
+                    LEFT JOIN core.venta_configuraciones_opticas config
+                      ON config.configuracion_id = detalle.configuracion_id
+                    WHERE detalle.venta_id = %s AND detalle.estado_registro = 'activo'
+                    ORDER BY detalle.venta_catalogo_detalle_id
+                    FOR UPDATE OF detalle;
+                    """,
+                    (venta_id,),
+                )
+                rows = cur.fetchall()
+                lines = [
+                    {
+                        "detail_id": int(row[0]), "linea_ref": row[1],
+                        "config_id": int(row[2]) if row[2] else None,
+                        "configuracion_ref": row[3], "producto_id": int(row[4]),
+                        "cantidad": int(row[5]), "cantidad_cancelada": int(row[6]),
+                        "controla_stock": bool(row[7]), "comportamiento_abasto": row[8],
+                        "precio_unitario": _money(row[9]), "subtotal": _money(row[10]),
+                    }
+                    for row in rows
+                ]
+                effective = {line["linea_ref"]: line["cantidad"] - line["cantidad_cancelada"] for line in lines}
+                config_refs = {line["configuracion_ref"] for line in lines if line["configuracion_ref"]}
+                if scope == "venta":
+                    selected_refs = {ref for ref, quantity in effective.items() if quantity > 0}
+                elif scope == "configuracion":
+                    requested_configs = set(data.configuracion_refs or [])
+                    if not requested_configs or not requested_configs.issubset(config_refs):
+                        raise HTTPException(status_code=400, detail="Configuración a cancelar inválida.")
+                    selected_refs = {
+                        line["linea_ref"] for line in lines
+                        if line["configuracion_ref"] in requested_configs and effective[line["linea_ref"]] > 0
+                    }
+                else:
+                    selected_refs = set(data.linea_refs or [])
+                    if not selected_refs or not selected_refs.issubset(effective):
+                        raise HTTPException(status_code=400, detail="Línea a cancelar inválida.")
+                if not selected_refs:
+                    raise HTTPException(status_code=400, detail="No hay elementos activos para cancelar.")
+
+                quantities = dict(data.cantidades_por_linea or {})
+                cancel_quantities: dict[str, int] = {}
+                for ref in selected_refs:
+                    available = effective[ref]
+                    requested = int(quantities.get(ref, available)) if scope == "linea" else available
+                    if requested <= 0 or requested > available:
+                        raise HTTPException(status_code=400, detail=f"Cantidad inválida para {ref}.")
+                    cancel_quantities[ref] = requested
+
+                current_sale = _phase1b_sale_detail(cur, venta_id, user["rol"])
+                remaining_lines: list[dict[str, Any]] = []
+                detail_ids: dict[str, int] = {}
+                config_ids: dict[str, int] = {}
+                for line in lines:
+                    remaining_quantity = effective[line["linea_ref"]] - cancel_quantities.get(line["linea_ref"], 0)
+                    if remaining_quantity <= 0:
+                        continue
+                    remaining_lines.append({
+                        "linea_ref": line["linea_ref"],
+                        "configuracion_ref": line["configuracion_ref"],
+                        "subtotal": (line["precio_unitario"] * remaining_quantity).quantize(Decimal("0.01")),
+                    })
+                    detail_ids[line["linea_ref"]] = line["detail_id"]
+                    if line["configuracion_ref"] and line["config_id"]:
+                        config_ids[line["configuracion_ref"]] = line["config_id"]
+
+                remaining_line_refs = set(detail_ids)
+                remaining_config_refs = set(config_ids)
+                discounts_for_recalculation: list[dict[str, Any]] = []
+                for saved in current_sale["descuentos"]:
+                    if saved["alcance"] == "venta":
+                        if not remaining_lines:
+                            continue
+                        config_targets: list[str] = []
+                        line_targets: list[str] = []
+                    elif saved["alcance"] == "configuracion":
+                        config_targets = [ref for ref in saved["configuracion_refs"] if ref in remaining_config_refs]
+                        line_targets = []
+                        if not config_targets:
+                            continue
+                    else:
+                        config_targets = []
+                        line_targets = [ref for ref in saved["linea_refs"] if ref in remaining_line_refs]
+                        if not line_targets:
+                            continue
+                    discounts_for_recalculation.append({
+                        "descuento_ref": saved["descuento_ref"], "tipo": saved["tipo"],
+                        "valor": _money(saved["valor"]), "motivo": saved["motivo"],
+                        "motivo_otro": saved["motivo_otro"], "cupon_tipo": saved["cupon_tipo"],
+                        "alcance": saved["alcance"],
+                        "orden_aplicacion": len(discounts_for_recalculation) + 1,
+                        "configuracion_refs": config_targets, "linea_refs": line_targets,
+                    })
+                calculation = _phase1b_calculate_discounts(remaining_lines, discounts_for_recalculation)
+                subtotal_after = _money(calculation["subtotal"])
+                discount_after = _money(calculation["descuento_total"])
+                total_after = _money(calculation["total"])
+                cur.execute(
+                    "SELECT COALESCE(SUM(monto), 0) FROM core.venta_pagos WHERE venta_id = %s AND activo = true;",
+                    (venta_id,),
+                )
+                amount_paid = _money(cur.fetchone()[0])
+                customer_credit = max(Decimal("0.00"), amount_paid - total_after)
+                cur.execute(
+                    """
+                    INSERT INTO core.venta_cancelaciones (
+                        venta_id, alcance, motivo, subtotal_antes, descuento_antes,
+                        total_antes, subtotal_despues, descuento_despues,
+                        total_despues, monto_pagado_snapshot, credito_cliente, created_by
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    RETURNING cancelacion_id;
+                    """,
+                    (
+                        venta_id, scope, reason, subtotal_before, discount_before,
+                        total_before, subtotal_after, discount_after, total_after,
+                        amount_paid, customer_credit, user["username"],
+                    ),
+                )
+                cancellation_id = int(cur.fetchone()[0])
+
+                cur.execute(
+                    """
+                    SELECT asignacion.venta_catalogo_detalle_id,
+                           COALESCE(SUM(asignacion.monto_asignado), 0)
+                    FROM core.venta_descuento_asignaciones asignacion
+                    JOIN core.venta_calculo_revisiones revision
+                      ON revision.calculo_revision_id = asignacion.calculo_revision_id
+                    WHERE revision.venta_id = %s AND revision.es_actual = true
+                    GROUP BY asignacion.venta_catalogo_detalle_id;
+                    """,
+                    (venta_id,),
+                )
+                old_allocations = {int(row[0]): _money(row[1]) for row in cur.fetchall()}
+
+                for line in lines:
+                    ref = line["linea_ref"]
+                    if ref not in cancel_quantities:
+                        continue
+                    cancelled_quantity = cancel_quantities[ref]
+                    gross_cancelled = (line["precio_unitario"] * cancelled_quantity).quantize(Decimal("0.01"))
+                    old_discount = old_allocations.get(line["detail_id"], Decimal("0.00"))
+                    proportional_discount = (
+                        old_discount * Decimal(cancelled_quantity) / Decimal(max(1, effective[ref]))
+                    ).quantize(Decimal("0.01"))
+                    net_cancelled = max(Decimal("0.00"), gross_cancelled - proportional_discount)
+                    restore_key = f"fase1b-cancel-{cancellation_id}-detail-{line['detail_id']}"
+                    restored = False
+                    if line["controla_stock"] and line["comportamiento_abasto"] == "inventario":
+                        cur.execute(
+                            """
+                            SELECT stock FROM core.catalogo_inventario_sucursal
+                            WHERE producto_id = %s AND sucursal_id = %s FOR UPDATE;
+                            """,
+                            (line["producto_id"], data.sucursal_id),
+                        )
+                        inventory = cur.fetchone()
+                        if inventory is None:
+                            raise HTTPException(status_code=409, detail="Falta inventario para restaurar la cancelación.")
+                        before_stock = int(inventory[0])
+                        after_stock = before_stock + cancelled_quantity
+                        cur.execute(
+                            """
+                            UPDATE core.catalogo_inventario_sucursal
+                            SET stock = %s, version = version + 1, updated_at = NOW()
+                            WHERE producto_id = %s AND sucursal_id = %s;
+                            """,
+                            (after_stock, line["producto_id"], data.sucursal_id),
+                        )
+                        cur.execute(
+                            """
+                            INSERT INTO core.catalogo_inventario_movimientos (
+                                producto_id, sucursal_id, tipo, cantidad,
+                                stock_anterior, stock_nuevo, fuente_tipo, fuente_id,
+                                clave_idempotencia, notas, created_by
+                            ) VALUES (%s, %s, 'cancelacion_venta', %s, %s, %s,
+                                      'cancelacion_venta', %s, %s, %s, %s);
+                            """,
+                            (
+                                line["producto_id"], data.sucursal_id, cancelled_quantity,
+                                before_stock, after_stock, cancellation_id, restore_key,
+                                f"Cancelación de venta #{venta_id}", user["username"],
+                            ),
+                        )
+                        restored = True
+                    remaining_quantity = effective[ref] - cancelled_quantity
+                    cur.execute(
+                        """
+                        UPDATE core.venta_catalogo_detalles
+                        SET cantidad_cancelada = cantidad_cancelada + %s,
+                            stock_restaurado = stock_restaurado + %s,
+                            estado_registro = CASE WHEN %s = 0 THEN 'cancelado' ELSE estado_registro END
+                        WHERE venta_catalogo_detalle_id = %s;
+                        """,
+                        (cancelled_quantity, cancelled_quantity if restored else 0,
+                         remaining_quantity, line["detail_id"]),
+                    )
+                    cur.execute(
+                        """
+                        INSERT INTO core.venta_cancelacion_objetivos (
+                            cancelacion_id, venta_catalogo_detalle_id, cantidad_cancelada,
+                            subtotal_bruto_cancelado, descuento_cancelado, neto_cancelado,
+                            inventario_restaurado, clave_restauracion
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s);
+                        """,
+                        (
+                            cancellation_id, line["detail_id"], cancelled_quantity,
+                            gross_cancelled, proportional_discount, net_cancelled,
+                            restored, restore_key if restored else None,
+                        ),
+                    )
+
+                cur.execute(
+                    """
+                    UPDATE core.venta_configuraciones_opticas config
+                    SET estado_registro = 'cancelado', estado_produccion = 'cancelado',
+                        motivo_cancelacion = %s, cancelado_by = %s, cancelado_at = NOW()
+                    WHERE config.venta_id = %s AND config.estado_registro = 'activo'
+                      AND NOT EXISTS (
+                          SELECT 1 FROM core.venta_catalogo_detalles detalle
+                          WHERE detalle.configuracion_id = config.configuracion_id
+                            AND detalle.estado_registro = 'activo'
+                            AND detalle.cantidad > detalle.cantidad_cancelada
+                      );
+                    """,
+                    (reason, user["username"], venta_id),
+                )
+                cur.execute(
+                    "UPDATE core.venta_descuentos SET estado = 'reemplazado' WHERE venta_id = %s AND estado = 'activo';",
+                    (venta_id,),
+                )
+                cur.execute(
+                    "UPDATE core.venta_calculo_revisiones SET es_actual = false WHERE venta_id = %s AND es_actual = true;",
+                    (venta_id,),
+                )
+                next_version = int(version) + 1
+                cur.execute(
+                    """
+                    INSERT INTO core.venta_calculo_revisiones (
+                        venta_id, numero_revision, motivo, subtotal_bruto,
+                        descuento_total, total_neto, monto_pagado_snapshot,
+                        saldo_pendiente, credito_cliente, es_actual, created_by
+                    ) VALUES (%s, %s, 'cancelacion', %s, %s, %s, %s, %s, %s, true, %s)
+                    RETURNING calculo_revision_id;
+                    """,
+                    (
+                        venta_id, next_version, subtotal_after, discount_after, total_after,
+                        amount_paid, max(Decimal("0.00"), total_after - amount_paid),
+                        customer_credit, user["username"],
+                    ),
+                )
+                revision_id = int(cur.fetchone()[0])
+                _phase1b_insert_discount_rows(
+                    cur, venta_id=venta_id, calculation=calculation,
+                    config_ids=config_ids, detail_ids=detail_ids,
+                    revision_id=revision_id, username=user["username"],
+                )
+                context_state = "cancelado" if total_after == 0 else "activo"
+                cur.execute(
+                    """
+                    UPDATE core.venta_catalogo_contextos
+                    SET version = %s, subtotal_bruto = %s, descuento_total = %s,
+                        total_neto = %s, credito_cliente = %s, estado = %s,
+                        updated_by = %s, updated_at = NOW()
+                    WHERE venta_id = %s;
+                    """,
+                    (next_version, subtotal_after, discount_after, total_after,
+                     customer_credit, context_state, user["username"], venta_id),
+                )
+                payment_state = _phase1b_payment_state(amount_paid, total_after, 1 if amount_paid > 0 else 0)
+                cur.execute(
+                    """
+                    UPDATE core.ventas
+                    SET subtotal = %s, descuento_porcentaje = 0,
+                        descuento_monto = %s, monto_total = %s,
+                        estado_venta = CASE WHEN %s = 0 THEN 'cancelada' ELSE estado_venta END,
+                        estado_pago = %s,
+                        estado_pedido = CASE WHEN %s = 0 THEN 'cancelado' ELSE estado_pedido END,
+                        updated_at = NOW()
+                    WHERE venta_id = %s;
+                    """,
+                    (subtotal_after, discount_after, total_after, total_after,
+                     payment_state, total_after, venta_id),
+                )
+                if customer_credit > _money(old_credit):
+                    cur.execute(
+                        """
+                        INSERT INTO core.venta_ajustes_cliente (
+                            venta_id, cancelacion_id, tipo, monto, notas, created_by
+                        ) VALUES (%s, %s, 'credito', %s, %s, %s);
+                        """,
+                        (
+                            venta_id, cancellation_id, customer_credit - _money(old_credit),
+                            "Crédito generado por cancelación parcial o total",
+                            user["username"],
+                        ),
+                    )
+                result = _phase1b_sale_detail(cur, venta_id, user["rol"])
+                result["cancelacion_id"] = cancellation_id
+            conn.commit()
+            return result
+        except HTTPException:
+            conn.rollback()
+            raise
+        except Exception as exc:
+            conn.rollback()
+            raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.post("/ventas/{venta_id}/fase1b/cancelaciones", summary="Cancelar parte o toda una venta Phase 1B")
+def cancelar_venta_fase1b(
+    venta_id: int,
+    data: VentaCancelacionFase1BIn,
+    user=Depends(get_current_user),
+):
+    return _phase1b_cancel_sale_scope(venta_id, data, user)
 @app.put("/pacientes/{paciente_id}", summary="Actualizar paciente")
 def actualizar_paciente(paciente_id: int, p: PacienteCreate, user=Depends(get_current_user)):
 
@@ -4710,7 +7107,6 @@ def actualizar_paciente(paciente_id: int, p: PacienteCreate, user=Depends(get_cu
         with psycopg.connect(DB_CONNINFO) as conn:
             with conn.cursor() as cur:
 
-        
                 # validar sucursal (ya con la sucursal correcta)
                 cur.execute(
                     "SELECT activa FROM core.sucursales WHERE sucursal_id = %s",
@@ -5319,6 +7715,7 @@ def listar_ventas(
     """
     params.append(limit)
 
+    fase1b_details: dict[int, dict[str, Any]] = {}
     with psycopg.connect(DB_CONNINFO) as conn:
         with conn.cursor() as cur:
             cur.execute(sql, tuple(params))
@@ -5364,6 +7761,19 @@ def listar_ventas(
                     (venta_ids,),
                 )
                 productos_rows = cur.fetchall()
+                cur.execute(
+                    """
+                    SELECT venta_id
+                    FROM core.venta_catalogo_contextos
+                    WHERE venta_id = ANY(%s::bigint[])
+                    ORDER BY venta_id;
+                    """,
+                    (venta_ids,),
+                )
+                for (phase1b_venta_id,) in cur.fetchall():
+                    fase1b_details[int(phase1b_venta_id)] = _phase1b_sale_detail(
+                        cur, int(phase1b_venta_id), user["rol"]
+                    )
 
     estado_map = _estado_paciente_map(sucursal_id, [int(r[9]) for r in rows])
     pagos_por_venta: dict[int, list[dict[str, Any]]] = {}
@@ -5399,6 +7809,19 @@ def listar_ventas(
 
     ventas_out = []
     for r in rows:
+        phase1b_detail = fase1b_details.get(int(r[0]))
+        if phase1b_detail is not None:
+            phase1b_detail["estado_paciente"] = estado_map.get(int(r[9]), "nuevo")
+            phase1b_detail["adelanto_aplica"] = (
+                phase1b_detail["monto_pagado"] > 0
+                and phase1b_detail["saldo_pendiente"] > 0
+            )
+            phase1b_detail["adelanto_monto"] = (
+                phase1b_detail["monto_pagado"]
+                if phase1b_detail["adelanto_aplica"] else None
+            )
+            ventas_out.append(phase1b_detail)
+            continue
         pagos = pagos_por_venta.get(int(r[0]), [])
         monto_total = float(r[3] or 0)
         if pagos:
@@ -7671,12 +10094,32 @@ def actualizar_seguimiento_venta(
     }
 
 
-@app.delete("/ventas/{venta_id}", summary="Eliminar venta (definitivo)")
+@app.delete("/ventas/{venta_id}", summary="Cancelar venta sin eliminar registros")
 def eliminar_venta(venta_id: int, sucursal_id: int, user=Depends(get_current_user)):
     require_roles(user, ("admin", "recepcion", "doctor"))
     sucursal_id = force_sucursal(user, sucursal_id)
     if user["rol"] == "admin" and sucursal_id is None:
         raise HTTPException(status_code=400, detail="Sucursal es requerida.")
+
+    with psycopg.connect(DB_CONNINFO) as check_conn:
+        with check_conn.cursor() as check_cur:
+            check_cur.execute(
+                "SELECT 1 FROM core.venta_catalogo_contextos WHERE venta_id = %s;",
+                (venta_id,),
+            )
+            is_phase1b = check_cur.fetchone() is not None
+    if is_phase1b:
+        if user["rol"] != "admin":
+            raise HTTPException(status_code=403, detail="Solo administración puede cancelar esta venta.")
+        return _phase1b_cancel_sale_scope(
+            venta_id,
+            VentaCancelacionFase1BIn(
+                sucursal_id=sucursal_id,
+                alcance="venta",
+                motivo="Cancelación total confirmada desde el resumen de ventas",
+            ),
+            user,
+        )
 
     with psycopg.connect(DB_CONNINFO) as conn:
         with conn.cursor() as cur:
@@ -7686,6 +10129,7 @@ def eliminar_venta(venta_id: int, sucursal_id: int, user=Depends(get_current_use
                 FROM core.ventas
                 WHERE venta_id = %s
                   AND sucursal_id = %s
+                  AND activo = true
                 FOR UPDATE;
                 """,
                 (venta_id, sucursal_id),
@@ -7716,12 +10160,12 @@ def eliminar_venta(venta_id: int, sucursal_id: int, user=Depends(get_current_use
                 user["username"],
             )
             cur.execute(
-                "DELETE FROM core.venta_pagos WHERE venta_id = %s;",
-                (venta_id,),
-            )
-            cur.execute(
                 """
-                DELETE FROM core.ventas
+                UPDATE core.ventas
+                SET activo = false,
+                    estado_venta = 'cancelada',
+                    estado_pedido = 'cancelado',
+                    updated_at = NOW()
                 WHERE venta_id = %s
                   AND sucursal_id = %s
                 RETURNING venta_id
@@ -7731,8 +10175,8 @@ def eliminar_venta(venta_id: int, sucursal_id: int, user=Depends(get_current_use
             row = cur.fetchone()
         conn.commit()
     return {
-        "deleted_venta_id": row[0],
-        "hard_deleted": True,
+        "cancelled_venta_id": row[0],
+        "hard_deleted": False,
         "inventory_lines_restored": detalles_restaurados,
     }
 

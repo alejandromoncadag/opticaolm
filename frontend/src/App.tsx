@@ -143,6 +143,15 @@ type VentaPagoDraft = Omit<VentaPago, "monto"> & {
 };
 
 type VentaProductoDetalle = {
+  venta_catalogo_detalle_id?: number;
+  linea_ref?: string;
+  configuracion_ref?: string | null;
+  tipo_linea?: "producto" | "armazon" | "diseno" | "tratamiento";
+  variante_id?: number | null;
+  variante_codigo?: string | null;
+  variante_nombre?: string | null;
+  estado_registro?: "activo" | "reemplazado" | "cancelado";
+  cantidad_cancelada?: number;
   producto_id: number;
   sku: string;
   categoria: string;
@@ -188,6 +197,11 @@ type Venta = {
   estado_venta?: VentaEstado | string;
   estado_pago?: VentaEstadoPago | string;
   estado_pedido?: VentaEstadoPedido | string;
+  origen_catalogo?: "fase1b" | string;
+  version_catalogo?: number;
+  credito_cliente?: number;
+  configuraciones?: VentaConfiguracionOptica[];
+  descuentos?: VentaDescuentoFase1B[];
 };
 
 type VentaCreate = {
@@ -237,6 +251,19 @@ type InventarioProducto = {
   activo: boolean;
   controla_stock: boolean;
   orden_catalogo: number;
+  slug?: string;
+  costo_confirmado?: boolean;
+  stock_reservado?: number;
+  version?: number;
+  comportamiento_abasto_default?: VentaComportamientoAbasto;
+  unidad_medida?: string;
+  permite_graduacion?: boolean;
+  tipo_producto?: "producto_fisico" | "componente_mica" | "servicio";
+  publicado_online?: boolean;
+  comprable_online?: boolean;
+  permite_favorito?: boolean;
+  cantidad_maxima_por_linea?: number | null;
+  variantes?: CatalogoVariante[];
 };
 
 type InventarioMovimiento = {
@@ -272,6 +299,73 @@ type FinanzasData = {
 type VentaCarritoItem = {
   producto_id: number;
   cantidad: number;
+};
+
+type CatalogoVariante = {
+  variante_id: number;
+  codigo: string;
+  nombre: string;
+  precio_ajuste_override?: number | null;
+};
+
+type VentaComportamientoAbasto =
+  | "inventario"
+  | "laboratorio_bajo_pedido"
+  | "fabricacion_interna"
+  | "servicio";
+
+type VentaEstadoProduccion =
+  | "pendiente_anticipo"
+  | "listo_para_produccion"
+  | "en_produccion"
+  | "listo_para_entregar"
+  | "entregado"
+  | "cancelado";
+
+type VentaConfiguracionOptica = {
+  configuracion_id?: number;
+  configuracion_ref: string;
+  tipo_configuracion: "par_completo" | "solo_micas" | "solo_tratamiento";
+  usa_armazon_cliente?: boolean;
+  armazon_producto_id: number | null;
+  diseno_producto_id: number | null;
+  tratamiento_producto_id: number | null;
+  variante_id: number | null;
+  uso_visual: "lejos" | "cerca" | "intermedio" | "multifocal" | "sin_graduacion" | "otro";
+  uso_visual_otro?: string | null;
+  prescripcion_id: number | null;
+  comportamiento_abasto_usado: VentaComportamientoAbasto;
+  estado_produccion?: VentaEstadoProduccion;
+  estado_registro?: "activo" | "reemplazado" | "cancelado";
+  subtotal_bruto_snapshot?: number;
+};
+
+type VentaDescuentoFase1B = {
+  descuento_id?: number;
+  descuento_ref: string;
+  tipo: "porcentaje" | "monto_fijo";
+  valor: number | string;
+  motivo: string;
+  motivo_otro?: string | null;
+  cupon_tipo: "online" | "fisico" | "sin_cupon";
+  alcance: "venta" | "configuracion" | "linea";
+  orden_aplicacion: number;
+  configuracion_refs: string[];
+  linea_refs: string[];
+  base_elegible?: number;
+  monto_aplicado?: number;
+};
+
+type PrescripcionOptica = {
+  prescripcion_id: number;
+  sucursal_captura_id: number;
+  origen: "interna" | "externa_cliente";
+  fecha_prescripcion?: string | null;
+  referencia_externa?: string | null;
+  od_esfera?: string | null;
+  od_cilindro?: string | null;
+  oi_esfera?: string | null;
+  oi_cilindro?: string | null;
 };
 
 type StatsSerie = {
@@ -632,7 +726,13 @@ type ExportCsvTipo =
 const API =
   (import.meta.env.VITE_API_BASE_URL as string | undefined)?.trim()
   || (import.meta.env.VITE_API_URL as string | undefined)?.trim()
-  || "https://opticaolm-production.up.railway.app";
+  || "http://127.0.0.1:8000";
+
+function resolveCatalogMediaUrl(value: string | null | undefined): string {
+  if (!value) return "";
+  if (/^https?:\/\//i.test(value)) return value;
+  return `${API.replace(/\/$/, "")}/${value.replace(/^\//, "")}`;
+}
 
 function parseUiScale(raw: string | undefined): number {
   const fallback = 1;
@@ -684,7 +784,7 @@ function toReadableNetworkError(path: string, original: unknown): Error {
   const lower = msg.toLowerCase();
   if (lower.includes("failed to fetch") || lower.includes("networkerror") || lower.includes("load failed")) {
     return new Error(
-      `No se pudo conectar con el backend (${API}${path}). Verifica deploy de Railway y recarga la página.`
+      `No se pudo conectar con el backend (${API}${path}). Verifica que el backend esté iniciado y que la URL configurada sea correcta; después recarga la página.`
     );
   }
   return original instanceof Error ? original : new Error(msg || "Error de red inesperado.");
@@ -2636,11 +2736,11 @@ export default function App() {
   const [inventarioError, setInventarioError] = useState<string | null>(null);
   const [inventarioStockDraft, setInventarioStockDraft] = useState<Record<number, number | string>>({});
   const [inventarioPrecioDraft, setInventarioPrecioDraft] = useState<Record<number, number>>({});
-  const [inventarioCostoDraft, setInventarioCostoDraft] = useState<Record<number, number>>({});
+  const [inventarioCostoDraft, setInventarioCostoDraft] = useState<Record<number, number | "">>({});
   const [savingInventarioId, setSavingInventarioId] = useState<number | null>(null);
   const [inventarioBusqueda, setInventarioBusqueda] = useState("");
   const [inventarioCategoriaFiltro, setInventarioCategoriaFiltro] = useState("todos");
-  const [inventarioVista, setInventarioVista] = useState<"existencias" | "movimientos" | "analisis" | "costos">("existencias");
+  const [inventarioVista, setInventarioVista] = useState<"existencias" | "movimientos" | "analisis" | "costos" | "comercio">("existencias");
   const [inventarioMetricaAyuda, setInventarioMetricaAyuda] = useState<"valor" | "ganancia" | null>(null);
   const [inventarioImagenAmpliada, setInventarioImagenAmpliada] = useState<InventarioProducto | null>(null);
   const [inventarioMovimientos, setInventarioMovimientos] = useState<InventarioMovimiento[]>([]);
@@ -2669,10 +2769,8 @@ export default function App() {
   const [finanzasCxpPagoDraft, setFinanzasCxpPagoDraft] = useState<Record<number, string>>({});
   const [ventaCategoria, setVentaCategoria] = useState<VentaCategoria | "">("");
   const [ventaCarrito, setVentaCarrito] = useState<VentaCarritoItem[]>([]);
-  const [ventaDescuentoTipo, setVentaDescuentoTipo] = useState<"porcentaje" | "monto">("porcentaje");
   const [ventaDescuentoPorcentaje, setVentaDescuentoPorcentaje] = useState(0);
   const [ventaDescuentoMontoFijo, setVentaDescuentoMontoFijo] = useState(0);
-  const [ventaDescuentoEntrada, setVentaDescuentoEntrada] = useState("");
   const ventaFormRef = useRef<HTMLFormElement | null>(null);
   const ventaSubmitConfirmadoRef = useRef(false);
   const ventaPagoSeqRef = useRef(1);
@@ -2681,9 +2779,31 @@ export default function App() {
   ]);
   const [, setVentaLentesPaso] = useState(1);
   const [ventaConfirmacionOpen, setVentaConfirmacionOpen] = useState(false);
-  const [ventaAgregarTinte, setVentaAgregarTinte] = useState(false);
-  const [ventaMostrarAntiblue, setVentaMostrarAntiblue] = useState(false);
+  const [, setVentaAgregarTinte] = useState(false);
+  const [, setVentaMostrarAntiblue] = useState(false);
   const [ventaTinteGrado, setVentaTinteGrado] = useState<VentaTinteGrado>("");
+  const ventaConfiguracionSeqRef = useRef(1);
+  const ventaDescuentoSeqRef = useRef(1);
+  const [ventaConfiguraciones, setVentaConfiguraciones] = useState<VentaConfiguracionOptica[]>([]);
+  const [ventaConfiguracionActiva, setVentaConfiguracionActiva] = useState<string | null>(null);
+  const [ventaDescuentosFase1B, setVentaDescuentosFase1B] = useState<VentaDescuentoFase1B[]>([]);
+  const [ventaPreviewFase1B, setVentaPreviewFase1B] = useState<{
+    subtotal: number;
+    descuento_total: number;
+    total: number;
+    descuentos: Array<{ descuento_ref: string; base_elegible: number; monto_aplicado: number }>;
+  } | null>(null);
+  const [ventaPreviewLoading, setVentaPreviewLoading] = useState(false);
+  const [prescripcionesVenta, setPrescripcionesVenta] = useState<PrescripcionOptica[]>([]);
+  const [prescripcionVentaOpen, setPrescripcionVentaOpen] = useState(false);
+  const [prescripcionVentaForm, setPrescripcionVentaForm] = useState({
+    origen: "interna" as "interna" | "externa_cliente",
+    fecha_prescripcion: formatDateYYYYMMDD(new Date()),
+    referencia_externa: "",
+    od_esfera: "", od_cilindro: "", od_eje: "", od_adicion: "",
+    oi_esfera: "", oi_cilindro: "", oi_eje: "", oi_adicion: "",
+    distancia_pupilar: "", notas: "",
+  });
   const [successConsultaMsg, setSuccessConsultaMsg] = useState<string | null>(null);
   const [successHistoriaMsg, setSuccessHistoriaMsg] = useState<string | null>(null);
   const [editingConsultaId, setEditingConsultaId] = useState<number | null>(null);
@@ -2827,6 +2947,16 @@ export default function App() {
       return { ...prev, paciente_id: pacientesVentaOpciones[0].id };
     });
   }, [pacientesVentaOpciones, editingVentaId]);
+
+  useEffect(() => {
+    if (!me || !formVenta.paciente_id || !["admin", "recepcion", "doctor"].includes(me.rol)) {
+      setPrescripcionesVenta([]);
+      return;
+    }
+    loadPrescripcionesVenta(formVenta.paciente_id).catch((reason) => {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    });
+  }, [formVenta.paciente_id, me?.rol]);
 
   const consultasFiltradas = useMemo(() => {
   const q = qConsulta.trim().toLowerCase();
@@ -3142,7 +3272,7 @@ export default function App() {
     setLoadingInventario(true);
     setInventarioError(null);
     try {
-      const r = await apiFetch(`/inventario?sucursal_id=${sucursalActivaId}`);
+      const r = await apiFetch(`/catalogo/inventario?sucursal_id=${sucursalActivaId}`);
       if (!r.ok) throw new Error(await readErrorMessage(r));
       const data: InventarioProducto[] = await r.json();
       setInventario(data);
@@ -3153,7 +3283,10 @@ export default function App() {
         Object.fromEntries(data.map((producto) => [producto.producto_id, Number(producto.precio || 0)]))
       );
       setInventarioCostoDraft(
-        Object.fromEntries(data.map((producto) => [producto.producto_id, Number(producto.costo_unitario || 0)]))
+        Object.fromEntries(data.map((producto) => [
+          producto.producto_id,
+          producto.costo_unitario == null ? "" : Number(producto.costo_unitario),
+        ]))
       );
     } catch (e: any) {
       setInventario([]);
@@ -3174,7 +3307,7 @@ export default function App() {
     setInventarioError(null);
     try {
       const r = await apiFetch(
-        `/inventario/${producto.producto_id}/stock?sucursal_id=${sucursalActivaId}`,
+        `/catalogo/inventario/${producto.producto_id}/stock?sucursal_id=${sucursalActivaId}`,
         {
           method: "PATCH",
           body: JSON.stringify({ stock, expected_stock: producto.stock }),
@@ -3199,7 +3332,7 @@ export default function App() {
     setLoadingInventarioMovimientos(true);
     setInventarioError(null);
     try {
-      const r = await apiFetch(`/inventario/movimientos?sucursal_id=${sucursalActivaId}&limit=500`);
+      const r = await apiFetch(`/catalogo/inventario/movimientos?sucursal_id=${sucursalActivaId}&limit=500`);
       if (!r.ok) throw new Error(await readErrorMessage(r));
       setInventarioMovimientos(await r.json());
     } catch (e: any) {
@@ -3226,7 +3359,7 @@ export default function App() {
     setSavingInventarioMovimiento(true);
     setInventarioError(null);
     try {
-      const r = await apiFetch(`/inventario/${productoId}/movimientos`, {
+      const r = await apiFetch(`/catalogo/inventario/${productoId}/movimientos`, {
         method: "POST",
         body: JSON.stringify({
           sucursal_id: sucursalActivaId,
@@ -3254,8 +3387,9 @@ export default function App() {
       ? Math.max(0, Math.trunc(Number(inventarioStockDraft[producto.producto_id] ?? producto.stock)))
       : null;
     const precio = Math.max(0, Number(inventarioPrecioDraft[producto.producto_id] ?? producto.precio));
-    const costoUnitario = Math.max(0, Number(inventarioCostoDraft[producto.producto_id] ?? producto.costo_unitario ?? 0));
-    if (!Number.isFinite(precio) || !Number.isFinite(costoUnitario)) {
+    const costoDraft = inventarioCostoDraft[producto.producto_id] ?? producto.costo_unitario ?? "";
+    const costoUnitario = costoDraft === "" ? null : Math.max(0, Number(costoDraft));
+    if (!Number.isFinite(precio) || (costoUnitario !== null && !Number.isFinite(costoUnitario))) {
       setInventarioError("Precio de venta y costo unitario deben ser números válidos.");
       return;
     }
@@ -3263,14 +3397,14 @@ export default function App() {
     setInventarioError(null);
     try {
       const r = await apiFetch(
-        `/inventario/${producto.producto_id}?sucursal_id=${sucursalActivaId}`,
+        `/catalogo/inventario/${producto.producto_id}?sucursal_id=${sucursalActivaId}`,
         {
           method: "PATCH",
           body: JSON.stringify({
             stock,
             expected_stock: stock === null ? null : producto.stock,
             precio,
-            costo_unitario: costoUnitario,
+            ...(costoUnitario === null ? {} : { costo_unitario: costoUnitario }),
           }),
         },
       );
@@ -3283,14 +3417,17 @@ export default function App() {
                 ...item,
                 stock: Number(actualizado.stock || 0),
                 precio: Number(actualizado.precio || 0),
-                costo_unitario: Number(actualizado.costo_unitario || 0),
+                costo_unitario: actualizado.costo_unitario == null ? null : Number(actualizado.costo_unitario),
               }
             : item
         )
       );
       setInventarioStockDraft((prev) => ({ ...prev, [producto.producto_id]: Number(actualizado.stock || 0) }));
       setInventarioPrecioDraft((prev) => ({ ...prev, [producto.producto_id]: Number(actualizado.precio || 0) }));
-      setInventarioCostoDraft((prev) => ({ ...prev, [producto.producto_id]: Number(actualizado.costo_unitario || 0) }));
+      setInventarioCostoDraft((prev) => ({
+        ...prev,
+        [producto.producto_id]: actualizado.costo_unitario == null ? "" : Number(actualizado.costo_unitario),
+      }));
     } catch (e: any) {
       setInventarioError(e?.message ?? String(e));
     } finally {
@@ -3302,19 +3439,184 @@ export default function App() {
     setVentaConfirmacionOpen(false);
     setVentaCategoria("");
     setVentaCarrito([]);
-    setVentaDescuentoTipo("porcentaje");
     setVentaDescuentoPorcentaje(0);
     setVentaDescuentoMontoFijo(0);
-    setVentaDescuentoEntrada("");
     ventaPagoSeqRef.current += 1;
     setVentaPagos([
       { ui_id: ventaPagoSeqRef.current, metodo: "efectivo", monto: "" },
     ]);
     setVentaLentesPaso(1);
-    setVentaAgregarTinte(false);
-    setVentaMostrarAntiblue(false);
     setVentaTinteGrado("");
+    setVentaConfiguraciones([]);
+    setVentaConfiguracionActiva(null);
+    setVentaDescuentosFase1B([]);
+    setVentaPreviewFase1B(null);
     setVentasSeleccionadas([]);
+  }
+
+  async function guardarConfiguracionComercio(producto: InventarioProducto) {
+    if (!isAdmin) return;
+    setSavingInventarioId(producto.producto_id);
+    setInventarioError(null);
+    try {
+      const r = await apiFetch(
+        `/catalogo/productos/${producto.producto_id}/comercio-online`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({
+            publicado_online: Boolean(producto.publicado_online),
+            comprable_online: Boolean(producto.comprable_online),
+            permite_favorito: Boolean(producto.permite_favorito),
+            cantidad_maxima_por_linea: producto.cantidad_maxima_por_linea ?? null,
+          }),
+        },
+      );
+      if (!r.ok) throw new Error(await readErrorMessage(r));
+      const actualizado = await r.json();
+      setInventario((prev) =>
+        prev.map((item) =>
+          item.producto_id === producto.producto_id
+            ? {
+                ...item,
+                publicado_online: Boolean(actualizado.publicado_online),
+                comprable_online: Boolean(actualizado.comprable_online),
+                permite_favorito: Boolean(actualizado.permite_favorito),
+                cantidad_maxima_por_linea: actualizado.cantidad_maxima_por_linea ?? null,
+              }
+            : item,
+        ),
+      );
+    } catch (e: any) {
+      setInventarioError(e?.message ?? String(e));
+    } finally {
+      setSavingInventarioId(null);
+    }
+  }
+
+  function crearConfiguracionOptica(
+    tipo: VentaConfiguracionOptica["tipo_configuracion"] = "par_completo",
+  ) {
+    const ref = `config-${Date.now()}-${ventaConfiguracionSeqRef.current++}`;
+    const next: VentaConfiguracionOptica = {
+      configuracion_ref: ref,
+      tipo_configuracion: tipo,
+      armazon_producto_id: null,
+      diseno_producto_id: null,
+      tratamiento_producto_id: null,
+      variante_id: null,
+      uso_visual: tipo === "solo_tratamiento" ? "otro" : "lejos",
+      uso_visual_otro: tipo === "solo_tratamiento" ? "Tratamiento del par existente" : null,
+      prescripcion_id: null,
+      comportamiento_abasto_usado: "laboratorio_bajo_pedido",
+      estado_produccion: "pendiente_anticipo",
+    };
+    setVentaConfiguraciones((prev) => [...prev, next]);
+    setVentaConfiguracionActiva(ref);
+    setVentaPreviewFase1B(null);
+  }
+
+  function actualizarConfiguracionOptica(
+    ref: string,
+    patch: Partial<VentaConfiguracionOptica>,
+  ) {
+    setVentaConfiguraciones((prev) => prev.map((config) => {
+      if (config.configuracion_ref !== ref) return config;
+      const next = { ...config, ...patch };
+      if (patch.tipo_configuracion === "par_completo") {
+        next.armazon_producto_id = config.armazon_producto_id;
+      } else if (patch.tipo_configuracion === "solo_micas") {
+        next.armazon_producto_id = null;
+      } else if (patch.tipo_configuracion === "solo_tratamiento") {
+        next.armazon_producto_id = null;
+        next.diseno_producto_id = null;
+        next.uso_visual = "otro";
+        next.uso_visual_otro = "Tratamiento del par existente";
+        next.prescripcion_id = null;
+      }
+      if (patch.tratamiento_producto_id === null) next.variante_id = null;
+      return next;
+    }));
+    setVentaPreviewFase1B(null);
+  }
+
+  function quitarConfiguracionOptica(ref: string) {
+    setVentaConfiguraciones((prev) => prev.filter((config) => config.configuracion_ref !== ref));
+    setVentaDescuentosFase1B((prev) => prev
+      .map((discount) => ({
+        ...discount,
+        configuracion_refs: discount.configuracion_refs.filter((item) => item !== ref),
+        linea_refs: discount.linea_refs.filter((item) => !item.startsWith(`${ref}:`)),
+      }))
+      .filter((discount) => discount.alcance === "venta" || discount.configuracion_refs.length > 0 || discount.linea_refs.length > 0)
+      .map((discount, index) => ({ ...discount, orden_aplicacion: index + 1 }))
+    );
+    setVentaConfiguracionActiva(null);
+    setVentaPreviewFase1B(null);
+  }
+
+  function agregarDescuentoFase1B() {
+    if (!isAdmin && ventaDescuentosFase1B.length >= 1) return;
+    const ref = `desc-${Date.now()}-${ventaDescuentoSeqRef.current++}`;
+    setVentaDescuentosFase1B((prev) => [...prev, {
+      descuento_ref: ref,
+      tipo: "porcentaje",
+      valor: "",
+      motivo: "familiar",
+      cupon_tipo: "sin_cupon",
+      alcance: "venta",
+      orden_aplicacion: prev.length + 1,
+      configuracion_refs: [],
+      linea_refs: [],
+    }]);
+    setVentaPreviewFase1B(null);
+  }
+
+  function actualizarDescuentoFase1B(ref: string, patch: Partial<VentaDescuentoFase1B>) {
+    setVentaDescuentosFase1B((prev) => prev.map((discount) => (
+      discount.descuento_ref === ref ? { ...discount, ...patch } : discount
+    )));
+    setVentaPreviewFase1B(null);
+  }
+
+  function moverDescuentoFase1B(ref: string, direction: -1 | 1) {
+    if (!isAdmin) return;
+    setVentaDescuentosFase1B((prev) => {
+      const current = prev.findIndex((discount) => discount.descuento_ref === ref);
+      const target = current + direction;
+      if (current < 0 || target < 0 || target >= prev.length) return prev;
+      const next = [...prev];
+      [next[current], next[target]] = [next[target], next[current]];
+      return next.map((discount, index) => ({ ...discount, orden_aplicacion: index + 1 }));
+    });
+    setVentaPreviewFase1B(null);
+  }
+
+  async function loadPrescripcionesVenta(pacienteId: number) {
+    if (!pacienteId) {
+      setPrescripcionesVenta([]);
+      return;
+    }
+    const response = await apiFetch(`/pacientes/${pacienteId}/prescripciones-opticas`);
+    if (!response.ok) throw new Error(await readErrorMessage(response));
+    setPrescripcionesVenta(await response.json());
+  }
+
+  async function crearPrescripcionVenta() {
+    if (!formVenta.paciente_id) throw new Error("Selecciona primero un paciente.");
+    const response = await apiFetch(`/pacientes/${formVenta.paciente_id}/prescripciones-opticas`, {
+      method: "POST",
+      body: JSON.stringify(cleanPayload({
+        ...prescripcionVentaForm,
+        sucursal_captura_id: sucursalActivaId,
+      })),
+    });
+    if (!response.ok) throw new Error(await readErrorMessage(response));
+    const created = await response.json();
+    await loadPrescripcionesVenta(formVenta.paciente_id);
+    setPrescripcionVentaOpen(false);
+    if (ventaConfiguracionActiva) {
+      actualizarConfiguracionOptica(ventaConfiguracionActiva, { prescripcion_id: Number(created.prescripcion_id) });
+    }
   }
 
   function seleccionarVentaCategoria(categoria: VentaCategoria) {
@@ -3357,36 +3659,6 @@ export default function App() {
       }
       return [...next, { producto_id: producto.producto_id, cantidad: 1 }];
     });
-  }
-
-  function seleccionarArmazonFlujoOptico(producto: InventarioProducto) {
-    const yaSeleccionado = ventaCarrito.some((item) => item.producto_id === producto.producto_id);
-    const idsArmazones = new Set(ventaArmazonesOpticos.map((item) => item.producto_id));
-    const idsMicas = new Set(
-      inventario.filter((item) => item.categoria === "micas").map((item) => item.producto_id),
-    );
-    setVentaCarrito((prev) => {
-      let next = yaSeleccionado
-        ? prev.filter((item) => item.producto_id !== producto.producto_id)
-        : [...prev, { producto_id: producto.producto_id, cantidad: 1 }];
-      const cantidadArmazones = next
-        .filter((item) => idsArmazones.has(item.producto_id))
-        .reduce((total, item) => total + item.cantidad, 0);
-      if (cantidadArmazones === 0) {
-        next = next.filter((item) => !idsMicas.has(item.producto_id));
-      } else {
-        next = next.map((item) =>
-          idsMicas.has(item.producto_id) ? { ...item, cantidad: cantidadArmazones } : item,
-        );
-      }
-      return next;
-    });
-    setVentaLentesPaso(1);
-    if (yaSeleccionado && ventaArmazonesSeleccionados.length === 1) {
-      setVentaAgregarTinte(false);
-      setVentaMostrarAntiblue(false);
-      setVentaTinteGrado("");
-    }
   }
 
   function seleccionarDisenoFlujoOptico(producto: InventarioProducto) {
@@ -3442,6 +3714,10 @@ export default function App() {
     if (!opciones?.esTinte) setVentaTinteGrado("");
     setVentaLentesPaso(opciones?.mantenerAbierto ? 3 : 0);
   }
+
+  // Se conservan temporalmente para poder abrir ventas legacy sin cambiar su estructura.
+  void seleccionarDisenoFlujoOptico;
+  void seleccionarTratamientoFlujoOptico;
 
   function actualizarCantidadCarrito(producto: InventarioProducto, cantidad: number) {
     const maximo = producto.controla_stock ? Math.max(1, producto.stock) : 99;
@@ -4115,8 +4391,14 @@ export default function App() {
   }, [me]);
 
   useEffect(() => {
-    if (me && !["admin", "contador"].includes(me.rol)) setInventarioVista("existencias");
-  }, [me?.rol]);
+    if (
+      me
+      && (
+        !["admin", "contador"].includes(me.rol)
+        || (inventarioVista === "comercio" && me.rol !== "admin")
+      )
+    ) setInventarioVista("existencias");
+  }, [me?.rol, inventarioVista]);
 
   useEffect(() => {
     if (!me || tab !== "consultas") return;
@@ -5087,11 +5369,36 @@ export default function App() {
     setVentasSeleccionadas(Array.from(new Set(compras)));
     setVentaCategoria(inferVentaCategoria(compras));
     setVentaCarrito(
-      (v.productos || []).map((producto) => ({
+      (v.productos || []).filter((producto) => !producto.configuracion_ref).map((producto) => ({
         producto_id: producto.producto_id,
-        cantidad: Math.max(1, Number(producto.cantidad || 1)),
+        cantidad: Math.max(1, Number(producto.cantidad || 1) - Number(producto.cantidad_cancelada || 0)),
       })),
     );
+    setVentaConfiguraciones(
+      (v.configuraciones || [])
+        .filter((config) => config.estado_registro === "activo" || !config.estado_registro)
+        .map((config) => ({ ...config })),
+    );
+    setVentaConfiguracionActiva(null);
+    setVentaDescuentosFase1B(
+      (v.descuentos || []).map((discount, index) => ({
+        ...discount,
+        valor: Number(discount.valor || 0),
+        orden_aplicacion: index + 1,
+        configuracion_refs: discount.configuracion_refs || [],
+        linea_refs: discount.linea_refs || [],
+      })),
+    );
+    setVentaPreviewFase1B(v.origen_catalogo === "fase1b" ? {
+      subtotal: Number(v.subtotal || 0),
+      descuento_total: Number(v.descuento_monto || 0),
+      total: Number(v.monto_total || 0),
+      descuentos: (v.descuentos || []).map((discount) => ({
+        descuento_ref: discount.descuento_ref,
+        base_elegible: Number(discount.base_elegible || 0),
+        monto_aplicado: Number(discount.monto_aplicado || 0),
+      })),
+    } : null);
     setQPacienteVenta(v.paciente_nombre);
     setPacientesVentaOpciones((opciones) => (
       opciones.some((opcion) => opcion.id === v.paciente_id)
@@ -5099,10 +5406,8 @@ export default function App() {
         : [{ id: v.paciente_id, label: v.paciente_nombre }, ...opciones]
     ));
     const descuentoMontoGuardado = Number(v.descuento_monto || 0);
-    setVentaDescuentoTipo(descuentoMontoGuardado > 0 ? "monto" : "porcentaje");
     setVentaDescuentoPorcentaje(Number(v.descuento_porcentaje || 0));
     setVentaDescuentoMontoFijo(descuentoMontoGuardado);
-    setVentaDescuentoEntrada(String(descuentoMontoGuardado > 0 ? descuentoMontoGuardado : Number(v.descuento_porcentaje || 0) || ""));
     const pagosEdicion = v.pagos && v.pagos.length > 0
       ? v.pagos
       : [{
@@ -5176,10 +5481,104 @@ export default function App() {
     setTimeout(() => setSuccessVentaMsg(null), 3000);
   }
 
+  function buildVentaFase1BPayload() {
+    if (!formVenta.paciente_id) throw new Error("Selecciona un paciente.");
+    if (ventaCarrito.length === 0 && ventaConfiguraciones.length === 0) {
+      throw new Error("Agrega al menos un producto o una configuración óptica.");
+    }
+    ventaConfiguraciones.forEach((config, index) => {
+      const design = inventario.find((item) => item.producto_id === config.diseno_producto_id);
+      const treatment = inventario.find((item) => item.producto_id === config.tratamiento_producto_id);
+      if (config.tipo_configuracion === "par_completo" && (!config.armazon_producto_id || !config.diseno_producto_id)) {
+        throw new Error(`El par ${index + 1} requiere armazón y diseño.`);
+      }
+      if (config.tipo_configuracion === "solo_micas" && !config.diseno_producto_id) {
+        throw new Error(`El par ${index + 1} requiere un diseño de micas.`);
+      }
+      if (config.tipo_configuracion === "solo_tratamiento" && !config.tratamiento_producto_id) {
+        throw new Error(`El trabajo ${index + 1} requiere un tratamiento.`);
+      }
+      if ((treatment?.sku === "DEMO-TRT-BLUE" || treatment?.sku === "DEMO-TRT-TINT") && !config.variante_id) {
+        throw new Error(`Selecciona la variante de ${treatment.nombre} en el par ${index + 1}.`);
+      }
+      const prescriptionOptional = config.tipo_configuracion === "solo_tratamiento"
+        || design?.sku === "DEMO-LENS-NONRX"
+        || config.uso_visual === "sin_graduacion";
+      if (!prescriptionOptional && !config.prescripcion_id) {
+        throw new Error(`Selecciona una receta del paciente para el par ${index + 1}.`);
+      }
+      if (config.uso_visual === "otro" && !config.uso_visual_otro?.trim()) {
+        throw new Error(`Describe el uso visual del par ${index + 1}.`);
+      }
+    });
+    const discounts = ventaDescuentosFase1B.map((discount, index) => {
+      const value = Number(discount.valor || 0);
+      if (!Number.isFinite(value) || value <= 0) throw new Error(`El descuento ${index + 1} requiere un valor mayor a cero.`);
+      if (discount.tipo === "porcentaje" && value > 100) throw new Error(`El porcentaje del descuento ${index + 1} no puede superar 100%.`);
+      if (discount.motivo === "otro" && !discount.motivo_otro?.trim()) throw new Error(`Describe el motivo del descuento ${index + 1}.`);
+      if (discount.alcance === "configuracion" && discount.configuracion_refs.length === 0) throw new Error(`Selecciona al menos un par para el descuento ${index + 1}.`);
+      if (discount.alcance === "linea" && discount.linea_refs.length === 0) throw new Error(`Selecciona al menos una línea para el descuento ${index + 1}.`);
+      return { ...discount, valor: Number(value.toFixed(2)), orden_aplicacion: index + 1 };
+    });
+    const payments = ventaPagos
+      .map((payment) => ({
+        ...(payment.pago_id ? { pago_id: payment.pago_id } : {}),
+        metodo: payment.metodo,
+        monto: Number(Number(payment.monto || 0).toFixed(2)),
+        referencia: payment.referencia || null,
+      }))
+      .filter((payment) => payment.monto > 0);
+    return cleanPayload({
+      paciente_id: formVenta.paciente_id,
+      sucursal_id: sucursalActivaId,
+      notas: formVenta.notas?.trim() || null,
+      forma_liquidacion: formVenta.forma_liquidacion || "pago_completo",
+      plazo_meses: formVenta.plazo_meses,
+      estado_venta: editingVentaId !== null ? ventaSeguimientoDraft.estado_venta : "confirmada",
+      productos_catalogo: ventaCarrito.map((item) => ({
+        linea_ref: `producto-${item.producto_id}`,
+        producto_id: item.producto_id,
+        cantidad: item.cantidad,
+      })),
+      configuraciones: ventaConfiguraciones,
+      descuentos: discounts,
+      pagos: payments,
+    });
+  }
+
+  async function previewVentaFase1B() {
+    setVentaPreviewLoading(true);
+    setError(null);
+    try {
+      const payload = buildVentaFase1BPayload();
+      const response = await apiFetch("/ventas/fase1b/preview", {
+        method: "POST",
+        body: JSON.stringify(payload),
+      });
+      if (!response.ok) throw new Error(await readErrorMessage(response));
+      const preview = await response.json();
+      setVentaPreviewFase1B(preview);
+      return preview;
+    } catch (reason: any) {
+      setVentaPreviewFase1B(null);
+      setError(reason?.message ?? String(reason));
+      throw reason;
+    } finally {
+      setVentaPreviewLoading(false);
+    }
+  }
+
   async function onSubmitVenta(e: FormEvent) {
     e.preventDefault();
     if (!ventaSubmitConfirmadoRef.current) {
-      setVentaConfirmacionOpen(true);
+      try {
+        if (editingVentaId === null || ventaEdicionOriginal?.origen_catalogo === "fase1b") {
+          await previewVentaFase1B();
+        }
+        setVentaConfirmacionOpen(true);
+      } catch {
+        // La validación detallada queda visible en el formulario.
+      }
       return;
     }
     ventaSubmitConfirmadoRef.current = false;
@@ -5188,6 +5587,34 @@ export default function App() {
     setSuccessVentaMsg(null);
 
     try {
+      if (editingVentaId === null || ventaEdicionOriginal?.origen_catalogo === "fase1b") {
+        const payload = buildVentaFase1BPayload();
+        const endpoint = editingVentaId === null ? "/ventas/fase1b" : `/ventas/${editingVentaId}/fase1b`;
+        const response = await apiFetch(endpoint, {
+          method: editingVentaId === null ? "POST" : "PUT",
+          body: JSON.stringify(payload),
+        });
+        if (!response.ok) throw new Error(await readErrorMessage(response));
+        const saved: Venta = await response.json();
+        if (editingVentaId !== null) {
+          setVentaEdicionOriginal(saved);
+          setVentaConfiguraciones(saved.configuraciones || []);
+          setVentaDescuentosFase1B(saved.descuentos || []);
+          setVentaCarrito((saved.productos || []).filter((item) => !item.configuracion_ref && item.estado_registro !== "cancelado").map((item) => ({ producto_id: item.producto_id, cantidad: item.cantidad - Number(item.cantidad_cancelada || 0) })));
+          setVentaPreviewFase1B({
+            subtotal: Number(saved.subtotal || 0), descuento_total: Number(saved.descuento_monto || 0),
+            total: Number(saved.monto_total || 0), descuentos: (saved.descuentos || []).map((discount) => ({ descuento_ref: discount.descuento_ref, base_elegible: Number(discount.base_elegible || 0), monto_aplicado: Number(discount.monto_aplicado || 0) })),
+          });
+          setSuccessVentaMsg("Cambios guardados. La venta permanece abierta para más ediciones.");
+        } else {
+          resetVentaWizard();
+          setFormVenta((prev) => ({ ...prev, compra: "", subtotal: 0, monto_total: 0, notas: "", descuento_porcentaje: 0, descuento_monto: 0, descuento_motivo: null, cupon_tipo: null }));
+          setSuccessVentaMsg("Venta guardada con el catálogo global.");
+        }
+        await Promise.all([loadInventario(), loadVentasResumen()]);
+        setTimeout(() => setSuccessVentaMsg(null), 3500);
+        return;
+      }
       if (!formVenta.paciente_id || formVenta.paciente_id === 0) throw new Error("Selecciona un paciente.");
       const carritoDetalle = ventaCarrito
         .map((item) => {
@@ -5993,11 +6420,10 @@ export default function App() {
   const ventaGraduacionSol = productosPor("lentes_de_sol", "graduacion");
   const ventaMicasDisenos = productosPor("micas", "diseno");
   const ventaMicasTratamientos = productosPor("micas", "tratamiento");
-  const ventaTratamientoSin = ventaMicasTratamientos.find((producto) => producto.tipo_mica === "sin_tratamiento");
-  const ventaTratamientoAntirreflejante = ventaMicasTratamientos.find((producto) => producto.tipo_mica === "antirreflejante");
-  const ventaTratamientoFotocromatico = ventaMicasTratamientos.find((producto) => producto.tipo_mica === "fotocromatico");
-  const ventaTratamientosAntiblue = ventaMicasTratamientos.filter((producto) => producto.tipo_mica === "antiblueray");
-  const ventaTratamientosTinte = ventaMicasTratamientos.filter((producto) => producto.tipo_mica === "tinte");
+  const ventaTratamientoAntirreflejante = ventaMicasTratamientos.find((producto) => producto.sku === "DEMO-TRT-AR");
+  const ventaTratamientoFotocromatico = ventaMicasTratamientos.find((producto) => producto.sku === "DEMO-TRT-PHOTO");
+  const ventaTratamientoAntiblue = ventaMicasTratamientos.find((producto) => producto.sku === "DEMO-TRT-BLUE");
+  const ventaTratamientoTinte = ventaMicasTratamientos.find((producto) => producto.sku === "DEMO-TRT-TINT");
   const ventaExamenes = productosPor("examen_de_la_vista");
   const ventaContactos = productosPor("lentes_de_contacto");
   const ventaAccesorios = productosPor("accesorios_y_refacciones");
@@ -6013,33 +6439,21 @@ export default function App() {
     (ventaEdicionOriginal?.productos || []).map((producto) => [producto.producto_id, Number(producto.cantidad || 0)]),
   );
   const ventaArmazonesSeleccionados = ventaArmazonesOpticos.filter((producto) => ventaCarritoIds.has(producto.producto_id));
-  const ventaArmazonSeleccionado = ventaArmazonesSeleccionados[0];
-  const ventaDisenoSeleccionado = ventaMicasDisenos.find((producto) => ventaCarritoIds.has(producto.producto_id));
-  const ventaTratamientoSeleccionado = ventaMicasTratamientos.find((producto) => ventaCarritoIds.has(producto.producto_id));
-  const ventaTinteSeleccionado = ventaTratamientoSeleccionado?.tipo_mica === "tinte"
-    ? ventaTratamientoSeleccionado
-    : undefined;
-  const ventaAntiblueSeleccionado = ventaTratamientoSeleccionado?.tipo_mica === "antiblueray"
-    ? ventaTratamientoSeleccionado
-    : undefined;
   const ventaSubtotalCarrito = ventaCarritoDetalle.reduce(
     (total, item) => total + Number(item.producto.precio || 0) * item.cantidad,
     0,
   );
-  const ventaSubtotalResumen = me?.rol === "admin"
-    ? ventaSubtotalCarrito
-    : Number(formVenta.subtotal ?? formVenta.monto_total ?? 0);
-  const ventaDescuentoMonto = Number(
-    (
-      ventaDescuentoTipo === "monto"
-        ? ventaDescuentoMontoFijo
-        : ventaSubtotalResumen * ventaDescuentoPorcentaje / 100
-    ).toFixed(2),
-  );
-  const ventaDescuentoActivo = ventaDescuentoMonto > 0;
-  const ventaTotalCarrito = Number(
-    Math.max(0, ventaSubtotalResumen - ventaDescuentoMonto).toFixed(2),
-  );
+  const ventaSubtotalConfiguraciones = ventaConfiguraciones.reduce((total, config) => {
+    const frame = inventario.find((item) => item.producto_id === config.armazon_producto_id);
+    const design = inventario.find((item) => item.producto_id === config.diseno_producto_id);
+    const treatment = inventario.find((item) => item.producto_id === config.tratamiento_producto_id);
+    const variant = treatment?.variantes?.find((item) => item.variante_id === config.variante_id);
+    const treatmentPrice = variant?.precio_ajuste_override ?? treatment?.precio ?? 0;
+    return total + Number(frame?.precio || 0) + Number(design?.precio || 0) + Number(treatmentPrice || 0);
+  }, 0);
+  const ventaSubtotalResumen = ventaSubtotalCarrito + ventaSubtotalConfiguraciones;
+  const ventaDescuentoMonto = Number(ventaPreviewFase1B?.descuento_total || 0);
+  const ventaTotalCarrito = Number((ventaPreviewFase1B?.total ?? ventaSubtotalResumen).toFixed(2));
   const ventaMontoPagado = Number(
     ventaPagos.reduce((total, pago) => total + Math.max(0, Number(pago.monto || 0)), 0).toFixed(2),
   );
@@ -6167,7 +6581,7 @@ export default function App() {
           <span style={{ width: 82, height: 82, overflow: "hidden", background: "#f5f7f9", border: "1px solid #e2e8ee" }}>
             {producto.imagen_url ? (
               <img
-                src={producto.imagen_url}
+                src={resolveCatalogMediaUrl(producto.imagen_url)}
                 alt={producto.nombre}
                 style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
               />
@@ -6437,12 +6851,12 @@ export default function App() {
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginBottom: 10 }}>
         <div>
           <div style={{ fontWeight: 900, color: "#16385d" }}>Resumen de productos</div>
-          <div style={{ fontSize: 12, color: "#6b7f93" }}>{ventaCarritoDetalle.length} producto(s) diferente(s)</div>
+          <div style={{ fontSize: 12, color: "#6b7f93" }}>{ventaCarritoDetalle.length} producto(s) y {ventaConfiguraciones.length} par(es) configurado(s)</div>
         </div>
-        {ventaCarritoDetalle.length > 0 && (
+        {(ventaCarritoDetalle.length > 0 || ventaConfiguraciones.length > 0) && (
           <button
             type="button"
-            onClick={() => setVentaCarrito([])}
+            onClick={() => { setVentaCarrito([]); setVentaConfiguraciones([]); setVentaPreviewFase1B(null); }}
             style={{ ...actionBtnStyle, padding: "7px 10px" }}
           >
             Vaciar carrito
@@ -6450,41 +6864,22 @@ export default function App() {
         )}
       </div>
 
-      {(ventaArmazonesSeleccionados.length > 0 || ventaDisenoSeleccionado || ventaTratamientoSeleccionado) && (
-        <div style={{ display: "grid", gap: 5, marginBottom: 10, padding: 10, border: "1px solid #dbe6ef", background: "#fff" }}>
-          <div style={{ display: "flex", justifyContent: "space-between", gap: 10, fontSize: 12 }}>
-            <span style={{ color: "#6b7f93" }}>Armazones</span>
-            <strong style={{ textAlign: "right", color: "#31475d" }}>
-              {ventaArmazonesSeleccionados.length > 0
-                ? ventaArmazonesSeleccionados
-                    .map((producto) => {
-                      const cantidad = ventaCarrito.find((item) => item.producto_id === producto.producto_id)?.cantidad || 1;
-                      return `${cantidad}× ${producto.nombre} · $${(Number(producto.precio) * cantidad).toFixed(2)}`;
-                    })
-                    .join(" · ")
-                : "Pendiente"}
-            </strong>
-          </div>
-          <div style={{ display: "flex", justifyContent: "space-between", gap: 10, fontSize: 12 }}>
-            <span style={{ color: "#6b7f93" }}>Diseño</span>
-            <strong style={{ textAlign: "right", color: "#31475d" }}>
-              {ventaDisenoSeleccionado
-                ? `${ventaDisenoSeleccionado.nombre} · +$${Number(ventaDisenoSeleccionado.precio).toFixed(2)}`
-                : "Pendiente"}
-            </strong>
-          </div>
-          <div style={{ display: "flex", justifyContent: "space-between", gap: 10, fontSize: 12 }}>
-            <span style={{ color: "#6b7f93" }}>Tratamiento / tinte</span>
-            <strong style={{ textAlign: "right", color: "#31475d" }}>
-              {ventaTratamientoSeleccionado
-                ? `${ventaTratamientoSeleccionado.nombre}${ventaTinteGrado ? ` · ${ventaTinteGrado.replace("_", " ")}` : ""} · +$${Number(ventaTratamientoSeleccionado.precio).toFixed(2)}`
-                : "Pendiente"}
-            </strong>
-          </div>
-        </div>
-      )}
+      {ventaConfiguraciones.map((config, index) => {
+        const frame = inventario.find((item) => item.producto_id === config.armazon_producto_id);
+        const design = inventario.find((item) => item.producto_id === config.diseno_producto_id);
+        const treatment = inventario.find((item) => item.producto_id === config.tratamiento_producto_id);
+        const variant = treatment?.variantes?.find((item) => item.variante_id === config.variante_id);
+        return <div key={config.configuracion_ref} style={{ display: "grid", gap: 4, marginBottom: 8, padding: 10, border: "1px solid #dbe6ef", background: "#fff" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}><strong style={{ color: "#174ea6" }}>Par {index + 1}</strong><button type="button" onClick={() => { setVentaCategoria("lentes_opticos"); setVentaConfiguracionActiva(config.configuracion_ref); }} style={{ ...actionBtnStyle, padding: "4px 8px" }}>Editar</button></div>
+          <div style={{ fontSize: 12 }}><span style={{ color: "#718397" }}>Tipo:</span> {config.tipo_configuracion.replaceAll("_", " ")}</div>
+          <div style={{ fontSize: 12 }}><span style={{ color: "#718397" }}>Armazón:</span> {frame?.nombre || "Armazón del cliente"}</div>
+          <div style={{ fontSize: 12 }}><span style={{ color: "#718397" }}>Diseño:</span> {design?.nombre || "No aplica"}</div>
+          <div style={{ fontSize: 12 }}><span style={{ color: "#718397" }}>Tratamiento:</span> {treatment ? `${treatment.nombre}${variant ? ` · ${variant.nombre}` : ""}` : "Sin tratamiento"}</div>
+          <div style={{ fontSize: 12 }}><span style={{ color: "#718397" }}>Uso:</span> {config.uso_visual.replaceAll("_", " ")} · <span style={{ color: "#718397" }}>Abasto:</span> {config.comportamiento_abasto_usado.replaceAll("_", " ")}</div>
+        </div>;
+      })}
 
-      {ventaCarritoDetalle.length === 0 ? (
+      {ventaCarritoDetalle.length === 0 && ventaConfiguraciones.length === 0 ? (
         <div style={{ padding: 18, border: "1px dashed #b9cde0", background: "#fff", color: "#6b7f93", textAlign: "center" }}>
           Selecciona productos del catálogo para comenzar.
         </div>
@@ -6513,7 +6908,7 @@ export default function App() {
                 {!esMica && (
                   <div style={{ width: 52, height: 46, overflow: "hidden", border: "1px solid #e3e9ee", background: "#f5f7f9" }}>
                     {producto.imagen_url ? (
-                      <img src={producto.imagen_url} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                      <img src={resolveCatalogMediaUrl(producto.imagen_url)} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
                     ) : (
                       <span style={{ width: "100%", height: "100%", display: "grid", placeItems: "center", color: "#8aa0b2" }}>◇</span>
                     )}
@@ -6561,217 +6956,77 @@ export default function App() {
 
       {renderVentaPagoLiquidacion()}
 
-      <div style={{ marginTop: 12, display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: 12, alignItems: "end" }}>
-        <div style={{ display: "block", fontWeight: 800, color: "#31475d" }}>
-          <div>Cupón / descuento</div>
-          <div style={{ display: "grid", gridTemplateColumns: "minmax(120px, .8fr) minmax(150px, 1.2fr)", gap: 8, marginTop: 5 }}>
-            <label style={{ display: "grid", gap: 4, fontSize: 11 }}>
-              Tipo
-              <select
-                value={ventaDescuentoTipo}
-                onChange={(e) => {
-                  const tipo = e.target.value as "porcentaje" | "monto";
-                  setVentaDescuentoTipo(tipo);
-                  setVentaDescuentoPorcentaje(0);
-                  setVentaDescuentoMontoFijo(0);
-                  setVentaDescuentoEntrada("");
-                  setFormVenta((curr) => ({
-                    ...curr,
-                    descuento_porcentaje: 0,
-                    descuento_monto: 0,
-                    descuento_motivo: null,
-                    cupon_tipo: null,
-                  }));
-                }}
-                style={{ width: "100%", padding: 9, border: "1px solid #b9cce0", background: "#fff" }}
-              >
-                <option value="porcentaje">Porcentaje (%)</option>
-                <option value="monto">Monto fijo (MXN)</option>
-              </select>
-            </label>
-            <label style={{ display: "grid", gap: 4, fontSize: 11 }}>
-              {ventaDescuentoTipo === "porcentaje" ? "Porcentaje" : "Cantidad a descontar"}
-              <input
-                type="text"
-                inputMode="decimal"
-                value={ventaDescuentoEntrada}
-                placeholder="0"
-                onChange={(e) => {
-                  const entrada = e.target.value.replace(",", ".");
-                  if (entrada !== "" && !/^\d+(?:\.\d{0,2})?$/.test(entrada)) return;
-                  const raw = entrada === "" ? 0 : Number(entrada);
-                  if (ventaDescuentoTipo === "porcentaje" && raw > 100) return;
-                  setVentaDescuentoEntrada(entrada);
-                  const next = Math.max(0, raw);
-                  if (ventaDescuentoTipo === "porcentaje") {
-                    setVentaDescuentoPorcentaje(next);
-                    setVentaDescuentoMontoFijo(0);
-                  } else {
-                    setVentaDescuentoMontoFijo(next);
-                    setVentaDescuentoPorcentaje(0);
-                  }
-                  setFormVenta((curr) => ({
-                    ...curr,
-                    descuento_porcentaje: ventaDescuentoTipo === "porcentaje" ? next : 0,
-                    descuento_monto: ventaDescuentoTipo === "monto" ? next : 0,
-                    descuento_motivo: next > 0 ? curr.descuento_motivo : null,
-                    cupon_tipo: next > 0 ? curr.cupon_tipo : null,
-                  }));
-                }}
-                style={{ width: "100%", padding: 9, border: "1px solid #b9cce0" }}
-              />
-            </label>
-          </div>
-          <span style={{ display: "flex", gap: 5, flexWrap: "wrap", marginTop: 6 }}>
-            {(ventaDescuentoTipo === "porcentaje" ? [0, 5, 10, 15, 20, 25, 50] : [0, 100, 250, 500, 1000]).map((valor) => (
-              <button
-                key={valor}
-                type="button"
-                onClick={() => {
-                  if (ventaDescuentoTipo === "porcentaje") {
-                    setVentaDescuentoPorcentaje(valor);
-                    setVentaDescuentoMontoFijo(0);
-                  } else {
-                    setVentaDescuentoMontoFijo(valor);
-                    setVentaDescuentoPorcentaje(0);
-                  }
-                  setVentaDescuentoEntrada(valor === 0 ? "" : String(valor));
-                  setFormVenta((curr) => ({
-                    ...curr,
-                    descuento_porcentaje: ventaDescuentoTipo === "porcentaje" ? valor : 0,
-                    descuento_monto: ventaDescuentoTipo === "monto" ? valor : 0,
-                    descuento_motivo: valor > 0 ? curr.descuento_motivo : null,
-                    cupon_tipo: valor > 0 ? curr.cupon_tipo : null,
-                  }));
-                }}
-                style={{
-                  padding: "5px 8px",
-                  border: (ventaDescuentoTipo === "porcentaje" ? ventaDescuentoPorcentaje : ventaDescuentoMontoFijo) === valor ? "1px solid #1677d2" : "1px solid #cfdbe6",
-                  background: (ventaDescuentoTipo === "porcentaje" ? ventaDescuentoPorcentaje : ventaDescuentoMontoFijo) === valor ? "#ddebff" : "#fff",
-                  color: "#174ea6",
-                  cursor: "pointer",
-                  fontWeight: 800,
-                }}
-              >
-                {ventaDescuentoTipo === "porcentaje" ? `${valor}%` : `$${valor}`}
-              </button>
-            ))}
-          </span>
-          {ventaDescuentoTipo === "monto" && ventaDescuentoMontoFijo > ventaSubtotalResumen && (
-            <span style={{ display: "block", marginTop: 7, color: "#b91c1c", fontSize: 11 }}>
-              El descuento no puede ser mayor al subtotal.
-            </span>
-          )}
-          {ventaDescuentoActivo && (
-            <span style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 12 }}>
-              <span style={{ display: "grid", gap: 5 }}>
-                <span style={{ color: "#40566c", fontSize: 12 }}>Motivo del descuento *</span>
-                <select
-                  value={formVenta.descuento_motivo || ""}
-                  onChange={(e) => setFormVenta((curr) => ({ ...curr, descuento_motivo: e.target.value || null }))}
-                  style={{ width: "100%", padding: 9, border: "1px solid #cbd8e4", background: "#fff" }}
-                >
-                  <option value="">Seleccionar motivo</option>
-                  {VENTA_DESCUENTO_MOTIVO_OPTIONS.map((opcion) => (
-                    <option key={opcion.value} value={opcion.value}>{opcion.label}</option>
-                  ))}
-                </select>
-              </span>
-              <span style={{ display: "grid", gap: 5 }}>
-                <span style={{ color: "#40566c", fontSize: 12 }}>Tipo de cupón *</span>
-                <select
-                  value={formVenta.cupon_tipo || ""}
-                  onChange={(e) => setFormVenta((curr) => ({ ...curr, cupon_tipo: e.target.value || null }))}
-                  style={{ width: "100%", padding: 9, border: "1px solid #cbd8e4", background: "#fff" }}
-                >
-                  <option value="">Seleccionar tipo de cupón</option>
-                  {VENTA_CUPON_TIPO_OPTIONS.map((opcion) => (
-                    <option key={opcion.value} value={opcion.value}>{opcion.label}</option>
-                  ))}
-                </select>
-              </span>
-            </span>
-          )}
+      <div style={{ marginTop: 12, display: "grid", gap: 10 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center" }}>
+          <div><strong style={{ color: "#173b61" }}>Descuentos acumulados</strong><div style={{ color: "#718397", fontSize: 11 }}>Se aplican exactamente en el orden mostrado.</div></div>
+          <button type="button" onClick={agregarDescuentoFase1B} disabled={!isAdmin && ventaDescuentosFase1B.length >= 1} style={actionBtnStyle}>+ Agregar descuento</button>
         </div>
+        {ventaDescuentosFase1B.map((discount, index) => {
+          const preview = ventaPreviewFase1B?.descuentos.find((item) => item.descuento_ref === discount.descuento_ref);
+          const lineOptions = [
+            ...ventaCarritoDetalle.map(({ producto }) => ({ value: `producto-${producto.producto_id}`, label: producto.nombre })),
+            ...ventaConfiguraciones.flatMap((config, configIndex) => {
+              const options: Array<{ value: string; label: string }> = [];
+              if (config.armazon_producto_id) options.push({ value: `${config.configuracion_ref}:armazon`, label: `Par ${configIndex + 1}: armazón` });
+              if (config.diseno_producto_id) options.push({ value: `${config.configuracion_ref}:diseno`, label: `Par ${configIndex + 1}: diseño` });
+              if (config.tratamiento_producto_id) options.push({ value: `${config.configuracion_ref}:tratamiento`, label: `Par ${configIndex + 1}: tratamiento` });
+              return options;
+            }),
+          ];
+          return <div key={discount.descuento_ref} style={{ padding: 10, border: "1px solid #cbd8e4", background: "#fff" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 8, marginBottom: 8 }}>
+              <strong>#{index + 1} en el orden de aplicación</strong>
+              <span style={{ display: "flex", gap: 5 }}>
+                {isAdmin && <><button type="button" disabled={index === 0} onClick={() => moverDescuentoFase1B(discount.descuento_ref, -1)} style={{ ...actionBtnStyle, padding: "4px 8px" }}>↑</button><button type="button" disabled={index === ventaDescuentosFase1B.length - 1} onClick={() => moverDescuentoFase1B(discount.descuento_ref, 1)} style={{ ...actionBtnStyle, padding: "4px 8px" }}>↓</button></>}
+                <button type="button" onClick={() => { setVentaDescuentosFase1B((prev) => prev.filter((item) => item.descuento_ref !== discount.descuento_ref).map((item, position) => ({ ...item, orden_aplicacion: position + 1 }))); setVentaPreviewFase1B(null); }} style={{ ...actionBtnStyle, padding: "4px 8px", color: "#991b1b" }}>Quitar</button>
+              </span>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(145px, 1fr))", gap: 8 }}>
+              <label style={{ display: "grid", gap: 4, fontSize: 11 }}>Tipo<select value={discount.tipo} onChange={(event) => actualizarDescuentoFase1B(discount.descuento_ref, { tipo: event.target.value as VentaDescuentoFase1B["tipo"], valor: "" })} style={{ padding: 8, border: "1px solid #b9cce0", background: "#fff" }}><option value="porcentaje">Porcentaje (%)</option><option value="monto_fijo">Monto fijo (MXN)</option></select></label>
+              <label style={{ display: "grid", gap: 4, fontSize: 11 }}>Valor<input inputMode="decimal" value={discount.valor} onChange={(event) => { const value = event.target.value.replace(",", "."); if (value !== "" && !/^\d+(?:\.\d{0,2})?$/.test(value)) return; if (discount.tipo === "porcentaje" && Number(value || 0) > 100) return; actualizarDescuentoFase1B(discount.descuento_ref, { valor: value }); }} style={{ padding: 8, border: "1px solid #b9cce0" }} /></label>
+              <label style={{ display: "grid", gap: 4, fontSize: 11 }}>Motivo<select value={discount.motivo} onChange={(event) => actualizarDescuentoFase1B(discount.descuento_ref, { motivo: event.target.value })} style={{ padding: 8, border: "1px solid #b9cce0", background: "#fff" }}>{VENTA_DESCUENTO_MOTIVO_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}<option value="cliente_frecuente">Cliente frecuente</option><option value="otro">Otro</option></select></label>
+              <label style={{ display: "grid", gap: 4, fontSize: 11 }}>Cupón<select value={discount.cupon_tipo} onChange={(event) => actualizarDescuentoFase1B(discount.descuento_ref, { cupon_tipo: event.target.value as VentaDescuentoFase1B["cupon_tipo"] })} style={{ padding: 8, border: "1px solid #b9cce0", background: "#fff" }}><option value="online">Cupón online</option><option value="fisico">Cupón físico</option><option value="sin_cupon">Sin cupón</option></select></label>
+              <label style={{ display: "grid", gap: 4, fontSize: 11 }}>Aplicar a<select value={discount.alcance} onChange={(event) => actualizarDescuentoFase1B(discount.descuento_ref, { alcance: event.target.value as VentaDescuentoFase1B["alcance"], configuracion_refs: [], linea_refs: [] })} style={{ padding: 8, border: "1px solid #b9cce0", background: "#fff" }}><option value="venta">Toda la venta</option><option value="configuracion">Uno o varios pares</option><option value="linea">Líneas específicas</option></select></label>
+            </div>
+            {discount.motivo === "otro" && <input value={discount.motivo_otro || ""} onChange={(event) => actualizarDescuentoFase1B(discount.descuento_ref, { motivo_otro: event.target.value })} placeholder="Describe el motivo" style={{ width: "100%", marginTop: 8, padding: 8, border: "1px solid #b9cce0" }} />}
+            {discount.alcance === "configuracion" && <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 8 }}>{ventaConfiguraciones.map((config, configIndex) => { const selected = discount.configuracion_refs.includes(config.configuracion_ref); return <button key={config.configuracion_ref} type="button" onClick={() => actualizarDescuentoFase1B(discount.descuento_ref, { configuracion_refs: selected ? discount.configuracion_refs.filter((ref) => ref !== config.configuracion_ref) : [...discount.configuracion_refs, config.configuracion_ref] })} style={{ ...actionBtnStyle, background: selected ? "#ddebff" : "#fff", borderColor: selected ? "#2563eb" : "#cbd8e4" }}>Par {configIndex + 1}</button>; })}</div>}
+            {discount.alcance === "linea" && <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 8 }}>{lineOptions.map((option) => { const selected = discount.linea_refs.includes(option.value); return <button key={option.value} type="button" onClick={() => actualizarDescuentoFase1B(discount.descuento_ref, { linea_refs: selected ? discount.linea_refs.filter((ref) => ref !== option.value) : [...discount.linea_refs, option.value] })} style={{ ...actionBtnStyle, background: selected ? "#ddebff" : "#fff", borderColor: selected ? "#2563eb" : "#cbd8e4" }}>{option.label}</button>; })}</div>}
+            {preview && <div style={{ marginTop: 8, padding: 7, background: "#eff6ff", color: "#174ea6", fontSize: 12 }}>Base restante elegible: ${Number(preview.base_elegible).toFixed(2)} · Descuenta: ${Number(preview.monto_aplicado).toFixed(2)}</div>}
+          </div>;
+        })}
+        <button type="button" onClick={() => previewVentaFase1B().catch(() => undefined)} disabled={ventaPreviewLoading} style={{ ...actionBtnStyle, borderColor: "#2563eb", color: "#174ea6" }}>{ventaPreviewLoading ? "Calculando..." : "Actualizar vista previa"}</button>
         <div style={{ padding: 12, background: "#102f50", color: "#fff" }}>
-          <div style={{ display: "flex", justifyContent: "space-between", gap: 10, fontSize: 13 }}>
-            <span>Subtotal</span><strong>${ventaSubtotalResumen.toFixed(2)}</strong>
-          </div>
-          <div style={{ display: "flex", justifyContent: "space-between", gap: 10, marginTop: 5, fontSize: 13, color: "#a9d5ff" }}>
-            <span>
-              Descuento {ventaDescuentoTipo === "porcentaje" ? `(${ventaDescuentoPorcentaje}%)` : "(monto fijo)"}
-            </span>
-            <strong>−${ventaDescuentoMonto.toFixed(2)}</strong>
-          </div>
-          <div style={{ display: "flex", justifyContent: "space-between", gap: 10, marginTop: 5, fontSize: 13, color: "#cbdff3" }}>
-            <span>Pagado</span><strong>−${ventaMontoPagado.toFixed(2)}</strong>
-          </div>
-          <div style={{ display: "flex", justifyContent: "space-between", gap: 10, marginTop: 5, fontSize: 13, color: "#fff" }}>
-            <span>Saldo por pagar</span><strong>${ventaSaldo.toFixed(2)}</strong>
-          </div>
-          <div style={{ display: "flex", justifyContent: "space-between", gap: 10, marginTop: 9, paddingTop: 9, borderTop: "1px solid rgba(255,255,255,.22)", fontSize: 19 }}>
-            <span>Total</span><strong>${ventaTotalCarrito.toFixed(2)} MXN</strong>
-          </div>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 10, fontSize: 13 }}><span>Subtotal</span><strong>${ventaSubtotalResumen.toFixed(2)}</strong></div>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 10, marginTop: 5, fontSize: 13, color: "#a9d5ff" }}><span>Descuentos ({ventaDescuentosFase1B.length})</span><strong>−${ventaDescuentoMonto.toFixed(2)}</strong></div>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 10, marginTop: 5, fontSize: 13, color: "#cbdff3" }}><span>Pagado</span><strong>−${ventaMontoPagado.toFixed(2)}</strong></div>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 10, marginTop: 5, fontSize: 13 }}><span>Saldo por pagar</span><strong>${ventaSaldo.toFixed(2)}</strong></div>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 10, marginTop: 9, paddingTop: 9, borderTop: "1px solid rgba(255,255,255,.22)", fontSize: 19 }}><span>Total</span><strong>${ventaTotalCarrito.toFixed(2)} MXN</strong></div>
         </div>
       </div>
       {editingVentaId === null && (
         <div style={{ display: "grid", gap: 6, marginTop: 12 }}>
           <button
             type="button"
-            onClick={() => {
-              setError(null);
-              if (!formVenta.paciente_id) {
-                setError("Selecciona un paciente antes de confirmar.");
-                return;
+            onClick={async () => {
+              try {
+                await previewVentaFase1B();
+                setVentaConfirmacionOpen(true);
+              } catch {
+                // El detalle validado ya se muestra en el formulario.
               }
-              if (ventaCarritoDetalle.length === 0) {
-                setError("Agrega al menos un producto antes de confirmar.");
-                return;
-              }
-              if (
-                ventaArmazonesSeleccionados.length > 0
-                && (!ventaDisenoSeleccionado || !ventaTratamientoSeleccionado)
-              ) {
-                setError("Completa la selección de micas: diseño y tratamiento.");
-                return;
-              }
-              if (ventaMontoPagado <= 0) {
-                setError("Registra al menos un pago o adelanto antes de confirmar.");
-                return;
-              }
-              if (ventaMontoPagado > ventaTotalCarrito) {
-                setError("La suma de los pagos no puede ser mayor al total.");
-                return;
-              }
-              if (
-                ["meses_sin_intereses", "meses_con_intereses"].includes(formVenta.forma_liquidacion || "")
-                && ![3, 6, 9, 12, 18, 24].includes(Number(formVenta.plazo_meses || 0))
-              ) {
-                setError("Selecciona el plazo del financiamiento.");
-                return;
-              }
-              if (ventaDescuentoTipo === "monto" && ventaDescuentoMontoFijo > ventaSubtotalResumen) {
-                setError("El descuento en pesos no puede ser mayor al subtotal.");
-                return;
-              }
-              if (ventaDescuentoActivo && (!formVenta.descuento_motivo || !formVenta.cupon_tipo)) {
-                setError("Completa el motivo y el tipo de cupón del descuento.");
-                return;
-              }
-              setVentaConfirmacionOpen(true);
             }}
-            disabled={savingVenta || !canCreateVenta}
+            disabled={savingVenta || ventaPreviewLoading || !canCreateVenta}
             style={{
               width: "100%",
               padding: 13,
               border: "1px solid #0f766e",
-              background: savingVenta || !canCreateVenta ? "#dfe9e8" : "#0f766e",
-              color: savingVenta || !canCreateVenta ? "#526b7b" : "#fff",
+              background: savingVenta || ventaPreviewLoading || !canCreateVenta ? "#dfe9e8" : "#0f766e",
+              color: savingVenta || ventaPreviewLoading || !canCreateVenta ? "#526b7b" : "#fff",
               fontWeight: 900,
               cursor: savingVenta || !canCreateVenta ? "not-allowed" : "pointer",
             }}
           >
-            Confirmar venta
+            {ventaPreviewLoading ? "Calculando..." : "Previsualizar y confirmar venta"}
           </button>
           <span style={{ textAlign: "center", color: "#718397", fontSize: 10 }}>
             Revisarás una confirmación final antes de guardar.
@@ -6822,215 +7077,152 @@ export default function App() {
     </section>
   );
 
-  const renderFlujoLentesOpticos = () => {
-    const precioTratamientoAzul = Number(ventaTratamientosAntiblue[0]?.precio || 0);
-    const tratamientoEsSinOTinte = ventaTratamientoSeleccionado?.tipo_mica === "sin_tratamiento"
-      || ventaTratamientoSeleccionado?.tipo_mica === "tinte";
-
-    return (
-      <div style={{ display: "grid", gap: 8 }}>
-        <section style={{ border: "1px solid #cbd8e4", background: "#fff" }}>
-            <div style={{ padding: 11 }}>
-              <div style={{ marginBottom: 3, fontWeight: 900, color: "#173b61" }}>1. Selecciona uno o varios armazones</div>
-              <div style={{ marginBottom: 8, color: "#718397", fontSize: 11 }}>
-                Puedes combinar diferentes modelos; vuelve a pulsar uno para quitarlo.
-              </div>
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(205px, 1fr))", gap: 7 }}>
-                {ventaArmazonesOpticos.map((producto) =>
-                  renderVentaProductoButton(
-                    producto,
-                    () => seleccionarArmazonFlujoOptico(producto),
-                  ),
-                )}
-              </div>
-              {ventaArmazonesSeleccionados.length > 0 && (
-                <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid #dbe6ef" }}>
-                  <strong style={{ color: "#174ea6" }}>
-                    {ventaArmazonesSeleccionados.length} modelo(s) seleccionado(s)
-                  </strong>
-                </div>
-              )}
+  const renderFlujoLentesOpticos = () => (
+    <div style={{ display: "grid", gap: 10 }}>
+      <div style={{ display: "flex", gap: 7, flexWrap: "wrap" }}>
+        <button type="button" onClick={() => crearConfiguracionOptica("par_completo")} style={{ ...actionBtnStyle, borderColor: "#2563eb", color: "#174ea6" }}>+ Par completo</button>
+        <button type="button" onClick={() => crearConfiguracionOptica("solo_micas")} style={actionBtnStyle}>+ Solo micas</button>
+        <button type="button" onClick={() => crearConfiguracionOptica("solo_tratamiento")} style={actionBtnStyle}>+ Solo tratamiento</button>
+      </div>
+      {ventaConfiguraciones.length === 0 && (
+        <div style={{ padding: 16, border: "1px dashed #a9bed3", background: "#f8fbff", color: "#526b7b" }}>
+          Agrega una configuración por cada par. Cada una guarda su propio diseño, tratamiento, uso y receta.
+        </div>
+      )}
+      {ventaConfiguraciones.map((config, index) => {
+        const expanded = ventaConfiguracionActiva === config.configuracion_ref;
+        const frame = inventario.find((item) => item.producto_id === config.armazon_producto_id);
+        const design = inventario.find((item) => item.producto_id === config.diseno_producto_id);
+        const treatment = inventario.find((item) => item.producto_id === config.tratamiento_producto_id);
+        const variant = treatment?.variantes?.find((item) => item.variante_id === config.variante_id);
+        const treatmentPrice = variant?.precio_ajuste_override ?? treatment?.precio ?? 0;
+        const configTotal = Number(frame?.precio || 0) + Number(design?.precio || 0) + Number(treatmentPrice || 0);
+        const needsVariant = treatment?.sku === "DEMO-TRT-BLUE" || treatment?.sku === "DEMO-TRT-TINT";
+        const prescriptionOptional = config.tipo_configuracion === "solo_tratamiento"
+          || design?.sku === "DEMO-LENS-NONRX"
+          || config.uso_visual === "sin_graduacion";
+        const optionStyle = (selected: boolean): CSSProperties => ({
+          minHeight: 64, padding: 9, border: selected ? "2px solid #2563eb" : "1px solid #cbd8e4",
+          background: selected ? "#eaf2ff" : "#fff", color: "#173b61", textAlign: "left",
+          fontWeight: 850, cursor: "pointer",
+        });
+        return (
+          <section key={config.configuracion_ref} style={{ border: expanded ? "2px solid #2563eb" : "1px solid #cbd8e4", background: "#fff" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, padding: 11, background: expanded ? "#edf5ff" : "#f8fafc" }}>
+              <button type="button" onClick={() => setVentaConfiguracionActiva(expanded ? null : config.configuracion_ref)} style={{ flex: 1, border: 0, background: "transparent", textAlign: "left", cursor: "pointer" }}>
+                <strong style={{ color: "#173b61" }}>Par {index + 1} · {config.tipo_configuracion.replaceAll("_", " ")}</strong>
+                <span style={{ display: "block", marginTop: 3, color: "#61768a", fontSize: 11 }}>
+                  {frame?.nombre || (config.tipo_configuracion === "par_completo" ? "Sin armazón" : "Armazón del cliente")} · {design?.nombre || (config.tipo_configuracion === "solo_tratamiento" ? "Sin diseño nuevo" : "Sin diseño")} · {treatment ? `${treatment.nombre}${variant ? ` (${variant.nombre})` : ""}` : "Sin tratamiento"} · ${configTotal.toFixed(2)}
+                </span>
+              </button>
+              <button type="button" onClick={() => setVentaConfiguracionActiva(config.configuracion_ref)} style={actionBtnStyle}>{expanded ? "Editando" : "Editar"}</button>
+              <button type="button" onClick={() => quitarConfiguracionOptica(config.configuracion_ref)} style={{ ...actionBtnStyle, color: "#991b1b", borderColor: "#fecaca" }}>Quitar</button>
             </div>
-        </section>
+            {expanded && (
+              <div style={{ display: "grid", gap: 13, padding: 12 }}>
+                <label style={{ display: "grid", gap: 5, fontWeight: 850 }}>Tipo de configuración
+                  <select value={config.tipo_configuracion} onChange={(event) => actualizarConfiguracionOptica(config.configuracion_ref, { tipo_configuracion: event.target.value as VentaConfiguracionOptica["tipo_configuracion"] })} style={{ padding: 9, border: "1px solid #cbd8e4", background: "#fff" }}>
+                    <option value="par_completo">Par completo</option>
+                    <option value="solo_micas">Solo micas (armazón del cliente)</option>
+                    <option value="solo_tratamiento">Solo tratamiento del par existente</option>
+                  </select>
+                </label>
 
-        {ventaArmazonSeleccionado && (
-          <section style={{ border: "1px solid #cbd8e4", background: "#fff" }}>
-              <div style={{ padding: 11 }}>
-                <div style={{ marginBottom: 8, fontWeight: 900, color: "#173b61" }}>2. Selecciona el diseño de la mica</div>
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(165px, 1fr))", gap: 7 }}>
-                  {ventaMicasDisenos.map((producto) =>
-                    renderVentaProductoButton(
-                      producto,
-                      () => seleccionarDisenoFlujoOptico(producto),
-                    ),
-                  )}
-                </div>
-              </div>
-          </section>
-        )}
-
-        {ventaDisenoSeleccionado && (
-          <section style={{ border: "1px solid #cbd8e4", background: "#fff" }}>
-              <div style={{ padding: 11 }}>
-                <div style={{ marginBottom: 3, fontWeight: 900, color: "#173b61" }}>3. Selecciona un tratamiento</div>
-                <div style={{ marginBottom: 9, color: "#718397", fontSize: 11 }}>Solo puedes seleccionar una opción.</div>
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(165px, 1fr))", gap: 7 }}>
-                  {ventaTratamientoSin && renderVentaProductoButton(
-                    ventaTratamientoSin,
-                    () => {
-                      seleccionarTratamientoFlujoOptico(ventaTratamientoSin);
-                      setVentaAgregarTinte(false);
-                      setVentaTinteGrado("");
-                    },
-                    tratamientoEsSinOTinte,
-                  )}
-                  {ventaTratamientoAntirreflejante && renderVentaProductoButton(
-                    ventaTratamientoAntirreflejante,
-                    () => seleccionarTratamientoFlujoOptico(ventaTratamientoAntirreflejante),
-                  )}
-                  {ventaTratamientoFotocromatico && renderVentaProductoButton(
-                    ventaTratamientoFotocromatico,
-                    () => seleccionarTratamientoFlujoOptico(ventaTratamientoFotocromatico),
-                  )}
-                  {ventaTratamientosAntiblue[0] && renderVentaProductoButton(
-                    {
-                      ...ventaTratamientosAntiblue[0],
-                      nombre: "Filtro de luz azul",
-                      color: null,
-                    },
-                    () => {
-                      const idsTratamientos = new Set(
-                        ventaMicasTratamientos.map((producto) => producto.producto_id),
-                      );
-                      setVentaCarrito((prev) =>
-                        prev.filter((item) => !idsTratamientos.has(item.producto_id)),
-                      );
-                      setVentaMostrarAntiblue(true);
-                      setVentaAgregarTinte(false);
-                      setVentaTinteGrado("");
-                      setVentaLentesPaso(3);
-                    },
-                    ventaMostrarAntiblue || Boolean(ventaAntiblueSeleccionado),
-                  )}
-                </div>
-
-                {(ventaMostrarAntiblue || ventaAntiblueSeleccionado) && (
-                  <div style={{ marginTop: 10, padding: 10, border: "1px solid #cfe0f0", background: "#f7fbff" }}>
-                    <div style={{ marginBottom: 7, fontWeight: 900, color: "#31475d" }}>Color del reflejo</div>
-                    <div style={{ display: "flex", gap: 7, flexWrap: "wrap" }}>
-                      {ventaTratamientosAntiblue.map((producto) => {
-                        const selected = ventaCarritoIds.has(producto.producto_id);
-                        return (
-                          <button
-                            key={producto.producto_id}
-                            type="button"
-                            onClick={() => {
-                              seleccionarTratamientoFlujoOptico(producto);
-                              setVentaMostrarAntiblue(false);
-                            }}
-                            style={{
-                              padding: "8px 12px",
-                              borderRadius: 999,
-                              border: selected ? "2px solid #1677d2" : "1px solid #cbd8e4",
-                              background: selected ? "#e7f2ff" : "#fff",
-                              color: "#173b61",
-                              fontWeight: 900,
-                              cursor: "pointer",
-                            }}
-                          >
-                            <span style={{ display: "inline-block", width: 12, height: 12, marginRight: 6, borderRadius: 999, background: producto.color === "Verde" ? "#35a56a" : "#3478cf", verticalAlign: -1 }} />
-                            {producto.color} · +${precioTratamientoAzul.toFixed(2)}
-                          </button>
-                        );
+                {config.tipo_configuracion === "par_completo" && (
+                  <div>
+                    <strong>1. Armazón</strong>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(175px, 1fr))", gap: 7, marginTop: 7 }}>
+                      {ventaArmazonesOpticos.map((product) => {
+                        const selected = config.armazon_producto_id === product.producto_id;
+                        const disabled = product.controla_stock && product.stock <= 0 && !selected;
+                        return <button key={product.producto_id} type="button" disabled={disabled} onClick={() => actualizarConfiguracionOptica(config.configuracion_ref, { armazon_producto_id: selected ? null : product.producto_id })} style={{ ...optionStyle(selected), opacity: disabled ? .48 : 1 }}>
+                          {product.nombre}<span style={{ display: "block", marginTop: 4, color: "#0e5fa8" }}>${Number(product.precio).toFixed(2)} · {product.stock} disponibles</span>
+                        </button>;
                       })}
                     </div>
                   </div>
                 )}
 
-                {tratamientoEsSinOTinte && (
-                  <div style={{ marginTop: 10 }}>
-                    {!ventaAgregarTinte && !ventaTinteSeleccionado ? (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setVentaAgregarTinte(true);
-                          setVentaLentesPaso(3);
-                        }}
-                        style={{ padding: "9px 13px", border: "1px solid #8a5a24", background: "#fff8ed", color: "#784718", fontWeight: 900, cursor: "pointer" }}
-                      >
-                        + Agregar tinte
-                      </button>
-                    ) : (
-                      <div style={{ padding: 10, border: "1px solid #ead4b7", background: "#fffaf3" }}>
-                        <div style={{ marginBottom: 7, fontWeight: 900, color: "#5f4326" }}>Color del tinte</div>
-                        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(105px, 1fr))", gap: 6 }}>
-                          {ventaTratamientosTinte.map((producto) => {
-                            const selected = ventaCarritoIds.has(producto.producto_id);
-                            const color = VENTA_TINTE_COLORES[producto.color || ""] || "#8b95a1";
-                            return (
-                              <button
-                                key={producto.producto_id}
-                                type="button"
-                                onClick={() => {
-                                  seleccionarTratamientoFlujoOptico(
-                                    producto,
-                                    { mantenerAbierto: true, esTinte: true },
-                                  );
-                                  setVentaTinteGrado("");
-                                }}
-                                style={{
-                                  padding: 8,
-                                  border: selected ? "2px solid #1677d2" : "1px solid #d6c7b7",
-                                  background: selected ? "#edf6ff" : "#fff",
-                                  color: "#31475d",
-                                  fontWeight: 800,
-                                  cursor: "pointer",
-                                }}
-                              >
-                                <span style={{ display: "block", width: 22, height: 22, margin: "0 auto 5px", borderRadius: 999, background: color, boxShadow: "inset 0 0 0 1px rgba(0,0,0,.18)" }} />
-                                {producto.color}
-                              </button>
-                            );
-                          })}
-                        </div>
-
-                        {ventaTinteSeleccionado && (
-                          <div style={{ marginTop: 10 }}>
-                            <div style={{ marginBottom: 6, fontWeight: 900, color: "#5f4326" }}>Grado del tinte</div>
-                            <div style={{ display: "flex", gap: 7, flexWrap: "wrap" }}>
-                              {(["grado_1", "grado_2", "grado_3"] as VentaTinteGrado[]).map((grado) => (
-                                <button
-                                  key={grado}
-                                  type="button"
-                                  onClick={() => {
-                                    setVentaTinteGrado(grado);
-                                  }}
-                                  style={{
-                                    padding: "8px 13px",
-                                    borderRadius: 999,
-                                    border: ventaTinteGrado === grado ? "2px solid #1677d2" : "1px solid #cbd8e4",
-                                    background: ventaTinteGrado === grado ? "#1677d2" : "#fff",
-                                    color: ventaTinteGrado === grado ? "#fff" : "#31475d",
-                                    fontWeight: 900,
-                                    cursor: "pointer",
-                                  }}
-                                >
-                                  {grado.replace("_", " ")}
-                                </button>
-                              ))}
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    )}
+                {config.tipo_configuracion !== "solo_tratamiento" && (
+                  <div>
+                    <strong>2. Diseño de mica (un par)</strong>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(155px, 1fr))", gap: 7, marginTop: 7 }}>
+                      {ventaMicasDisenos.map((product) => {
+                        const selected = config.diseno_producto_id === product.producto_id;
+                        return <button key={product.producto_id} type="button" onClick={() => actualizarConfiguracionOptica(config.configuracion_ref, { diseno_producto_id: selected ? null : product.producto_id, prescripcion_id: product.sku === "DEMO-LENS-NONRX" ? null : config.prescripcion_id })} style={optionStyle(selected)}>
+                          {product.nombre}<span style={{ display: "block", marginTop: 4, color: "#0e5fa8" }}>+${Number(product.precio).toFixed(2)}</span>
+                        </button>;
+                      })}
+                    </div>
                   </div>
                 )}
+
+                <div>
+                  <strong>{config.tipo_configuracion === "solo_tratamiento" ? "1. Tratamiento requerido" : "3. Tratamiento (máximo uno)"}</strong>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(155px, 1fr))", gap: 7, marginTop: 7 }}>
+                    {config.tipo_configuracion !== "solo_tratamiento" && (
+                      <button type="button" onClick={() => actualizarConfiguracionOptica(config.configuracion_ref, { tratamiento_producto_id: null, variante_id: null })} style={optionStyle(config.tratamiento_producto_id === null)}>Sin tratamiento · +$0</button>
+                    )}
+                    {[ventaTratamientoAntirreflejante, ventaTratamientoFotocromatico, ventaTratamientoAntiblue, ventaTratamientoTinte].filter((item): item is InventarioProducto => Boolean(item)).map((product) => {
+                      const selected = config.tratamiento_producto_id === product.producto_id;
+                      return <button key={product.producto_id} type="button" onClick={() => actualizarConfiguracionOptica(config.configuracion_ref, { tratamiento_producto_id: selected && config.tipo_configuracion !== "solo_tratamiento" ? null : product.producto_id, variante_id: null })} style={optionStyle(selected)}>
+                        {product.nombre}<span style={{ display: "block", marginTop: 4, color: "#0e5fa8" }}>+${Number(product.precio).toFixed(2)}</span>
+                      </button>;
+                    })}
+                  </div>
+                  {needsVariant && treatment && (
+                    <div style={{ marginTop: 9, padding: 10, border: "1px solid #d7e2ed", background: "#f8fbff" }}>
+                      <strong>{treatment.sku === "DEMO-TRT-TINT" ? "Color del tinte" : "Color del reflejo"}</strong>
+                      <div style={{ display: "flex", gap: 7, flexWrap: "wrap", marginTop: 7 }}>
+                        {(treatment.variantes || []).map((item) => {
+                          const selected = config.variante_id === item.variante_id;
+                          const color = VENTA_TINTE_COLORES[item.nombre] || (item.codigo.includes("verde") ? "#35a56a" : "#3478cf");
+                          return <button key={item.variante_id} type="button" onClick={() => actualizarConfiguracionOptica(config.configuracion_ref, { variante_id: item.variante_id })} style={{ ...optionStyle(selected), minHeight: 42, borderRadius: 999, padding: "7px 11px" }}>
+                            <span style={{ display: "inline-block", width: 13, height: 13, marginRight: 6, borderRadius: 999, background: color, verticalAlign: -2 }} />{item.nombre}
+                          </button>;
+                        })}
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {config.tipo_configuracion !== "solo_tratamiento" && (
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 9 }}>
+                    <label style={{ display: "grid", gap: 5, fontWeight: 850 }}>Uso visual
+                      <select value={config.uso_visual} onChange={(event) => actualizarConfiguracionOptica(config.configuracion_ref, { uso_visual: event.target.value as VentaConfiguracionOptica["uso_visual"], prescripcion_id: event.target.value === "sin_graduacion" ? null : config.prescripcion_id })} style={{ padding: 9, border: "1px solid #cbd8e4", background: "#fff" }}>
+                        <option value="lejos">Lejos</option><option value="cerca">Cerca</option><option value="intermedio">Intermedio</option><option value="multifocal">Multifocal</option><option value="sin_graduacion">Sin graduación</option><option value="otro">Otro</option>
+                      </select>
+                    </label>
+                    {config.uso_visual === "otro" && <label style={{ display: "grid", gap: 5, fontWeight: 850 }}>Describe el uso<input value={config.uso_visual_otro || ""} onChange={(event) => actualizarConfiguracionOptica(config.configuracion_ref, { uso_visual_otro: event.target.value })} style={{ padding: 9, border: "1px solid #cbd8e4" }} /></label>}
+                    {!prescriptionOptional && <label style={{ display: "grid", gap: 5, fontWeight: 850 }}>Receta del paciente
+                      <select value={config.prescripcion_id || ""} onChange={(event) => actualizarConfiguracionOptica(config.configuracion_ref, { prescripcion_id: event.target.value ? Number(event.target.value) : null })} style={{ padding: 9, border: "1px solid #cbd8e4", background: "#fff" }}>
+                        <option value="">Seleccionar receta...</option>{prescripcionesVenta.map((item) => <option key={item.prescripcion_id} value={item.prescripcion_id}>Receta #{item.prescripcion_id} · {item.fecha_prescripcion || "sin fecha"} · {item.origen === "interna" ? "interna" : "externa"}</option>)}
+                      </select>
+                    </label>}
+                    {!prescriptionOptional && <button type="button" onClick={() => { setVentaConfiguracionActiva(config.configuracion_ref); setPrescripcionVentaOpen(true); }} style={{ ...actionBtnStyle, alignSelf: "end" }}>+ Registrar receta</button>}
+                  </div>
+                )}
+
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: 9 }}>
+                  <label style={{ display: "grid", gap: 5, fontWeight: 850 }}>Abasto para este par
+                    <select value={config.comportamiento_abasto_usado} onChange={(event) => actualizarConfiguracionOptica(config.configuracion_ref, { comportamiento_abasto_usado: event.target.value as VentaComportamientoAbasto })} style={{ padding: 9, border: "1px solid #cbd8e4", background: "#fff" }}>
+                      <option value="laboratorio_bajo_pedido">Laboratorio bajo pedido</option><option value="fabricacion_interna">Fabricación interna</option><option value="inventario">Inventario</option>
+                    </select>
+                  </label>
+                  {editingVentaId !== null && <label style={{ display: "grid", gap: 5, fontWeight: 850 }}>Estado de producción
+                    <select value={config.estado_produccion || "pendiente_anticipo"} onChange={(event) => actualizarConfiguracionOptica(config.configuracion_ref, { estado_produccion: event.target.value as VentaEstadoProduccion })} style={{ padding: 9, border: "1px solid #cbd8e4", background: "#fff" }}>
+                      <option value="pendiente_anticipo">Pendiente de anticipo</option><option value="listo_para_produccion">Listo para producción</option><option value="en_produccion">En producción</option><option value="listo_para_entregar">Listo para entregar</option><option value="entregado">Entregado</option>
+                    </select>
+                  </label>}
+                </div>
+                <button type="button" onClick={() => setVentaConfiguracionActiva(null)} style={{ ...actionBtnStyle, borderColor: "#0f766e", color: "#0f766e" }}>Terminar configuración</button>
               </div>
+            )}
           </section>
-        )}
-      </div>
-    );
-  };
+        );
+      })}
+    </div>
+  );
 
   const softCard = {
     border: "1px solid #e7d7c7",
@@ -8834,7 +9026,7 @@ export default function App() {
             </label>
 
             <div style={{ display: "block", marginBottom: 12 }}>
-              {isAdmin ? (
+              {(isAdmin || isRecep || isDoctor) ? (
                 <div style={{ display: "grid", gap: 12 }}>
                   {editingVentaId !== null && (
                     <div style={{ padding: 10, border: "1px solid #bfdbfe", background: "#eff6ff", color: "#1e40af", fontSize: 13, fontWeight: 700 }}>
@@ -8902,35 +9094,7 @@ export default function App() {
                           )}
 
                           {ventaCategoria === "micas" && (
-                            <>
-                              <div>
-                                <div style={{ marginBottom: 8, fontWeight: 900, color: "#31475d" }}>
-                                  1. Diseño de la mica
-                                </div>
-                                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 8 }}>
-                                  {ventaMicasDisenos.map((producto) =>
-                                    renderVentaProductoButton(
-                                      producto,
-                                      () => seleccionarDisenoFlujoOptico(producto),
-                                    ),
-                                  )}
-                                </div>
-                              </div>
-                              <div>
-                                <div style={{ marginBottom: 8, fontWeight: 900, color: "#31475d" }}>2. Tratamiento, antiblueray o tinte</div>
-                                <div style={{ marginBottom: 8, fontSize: 12, color: "#6b7f93" }}>
-                                  Antiblueray está disponible en verde o azul. Los tintes incluyen 10 colores.
-                                </div>
-                                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 8 }}>
-                                  {ventaMicasTratamientos.map((producto) =>
-                                    renderVentaProductoButton(
-                                      producto,
-                                      () => agregarProductoCarrito(producto, "reemplazar_subcategoria"),
-                                    ),
-                                  )}
-                                </div>
-                              </div>
-                            </>
+                            renderFlujoLentesOpticos()
                           )}
 
                           {ventaCategoria === "lentes_de_sol" && (
@@ -9594,6 +9758,23 @@ export default function App() {
                   Costos y rentabilidad
                 </button>
               )}
+              {isAdmin && (
+                <button
+                  type="button"
+                  onClick={() => setInventarioVista("comercio")}
+                  aria-pressed={inventarioVista === "comercio"}
+                  style={{
+                    padding: "9px 14px",
+                    border: inventarioVista === "comercio" ? "1px solid #1e40af" : "1px solid #b9cce0",
+                    background: inventarioVista === "comercio" ? "#1e40af" : "#fff",
+                    color: inventarioVista === "comercio" ? "#fff" : "#40566c",
+                    fontWeight: 900,
+                    cursor: "pointer",
+                  }}
+                >
+                  Comercio en línea
+                </button>
+              )}
             </div>
 
             <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 14 }}>
@@ -9646,6 +9827,137 @@ export default function App() {
             <div style={{ padding: 12, border: "1px solid #fecaca", background: "#fef2f2", color: "#991b1b", fontWeight: 700 }}>
               {inventarioError}
             </div>
+          )}
+
+          {isAdmin && inventarioVista === "comercio" && (
+            <section style={{ ...softCard, overflowX: "auto", borderColor: "#b8c9ee" }}>
+              <div style={{ padding: 15, borderBottom: "1px solid #dbe4f4", background: "#f6f8ff" }}>
+                <h3 style={{ margin: 0, color: "#1e3a8a" }}>Disponibilidad para la tienda en línea</h3>
+                <p style={{ margin: "5px 0 0", color: "#5d6f87", lineHeight: 1.45 }}>
+                  Publicar un producto no lo vuelve comprable automáticamente. Durante Phase 1F-A solo pueden habilitarse
+                  lentes de sol, lentes de contacto, accesorios y productos de limpieza o cuidado.
+                </p>
+              </div>
+              <table style={{ width: "100%", minWidth: 1160, tableLayout: "fixed", borderCollapse: "collapse", background: "#fff", fontSize: 12 }}>
+                <colgroup>
+                  <col style={{ width: 250 }} />
+                  <col style={{ width: 170 }} />
+                  <col style={{ width: 115 }} />
+                  <col style={{ width: 135 }} />
+                  <col style={{ width: 125 }} />
+                  <col style={{ width: 235 }} />
+                  <col style={{ width: 130 }} />
+                </colgroup>
+                <thead>
+                  <tr style={{ background: "#1e3a8a", color: "#fff" }}>
+                    {[
+                      "PRODUCTO",
+                      "CATEGORÍA",
+                      "PUBLICADO",
+                      "COMPRABLE",
+                      "FAVORITOS",
+                      "MÁXIMO POR LÍNEA",
+                      "ACCIÓN",
+                    ].map((label) => <th key={label} align="left" style={{ padding: "10px 9px" }}>{label}</th>)}
+                  </tr>
+                </thead>
+                <tbody>
+                  {inventarioFiltrado.map((producto) => {
+                    const categoriaComprable = [
+                      "lentes_de_sol",
+                      "lentes_de_contacto",
+                      "accesorios_y_refacciones",
+                      "soluciones_y_cuidado",
+                    ].includes(producto.categoria) && producto.tipo_producto === "producto_fisico";
+                    const disponibleEnTienda = producto.activo && Boolean(producto.publicado_online);
+                    const guardando = savingInventarioId === producto.producto_id;
+                    const actualizarLocal = (changes: Partial<InventarioProducto>) => {
+                      setInventario((prev) => prev.map((item) => (
+                        item.producto_id === producto.producto_id ? { ...item, ...changes } : item
+                      )));
+                    };
+                    return (
+                      <tr key={`comercio-${producto.producto_id}`} style={{ borderTop: "1px solid #e1e8f3", verticalAlign: "top" }}>
+                        <td style={{ padding: 10 }}>
+                          <strong style={{ color: "#173b61" }}>{producto.nombre}</strong>
+                          <div style={{ marginTop: 2, color: "#718397", fontSize: 11 }}>{producto.sku}</div>
+                          {!producto.activo && <div style={{ marginTop: 4, color: "#b91c1c", fontWeight: 850 }}>Producto inactivo</div>}
+                        </td>
+                        <td style={{ padding: 10, color: "#40566c" }}>{formatVentaCompraLabel(producto.categoria)}</td>
+                        <td style={{ padding: 10 }}>
+                          <label style={{ display: "inline-flex", alignItems: "center", gap: 7, fontWeight: 800 }}>
+                            <input
+                              type="checkbox"
+                              checked={Boolean(producto.publicado_online)}
+                              onChange={(e) => actualizarLocal({ publicado_online: e.target.checked })}
+                            />
+                            {producto.publicado_online ? "Sí" : "No"}
+                          </label>
+                        </td>
+                        <td style={{ padding: 10 }}>
+                          <label title={categoriaComprable ? "" : "Categoría no comprable durante Phase 1F-A"} style={{ display: "inline-flex", alignItems: "center", gap: 7, fontWeight: 800, opacity: categoriaComprable ? 1 : 0.55 }}>
+                            <input
+                              type="checkbox"
+                              disabled={!categoriaComprable && !producto.comprable_online}
+                              checked={Boolean(producto.comprable_online)}
+                              onChange={(e) => actualizarLocal({ comprable_online: e.target.checked })}
+                            />
+                            {producto.comprable_online ? "Sí" : "No"}
+                          </label>
+                          {producto.comprable_online && !disponibleEnTienda && (
+                            <div style={{ marginTop: 4, color: "#9a4c0e", fontSize: 10 }}>Guardado; suspendido mientras no esté activo y publicado.</div>
+                          )}
+                        </td>
+                        <td style={{ padding: 10 }}>
+                          <label style={{ display: "inline-flex", alignItems: "center", gap: 7, fontWeight: 800 }}>
+                            <input
+                              type="checkbox"
+                              checked={Boolean(producto.permite_favorito)}
+                              onChange={(e) => actualizarLocal({ permite_favorito: e.target.checked })}
+                            />
+                            {producto.permite_favorito ? "Sí" : "No"}
+                          </label>
+                          {producto.permite_favorito && !disponibleEnTienda && (
+                            <div style={{ marginTop: 4, color: "#9a4c0e", fontSize: 10 }}>No aparecerá activo hasta volver a publicarse.</div>
+                          )}
+                        </td>
+                        <td style={{ padding: 10 }}>
+                          <input
+                            type="number"
+                            min={1}
+                            step={1}
+                            value={producto.cantidad_maxima_por_linea ?? ""}
+                            placeholder="Opcional"
+                            onFocus={(e) => e.currentTarget.select()}
+                            onChange={(e) => {
+                              const raw = e.target.value;
+                              if (raw === "") actualizarLocal({ cantidad_maxima_por_linea: null });
+                              else if (/^\d+$/.test(raw) && Number(raw) > 0) actualizarLocal({ cantidad_maxima_por_linea: Number(raw) });
+                            }}
+                            style={{ width: "100%", padding: 8, border: "1px solid #aebed6" }}
+                          />
+                          {producto.cantidad_maxima_por_linea == null && (
+                            <div style={{ marginTop: 4, color: "#6b7f93", fontSize: 10 }}>
+                              Sin límite configurado; sujeto a existencias disponibles.
+                            </div>
+                          )}
+                        </td>
+                        <td style={{ padding: 10 }}>
+                          <button
+                            type="button"
+                            disabled={guardando}
+                            onClick={() => guardarConfiguracionComercio(producto)}
+                            style={{ ...actionBtnStyle, width: "100%", padding: "8px 10px", borderColor: "#809bd3", color: "#1e40af", cursor: guardando ? "wait" : "pointer" }}
+                          >
+                            {guardando ? "Guardando..." : "Guardar"}
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </section>
           )}
 
           {inventarioVista === "existencias" && (
@@ -9774,7 +10086,7 @@ export default function App() {
                               }}
                             >
                               {producto.imagen_url ? (
-                                <img src={producto.imagen_url} alt={producto.nombre} style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
+                                <img src={resolveCatalogMediaUrl(producto.imagen_url)} alt={producto.nombre} style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
                               ) : (
                                 <span style={{ width: "100%", height: "100%", display: "grid", placeItems: "center", color: "#8aa0b2" }}>◇</span>
                               )}
@@ -10205,7 +10517,9 @@ export default function App() {
                 </thead>
                 <tbody>
                   {inventarioFiltrado.map((producto) => {
-                    const costo = Math.max(0, Number(inventarioCostoDraft[producto.producto_id] ?? producto.costo_unitario ?? 0));
+                    const costoDraft = inventarioCostoDraft[producto.producto_id] ?? producto.costo_unitario ?? "";
+                    const costoConfirmado = costoDraft !== "";
+                    const costo = costoConfirmado ? Math.max(0, Number(costoDraft)) : 0;
                     const precio = Math.max(0, Number(inventarioPrecioDraft[producto.producto_id] ?? producto.precio));
                     const stockRaw = inventarioStockDraft[producto.producto_id] ?? producto.stock;
                     const stock = producto.controla_stock
@@ -10216,7 +10530,9 @@ export default function App() {
                     const sinCambios =
                       stock === Number(producto.stock || 0)
                       && precio === Number(producto.precio || 0)
-                      && costo === Number(producto.costo_unitario || 0);
+                      && (costoConfirmado
+                        ? costo === Number(producto.costo_unitario)
+                        : producto.costo_unitario == null);
                     const guardando = savingInventarioId === producto.producto_id;
                     return (
                       <tr key={`rentabilidad-${producto.producto_id}`} style={{ borderTop: "1px solid #dce6ef" }}>
@@ -10243,17 +10559,21 @@ export default function App() {
                             disabled={isContador}
                             min={0}
                             step="0.01"
-                            value={costo}
+                            value={costoDraft}
                             onFocus={(e) => e.currentTarget.select()}
-                            onChange={(e) => setInventarioCostoDraft((prev) => ({ ...prev, [producto.producto_id]: Number(e.target.value || 0) }))}
+                            placeholder="Sin confirmar"
+                            onChange={(e) => setInventarioCostoDraft((prev) => ({
+                              ...prev,
+                              [producto.producto_id]: e.target.value === "" ? "" : Number(e.target.value),
+                            }))}
                             aria-label={`Costo unitario de ${producto.nombre}`}
                             style={{ width: "100%", padding: "7px 6px", border: "1px solid #75aaa3", textAlign: "right", fontWeight: 850 }}
                           />
                         </td>
                         <td align="right" style={{ padding: "9px 8px", background: ganancia >= 0 ? "#f0fdf4" : "#fef2f2", color: ganancia >= 0 ? "#166534" : "#991b1b", fontWeight: 900, whiteSpace: "nowrap" }}>
-                          ${ganancia.toFixed(2)}
+                          {costoConfirmado ? `$${ganancia.toFixed(2)}` : "Pendiente"}
                         </td>
-                        <td align="right" style={{ padding: "9px 8px", background: "#f2fbf5", color: margen >= 0 ? "#166534" : "#991b1b", fontWeight: 900, whiteSpace: "nowrap" }}>{margen.toFixed(1)}%</td>
+                        <td align="right" style={{ padding: "9px 8px", background: "#f2fbf5", color: margen >= 0 ? "#166534" : "#991b1b", fontWeight: 900, whiteSpace: "nowrap" }}>{costoConfirmado ? `${margen.toFixed(1)}%` : "Pendiente"}</td>
                         <td align="center" style={{ padding: "7px 6px", background: "#fff8ed", color: "#92400e", fontWeight: 900 }}>
                           {producto.controla_stock ? (
                             <input
@@ -10279,8 +10599,8 @@ export default function App() {
                             />
                           ) : "Servicio"}
                         </td>
-                        <td align="right" style={{ padding: "9px 8px", background: "#f8f5ff", fontWeight: 850, whiteSpace: "nowrap" }}>${(costo * stock).toFixed(2)}</td>
-                        <td align="right" style={{ padding: "9px 8px", background: "#fbf4fc", color: ganancia >= 0 ? "#5b2166" : "#991b1b", fontWeight: 900, whiteSpace: "nowrap" }}>${(ganancia * stock).toFixed(2)}</td>
+                        <td align="right" style={{ padding: "9px 8px", background: "#f8f5ff", fontWeight: 850, whiteSpace: "nowrap" }}>{costoConfirmado ? `$${(costo * stock).toFixed(2)}` : "Pendiente"}</td>
+                        <td align="right" style={{ padding: "9px 8px", background: "#fbf4fc", color: ganancia >= 0 ? "#5b2166" : "#991b1b", fontWeight: 900, whiteSpace: "nowrap" }}>{costoConfirmado ? `$${(ganancia * stock).toFixed(2)}` : "Pendiente"}</td>
                         <td align="center" style={{ padding: "7px 6px", background: "#f9fafb" }}>
                           <button
                             type="button"
@@ -11452,7 +11772,7 @@ export default function App() {
               ×
             </button>
             <img
-              src={inventarioImagenAmpliada.imagen_url ?? ""}
+              src={resolveCatalogMediaUrl(inventarioImagenAmpliada.imagen_url)}
               alt={inventarioImagenAmpliada.nombre}
               style={{ display: "block", width: "100%", maxHeight: "75vh", objectFit: "contain", background: "#f4f7f9" }}
             />
@@ -11464,6 +11784,62 @@ export default function App() {
               </span>
             </div>
           </div>
+        </div>
+      )}
+
+      {prescripcionVentaOpen && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(15, 23, 42, .58)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 1002,
+            padding: 16,
+          }}
+        >
+          <form
+            onSubmit={async (event) => {
+              event.preventDefault();
+              setError(null);
+              try {
+                await crearPrescripcionVenta();
+              } catch (e: any) {
+                setError(e?.message ?? String(e));
+              }
+            }}
+            style={{ width: 720, maxWidth: "96vw", maxHeight: "92vh", overflowY: "auto", padding: 18, border: "1px solid #cbd8e4", background: "#fff", boxShadow: "0 20px 55px rgba(15,23,42,.28)" }}
+          >
+            <div style={{ fontSize: 20, fontWeight: 900, color: "#173b61" }}>Registrar receta óptica</div>
+            <div style={{ marginTop: 4, color: "#6b7f93", fontSize: 12 }}>La receta quedará vinculada al paciente seleccionado y podrá usarse únicamente en sus configuraciones.</div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 9, marginTop: 14 }}>
+              <label style={{ display: "grid", gap: 4 }}>Origen<select value={prescripcionVentaForm.origen} onChange={(event) => setPrescripcionVentaForm((prev) => ({ ...prev, origen: event.target.value as "interna" | "externa_cliente" }))} style={{ padding: 9, border: "1px solid #cbd8e4", background: "#fff" }}><option value="interna">Interna</option><option value="externa_cliente">Externa del cliente</option></select></label>
+              <label style={{ display: "grid", gap: 4 }}>Fecha<input type="date" value={prescripcionVentaForm.fecha_prescripcion} onChange={(event) => setPrescripcionVentaForm((prev) => ({ ...prev, fecha_prescripcion: event.target.value }))} style={{ padding: 9, border: "1px solid #cbd8e4" }} /></label>
+              {prescripcionVentaForm.origen === "externa_cliente" && <label style={{ display: "grid", gap: 4 }}>Referencia externa<input value={prescripcionVentaForm.referencia_externa} onChange={(event) => setPrescripcionVentaForm((prev) => ({ ...prev, referencia_externa: event.target.value }))} style={{ padding: 9, border: "1px solid #cbd8e4" }} /></label>}
+            </div>
+            {(["od", "oi"] as const).map((ojo) => (
+              <section key={ojo} style={{ marginTop: 12, padding: 11, border: "1px solid #dbe6ef", background: "#f8fbff" }}>
+                <strong style={{ color: "#173b61" }}>{ojo === "od" ? "Ojo derecho" : "Ojo izquierdo"}</strong>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(100px, 1fr))", gap: 8, marginTop: 8 }}>
+                  {(["esfera", "cilindro", "eje", "adicion"] as const).map((campo) => {
+                    const key = `${ojo}_${campo}` as keyof typeof prescripcionVentaForm;
+                    return <label key={key} style={{ display: "grid", gap: 4, fontSize: 11 }}>{campo.charAt(0).toUpperCase() + campo.slice(1)}<input inputMode="decimal" value={String(prescripcionVentaForm[key] || "")} onChange={(event) => setPrescripcionVentaForm((prev) => ({ ...prev, [key]: event.target.value }))} style={{ padding: 8, border: "1px solid #cbd8e4" }} /></label>;
+                  })}
+                </div>
+              </section>
+            ))}
+            <div style={{ display: "grid", gridTemplateColumns: "minmax(160px, .5fr) minmax(220px, 1fr)", gap: 9, marginTop: 12 }}>
+              <label style={{ display: "grid", gap: 4 }}>Distancia pupilar<input inputMode="decimal" value={prescripcionVentaForm.distancia_pupilar} onChange={(event) => setPrescripcionVentaForm((prev) => ({ ...prev, distancia_pupilar: event.target.value }))} style={{ padding: 9, border: "1px solid #cbd8e4" }} /></label>
+              <label style={{ display: "grid", gap: 4 }}>Notas<input value={prescripcionVentaForm.notas} onChange={(event) => setPrescripcionVentaForm((prev) => ({ ...prev, notas: event.target.value }))} style={{ padding: 9, border: "1px solid #cbd8e4" }} /></label>
+            </div>
+            {error && <div style={{ marginTop: 10, padding: 9, border: "1px solid #fecaca", background: "#fef2f2", color: "#991b1b" }}>{error}</div>}
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 14 }}>
+              <button type="button" onClick={() => setPrescripcionVentaOpen(false)} style={{ ...actionBtnStyle, padding: 10 }}>Cancelar</button>
+              <button type="submit" style={{ padding: 10, border: "1px solid #0f766e", background: "#0f766e", color: "#fff", fontWeight: 900 }}>Guardar receta</button>
+            </div>
+          </form>
         </div>
       )}
 
@@ -11564,18 +11940,25 @@ export default function App() {
 
             <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) minmax(250px, .75fr)", gap: 12, marginTop: 12 }}>
               <section style={{ border: "1px solid #dbe6ef", background: "#f8fbff", padding: 11 }}>
-                <div style={{ marginBottom: 7, color: "#173b61", fontWeight: 900 }}>Configuración de micas</div>
-                <div style={{ display: "grid", gap: 5, fontSize: 11 }}>
-                  <div><span style={{ color: "#718397" }}>Armazón:</span> <strong>{ventaArmazonesSeleccionados.map((producto) => producto.nombre).join(", ") || "No aplica"}</strong></div>
-                  <div><span style={{ color: "#718397" }}>Diseño:</span> <strong>{ventaDisenoSeleccionado?.nombre || "No aplica"}</strong></div>
-                  <div>
-                    <span style={{ color: "#718397" }}>Tratamiento / tinte:</span>{" "}
-                    <strong>
-                      {ventaTratamientoSeleccionado
-                        ? `${ventaTratamientoSeleccionado.nombre}${ventaTinteGrado ? ` · ${ventaTinteGrado.replace("_", " ")}` : ""}`
-                        : "No aplica"}
-                    </strong>
-                  </div>
+                <div style={{ marginBottom: 7, color: "#173b61", fontWeight: 900 }}>Configuraciones ópticas</div>
+                <div style={{ display: "grid", gap: 8, fontSize: 11 }}>
+                  {ventaConfiguraciones.length === 0 && <span style={{ color: "#718397" }}>Esta venta no contiene pares configurados.</span>}
+                  {ventaConfiguraciones.map((config, index) => {
+                    const frame = inventario.find((item) => item.producto_id === config.armazon_producto_id);
+                    const design = inventario.find((item) => item.producto_id === config.diseno_producto_id);
+                    const treatment = inventario.find((item) => item.producto_id === config.tratamiento_producto_id);
+                    const variant = treatment?.variantes?.find((item) => item.variante_id === config.variante_id);
+                    const prescription = prescripcionesVenta.find((item) => item.prescripcion_id === config.prescripcion_id);
+                    return <div key={`confirm-config-${config.configuracion_ref}`} style={{ padding: 9, border: "1px solid #cbd8e4", background: "#fff" }}>
+                      <strong style={{ display: "block", color: "#173b61" }}>Par {index + 1} · {config.tipo_configuracion.replaceAll("_", " ")}</strong>
+                      <span style={{ display: "block", marginTop: 4 }}>Armazón: <strong>{frame?.nombre || "Armazón del cliente / no aplica"}</strong></span>
+                      <span style={{ display: "block", marginTop: 3 }}>Diseño: <strong>{design?.nombre || "No aplica"}</strong></span>
+                      <span style={{ display: "block", marginTop: 3 }}>Tratamiento: <strong>{treatment ? `${treatment.nombre}${variant ? ` · ${variant.nombre}` : ""}` : "Sin tratamiento"}</strong></span>
+                      <span style={{ display: "block", marginTop: 3 }}>Uso: <strong>{config.uso_visual.replaceAll("_", " ")}{config.uso_visual_otro ? ` · ${config.uso_visual_otro}` : ""}</strong></span>
+                      <span style={{ display: "block", marginTop: 3 }}>Receta: <strong>{prescription ? `#${prescription.prescripcion_id} · ${prescription.fecha_prescripcion || "sin fecha"}` : "No requerida"}</strong></span>
+                      <span style={{ display: "block", marginTop: 3 }}>Abasto: <strong>{config.comportamiento_abasto_usado.replaceAll("_", " ")}</strong></span>
+                    </div>;
+                  })}
                 </div>
               </section>
               <section style={{ border: "1px solid #dbe6ef", background: "#fff", padding: 11 }}>
@@ -11771,7 +12154,7 @@ export default function App() {
                               {!esMica && (
                                 <div style={{ width: 54, height: 48, overflow: "hidden", border: "1px solid #e3e9ee", background: "#f5f7f9" }}>
                                   {producto.imagen_url ? (
-                                    <img src={producto.imagen_url} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                                    <img src={resolveCatalogMediaUrl(producto.imagen_url)} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
                                   ) : (
                                     <span style={{ width: "100%", height: "100%", display: "grid", placeItems: "center", color: "#8aa0b2" }}>◇</span>
                                   )}

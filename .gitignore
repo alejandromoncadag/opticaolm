@@ -34,6 +34,12 @@ exports/
 backups/
 *.dump
 *.sql
+!backend/scripts/migrations/20260801_phase1a_global_catalog.sql
+!backend/scripts/migrations/20260801_phase1a_global_catalog_rollback.sql
+!backend/scripts/migrations/20260801_phase1b_optical_sales.sql
+!backend/scripts/migrations/20260801_phase1b_optical_sales_rollback.sql
+!backend/scripts/migrations/20260802_phase1fa_authoritative_commerce.sql
+!backend/scripts/migrations/20260802_phase1fa_authoritative_commerce_rollback.sql
 backend/.env
 frontend/.env
 backend/oauth_client.json

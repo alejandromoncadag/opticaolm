@@ -333,10 +333,13 @@ def verify_catalog(cur) -> list[str]:
     actual_inventory = set()
     for row in cur.fetchall():
         actual_inventory.add((row[0], int(row[1])))
-        if tuple(row[2:5]) != (0, 0, 0) or row[5] is not None or row[6] != 0:
-            errors.append(f"Non-zero demo inventory for {row[0]}/{row[1]}")
+        stock, reserved, minimum, average_cost, version = row[2:7]
+        if stock < 0 or reserved < 0 or reserved > stock or minimum < 0 or version < 0:
+            errors.append(f"Invalid branch inventory values for {row[0]}/{row[1]}")
+        if average_cost is not None and average_cost < 0:
+            errors.append(f"Invalid average cost for {row[0]}/{row[1]}")
     if actual_inventory != expected_inventory:
-        errors.append("Branch inventory rows differ from the zero-stock matrix")
+        errors.append("Branch inventory rows differ from the approved product/branch matrix")
 
     cur.execute(
         """
@@ -388,7 +391,7 @@ def verify_catalog(cur) -> list[str]:
     return [
         "14 global demo/component records",
         "12 approved variants",
-        f"{len(expected_inventory)} zero-stock branch inventory rows",
+        f"{len(expected_inventory)} valid branch inventory rows",
         "6 URL-only image metadata records",
         "all costs NULL and all records unpublished",
         "no cascading foreign-key actions",
