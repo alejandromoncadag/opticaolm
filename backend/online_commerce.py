@@ -1160,7 +1160,12 @@ class CommerceRepository:
         guest = CommerceOwner("guest", guest_hash)
 
         def operation(cur):
-            target_cart = self._resolve_cart(cur, customer)
+            # Different storefront requests may carry different idempotency keys.
+            # Serialize by guest identity so the merge state remains authoritative.
+            cur.execute(
+                "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+                (guest_hash,),
+            )
             cur.execute(
                 """
                 SELECT *
@@ -1175,8 +1180,41 @@ class CommerceRepository:
                 (guest_hash,),
             )
             source_cart = cur.fetchone()
+
+            if source_cart and source_cart["estado"] == "fusionado":
+                destination_id = source_cart["fusionado_en_carrito_id"]
+                cur.execute(
+                    """
+                    SELECT *
+                    FROM core.online_carritos
+                    WHERE carrito_id = %s
+                      AND propietario_tipo = 'cliente'
+                      AND propietario_ref_hash = %s
+                    FOR UPDATE
+                    """,
+                    (destination_id, customer.owner_hash),
+                )
+                destination_cart = cur.fetchone()
+                if destination_cart is None:
+                    raise CommerceRuleError(
+                        409,
+                        "Guest data was already merged into a different customer cart.",
+                    )
+                return {
+                    "schemaVersion": COMMERCE_SCHEMA_VERSION,
+                    "merged": True,
+                    "cart": self._cart_snapshot(cur, customer, destination_cart),
+                    "favorites": self._favorites_snapshot(cur, customer),
+                }, int(destination_cart["carrito_id"])
+
+            target_cart = self._resolve_cart(cur, customer)
+            if source_cart is None:
+                # Persist a merge marker even for favorite-only or empty guests so
+                # later requests can return the original destination without events.
+                source_cart = self._resolve_cart(cur, guest)
+
             merged_item_count = 0
-            if source_cart and source_cart["estado"] == "activo":
+            if source_cart["estado"] == "activo":
                 cur.execute(
                     """
                     SELECT *

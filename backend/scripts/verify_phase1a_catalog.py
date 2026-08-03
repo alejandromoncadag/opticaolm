@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -14,7 +15,87 @@ from psycopg import sql
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 PROJECT_DIR = BACKEND_DIR.parent
-OLM_GLASSES_DIR = Path(r"C:\Users\aleja\projects\olm-glasses")
+
+
+class VerificationError(RuntimeError):
+    pass
+
+
+def _is_olm_glasses_checkout(path: Path) -> bool:
+    return (
+        path.is_dir()
+        and (path / "package.json").is_file()
+        and (path / "public").is_dir()
+    )
+
+
+def _known_olm_glasses_locations() -> tuple[Path, ...]:
+    home = Path.home()
+    candidates = [
+        PROJECT_DIR.parent / "lentes_online" / "olm-glasses",
+        PROJECT_DIR.parent / "olm-glasses",
+    ]
+    if os.name == "nt":
+        candidates.extend(
+            (
+                home / "projects" / "olm-glasses",
+                home / "source" / "repos" / "olm-glasses",
+                home / "Documents" / "olm-glasses",
+            )
+        )
+    elif sys.platform == "darwin":
+        candidates.extend(
+            (
+                home / "lentes_online" / "olm-glasses",
+                home / "Projects" / "olm-glasses",
+                home / "Documents" / "lentes_online" / "olm-glasses",
+                home / "Documents" / "olm-glasses",
+            )
+        )
+    else:
+        candidates.extend(
+            (
+                home / "projects" / "olm-glasses",
+                home / "Projects" / "olm-glasses",
+                home / "src" / "olm-glasses",
+            )
+        )
+
+    unique: list[Path] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        resolved = candidate.expanduser().resolve()
+        key = os.path.normcase(str(resolved))
+        if key not in seen:
+            seen.add(key)
+            unique.append(resolved)
+    return tuple(unique)
+
+
+def _resolve_olm_glasses_dir() -> Path:
+    configured = os.getenv("OLM_GLASSES_DIR", "").strip()
+    if configured:
+        configured_path = Path(configured).expanduser().resolve()
+        if _is_olm_glasses_checkout(configured_path):
+            return configured_path
+        raise VerificationError(
+            "OLM_GLASSES_DIR must point to the OLM-GLASSES repository root "
+            f"containing package.json and public/: {configured_path}"
+        )
+
+    candidates = _known_olm_glasses_locations()
+    for candidate in candidates:
+        if _is_olm_glasses_checkout(candidate):
+            return candidate
+
+    checked = ", ".join(str(candidate) for candidate in candidates)
+    raise VerificationError(
+        "Unable to locate the OLM-GLASSES repository. Set OLM_GLASSES_DIR "
+        "to its root directory (containing package.json and public/). "
+        f"Checked: {checked}"
+    )
+
+
 MEDIA_DIR = BACKEND_DIR / "media" / "products" / "olm-glasses"
 
 PHASE1A_TABLES = (
@@ -156,10 +237,6 @@ EXPECTED_MEDIA = {
         "sha256": "1c494a3d891d879289e63f0692be68f2dd167c562bee13a8b4074135d2ea5668",
     },
 }
-
-
-class VerificationError(RuntimeError):
-    pass
 
 
 def _json_hash(value: Any) -> str:
@@ -407,9 +484,10 @@ def _file_sha256(path: Path) -> str:
 
 
 def verify_media(require_destination: bool) -> list[dict[str, Any]]:
+    olm_glasses_dir = _resolve_olm_glasses_dir()
     results = []
     for sku, manifest in EXPECTED_MEDIA.items():
-        source = OLM_GLASSES_DIR / manifest["source"]
+        source = olm_glasses_dir / manifest["source"]
         destination = MEDIA_DIR / manifest["destination"]
         if not source.is_file():
             raise VerificationError(f"Missing source image for {sku}: {source}")

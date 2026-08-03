@@ -31,6 +31,7 @@ from online_commerce import (
     CommerceConfig,
     CommerceOwner,
     CommerceRepository,
+    CommerceRuleError,
     commerce_credentials_valid,
 )
 
@@ -222,6 +223,25 @@ class Phase1FACommerceTests(unittest.TestCase):
             self.assertEqual(1, favorite["count"])
             self.assertEqual(1, duplicate["count"])
 
+            with self.assertRaises(CommerceRuleError) as failed_merge:
+                repository.merge_guest(guest, guest.owner_hash, "merge-invalid-owner")
+            self.assertEqual(403, failed_merge.exception.status_code)
+            with connection.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT estado, fusionado_en_carrito_id
+                    FROM core.online_carritos
+                    WHERE propietario_tipo = 'invitado'
+                      AND propietario_ref_hash = %s
+                      AND estado = 'activo'
+                    """,
+                    (guest.owner_hash,),
+                )
+                unmerged_cart = cur.fetchone()
+                self.assertIsNotNone(unmerged_cart)
+                self.assertEqual("activo", unmerged_cart["estado"])
+                self.assertIsNone(unmerged_cart["fusionado_en_carrito_id"])
+
             merged = repository.merge_guest(customer, guest.owner_hash, "merge-once")
             replayed_merge = repository.merge_guest(
                 customer, guest.owner_hash, "merge-once"
@@ -234,6 +254,74 @@ class Phase1FACommerceTests(unittest.TestCase):
             self.assertEqual(merged, replayed_merge)
             self.assertEqual(4, state_replayed_merge["cart"]["itemCount"])
             self.assertEqual(1, state_replayed_merge["favorites"]["count"])
+
+            with connection.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT estado, fusionado_en_carrito_id
+                    FROM core.online_carritos
+                    WHERE propietario_tipo = 'invitado'
+                      AND propietario_ref_hash = %s
+                    ORDER BY carrito_id DESC
+                    LIMIT 1
+                    """,
+                    (guest.owner_hash,),
+                )
+                merged_guest_cart = cur.fetchone()
+                self.assertEqual("fusionado", merged_guest_cart["estado"])
+                self.assertIsNotNone(merged_guest_cart["fusionado_en_carrito_id"])
+
+                cur.execute(
+                    """
+                    SELECT COUNT(*) AS count, MAX(cantidad) AS quantity
+                    FROM core.online_carrito_items item
+                    JOIN core.online_carritos cart USING (carrito_id)
+                    WHERE cart.propietario_tipo = 'cliente'
+                      AND cart.propietario_ref_hash = %s
+                      AND cart.estado = 'activo'
+                      AND item.activo = TRUE
+                    """,
+                    (customer.owner_hash,),
+                )
+                customer_items = cur.fetchone()
+                self.assertEqual(1, int(customer_items["count"]))
+                self.assertEqual(4, int(customer_items["quantity"]))
+
+                cur.execute(
+                    """
+                    SELECT COUNT(*) AS count
+                    FROM core.online_favoritos
+                    WHERE propietario_tipo = 'cliente'
+                      AND propietario_ref_hash = %s
+                      AND activo = TRUE
+                    """,
+                    (customer.owner_hash,),
+                )
+                self.assertEqual(1, int(cur.fetchone()["count"]))
+
+                cur.execute(
+                    """
+                    SELECT COUNT(*) AS count
+                    FROM core.online_favoritos
+                    WHERE propietario_tipo = 'invitado'
+                      AND propietario_ref_hash = %s
+                      AND activo = TRUE
+                    """,
+                    (guest.owner_hash,),
+                )
+                self.assertEqual(0, int(cur.fetchone()["count"]))
+
+                cur.execute(
+                    """
+                    SELECT COUNT(*) AS count
+                    FROM core.online_comercio_eventos
+                    WHERE evento_tipo = 'guest_merged'
+                      AND propietario_tipo = 'cliente'
+                      AND propietario_ref_hash = %s
+                    """,
+                    (customer.owner_hash,),
+                )
+                self.assertEqual(1, int(cur.fetchone()["count"]))
 
             cleared_cart = repository.clear_cart(customer, "clear-cart")
             cleared_favorites = repository.clear_favorites(
