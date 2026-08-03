@@ -3,18 +3,25 @@ from __future__ import annotations
 
 import os
 from datetime import datetime, timezone
+from pathlib import Path
+import sys
 
 import psycopg
+from dotenv import load_dotenv
 from passlib.hash import argon2
 
 
-DB_CONNINFO = os.getenv(
-    "DB_CONNINFO",
-    "host=localhost port=5432 dbname=eyecare user=alejandromoncadag",
-)
+BACKEND_DIR = Path(__file__).resolve().parents[1]
+load_dotenv(BACKEND_DIR / ".env")
+sys.path.insert(0, str(BACKEND_DIR))
+
+import main as backend_main  # noqa: E402
+
+
+DB_CONNINFO = backend_main.DB_CONNINFO
 SEED_ADMIN_USERNAME = os.getenv("SEED_ADMIN_USERNAME", "admin").strip() or "admin"
-SEED_ADMIN_PASSWORD = os.getenv("SEED_ADMIN_PASSWORD", "Opticaolm@admin2026!")
-SEED_ADMIN_RESET_PASSWORD = os.getenv("SEED_ADMIN_RESET_PASSWORD", "true").strip().lower() in {
+SEED_ADMIN_PASSWORD = os.getenv("SEED_ADMIN_PASSWORD", "")
+SEED_ADMIN_RESET_PASSWORD = os.getenv("SEED_ADMIN_RESET_PASSWORD", "false").strip().lower() in {
     "1",
     "true",
     "yes",
@@ -56,6 +63,8 @@ def seed_admin(cur: psycopg.Cursor) -> None:
     existing = cur.fetchone()
 
     if existing is None:
+        if not SEED_ADMIN_PASSWORD:
+            raise RuntimeError("SEED_ADMIN_PASSWORD is required to create the bootstrap admin.")
         password_hash = argon2.hash(SEED_ADMIN_PASSWORD)
         cur.execute(
             """
@@ -75,6 +84,8 @@ def seed_admin(cur: psycopg.Cursor) -> None:
         return
 
     if SEED_ADMIN_RESET_PASSWORD:
+        if not SEED_ADMIN_PASSWORD:
+            raise RuntimeError("SEED_ADMIN_PASSWORD is required for an explicit admin reset.")
         password_hash = argon2.hash(SEED_ADMIN_PASSWORD)
         cur.execute(
             """
@@ -90,16 +101,6 @@ def seed_admin(cur: psycopg.Cursor) -> None:
         )
         print(f"[OK] admin password reset ({SEED_ADMIN_USERNAME})")
     else:
-        cur.execute(
-            """
-            UPDATE core.usuarios
-            SET rol = 'admin',
-                sucursal_id = NULL,
-                activo = true
-            WHERE username = %s;
-            """,
-            (SEED_ADMIN_USERNAME,),
-        )
         print(f"[OK] admin preserved ({SEED_ADMIN_USERNAME})")
 
 

@@ -5,6 +5,7 @@ import DatePicker from "react-datepicker";
 import "react-datepicker/dist/react-datepicker.css";
 import "./datepicker.css";
 import logoOlm from "./assets/optica.png";
+import OnlineShippingAdmin from "./OnlineShippingAdmin";
 
 
 
@@ -2619,7 +2620,7 @@ function normalizeHistoriaForUi(data: any, fallbackDoctor: string) {
 }
 
 export default function App() {
-  const [tab, setTab] = useState<"pacientes" | "consultas" | "ventas" | "resumen_ventas" | "estadisticas" | "historia_clinica" | "inventario" | "finanzas">("pacientes");
+  const [tab, setTab] = useState<"pacientes" | "consultas" | "ventas" | "resumen_ventas" | "estadisticas" | "historia_clinica" | "inventario" | "envios" | "finanzas">("pacientes");
 
   // ---- Estado de sesión y búsqueda ----
   const [pacientes, setPacientes] = useState<Paciente[]>([]);
@@ -4429,7 +4430,7 @@ export default function App() {
   useEffect(() => {
     if (!me) return;
     if (tab === "ventas" && me.rol !== "admin") return;
-    if (tab !== "ventas" && tab !== "inventario") return;
+    if (tab !== "ventas" && tab !== "inventario" && tab !== "envios") return;
     loadInventario();
   }, [me, tab, sucursalActivaId]);
 
@@ -7503,6 +7504,11 @@ export default function App() {
             Inventario
           </TabButton>
         )}
+        {(isAdmin || isRecep) && (
+          <TabButton variant="inventario" active={tab === "envios"} onClick={() => setTab("envios") }>
+            Entregas en línea
+          </TabButton>
+        )}
         {(isAdmin || isContador) && (
           <TabButton variant="estadisticas" active={tab === "finanzas"} onClick={() => setTab("finanzas")}>
             Finanzas
@@ -9659,6 +9665,10 @@ export default function App() {
             </div>
           </section>
         </div>
+      )}
+
+      {(isAdmin || isRecep) && tab === "envios" && (
+        <OnlineShippingAdmin isAdmin={isAdmin} products={inventario} />
       )}
 
       {/* ========================= INVENTARIO ========================= */}

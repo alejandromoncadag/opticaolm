@@ -40,6 +40,8 @@ backups/
 !backend/scripts/migrations/20260801_phase1b_optical_sales_rollback.sql
 !backend/scripts/migrations/20260802_phase1fa_authoritative_commerce.sql
 !backend/scripts/migrations/20260802_phase1fa_authoritative_commerce_rollback.sql
+!backend/scripts/migrations/20260802_phase1fb1_manual_fulfillment.sql
+!backend/scripts/migrations/20260802_phase1fb1_manual_fulfillment_rollback.sql
 backend/.env
 frontend/.env
 backend/oauth_client.json

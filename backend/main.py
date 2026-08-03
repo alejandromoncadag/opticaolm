@@ -29,6 +29,10 @@ import os
 from dotenv import load_dotenv
 from public_catalog import create_public_catalog_router
 from online_commerce import PURCHASABLE_CATEGORIES, create_online_commerce_router
+from online_fulfillment import (
+    create_admin_fulfillment_router,
+    create_storefront_fulfillment_router,
+)
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 load_dotenv(os.path.join(BASE_DIR, ".env"))
@@ -103,6 +107,7 @@ DB_CONNINFO = _resolve_db_conninfo()
 
 app.include_router(create_public_catalog_router(DB_CONNINFO))
 app.include_router(create_online_commerce_router(DB_CONNINFO))
+app.include_router(create_storefront_fulfillment_router(DB_CONNINFO))
 
 
 
@@ -1110,6 +1115,43 @@ def ensure_reporting_views():
 
         conn.commit()
 
+def _bootstrap_auth_user(
+    cur: psycopg.Cursor,
+    *,
+    username: str,
+    password: str,
+    role: str,
+    sucursal_id: int | None,
+    required: bool = False,
+) -> bool:
+    """Create a missing bootstrap user without mutating an existing account."""
+    cur.execute(
+        "SELECT 1 FROM core.usuarios WHERE username = %s LIMIT 1;",
+        (username,),
+    )
+    if cur.fetchone() is not None:
+        return False
+
+    if not password:
+        if required:
+            raise RuntimeError(
+                f"Missing bootstrap password configuration for user {username!r}."
+            )
+        return False
+
+    password_hash = argon2.hash(password)
+    cur.execute(
+        """
+        INSERT INTO core.usuarios (
+          username, password_hash, rol, role, sucursal_id, activo,
+          password_changed_at, pwd_changed_at
+        )
+        VALUES (%s, %s, %s, %s, %s, true, NOW(), NOW())
+        ON CONFLICT (username) DO NOTHING;
+        """,
+        (username, password_hash, role, role, sucursal_id),
+    )
+    return True
 
 
 def ensure_auth_schema():
@@ -1191,86 +1233,40 @@ def ensure_auth_schema():
                 or os.getenv("SEED_ADMIN_USERNAME")
                 or "admin"
             )
-            admin_pass = (
-                os.getenv("ADMIN_PASS")
-                or os.getenv("SEED_ADMIN_PASSWORD")
-                or "admin1234"
+            admin_pass = str(
+                os.getenv("ADMIN_PASS") or os.getenv("SEED_ADMIN_PASSWORD") or ""
+            ).strip()
+            _bootstrap_auth_user(
+                cur,
+                username=admin_user,
+                password=admin_pass,
+                role="admin",
+                sucursal_id=None,
+                required=True,
             )
-            reset_admin_password = (
-                (os.getenv("SEED_ADMIN_RESET_PASSWORD", "false").strip().lower())
-                in {"1", "true", "yes", "on"}
-            )
-            admin_hash = argon2.hash(admin_pass)
 
-            if reset_admin_password:
-                cur.execute(
-                    """
-                    INSERT INTO core.usuarios (
-                      username, password_hash, rol, role, sucursal_id, activo, password_changed_at, pwd_changed_at
-                    )
-                    VALUES (%s, %s, 'admin', 'admin', NULL, true, NOW(), NOW())
-                    ON CONFLICT (username) DO UPDATE
-                    SET
-                      password_hash = EXCLUDED.password_hash,
-                      rol = 'admin',
-                      role = 'admin',
-                      activo = true,
-                      password_changed_at = NOW(),
-                      pwd_changed_at = NOW();
-                    """,
-                    (admin_user, admin_hash),
-                )
-            else:
-                cur.execute(
-                    """
-                    INSERT INTO core.usuarios (
-                      username, password_hash, rol, role, sucursal_id, activo, password_changed_at, pwd_changed_at
-                    )
-                    VALUES (%s, %s, 'admin', 'admin', NULL, true, NOW(), NOW())
-                    ON CONFLICT (username) DO NOTHING;
-                    """,
-                    (admin_user, admin_hash),
-                )
-                cur.execute(
-                    """
-                    UPDATE core.usuarios
-                    SET
-                      rol = COALESCE(NULLIF(TRIM(rol), ''), 'admin'),
-                      role = COALESCE(NULLIF(TRIM(role), ''), rol, 'admin'),
-                      activo = true,
-                      password_changed_at = COALESCE(password_changed_at, pwd_changed_at, NOW()),
-                      pwd_changed_at = COALESCE(pwd_changed_at, password_changed_at, NOW())
-                    WHERE username = %s;
-                    """,
-                    (admin_user,),
-                )
-
-            seed_staff_reset_password = (
-                (os.getenv("SEED_STAFF_RESET_PASSWORD", "true").strip().lower())
-                in {"1", "true", "yes", "on"}
-            )
             seed_staff_users = [
                 (
                     "edomex_recep",
-                    os.getenv("SEED_EDOMEX_RECEP_PASSWORD", "EdomexRecep2026!"),
+                    os.getenv("SEED_EDOMEX_RECEP_PASSWORD", ""),
                     "recepcion",
                     1,
                 ),
                 (
                     "edomex_doc",
-                    os.getenv("SEED_EDOMEX_DOC_PASSWORD", "EdomexDoc2026!"),
+                    os.getenv("SEED_EDOMEX_DOC_PASSWORD", ""),
                     "doctor",
                     1,
                 ),
                 (
                     "playa_recep",
-                    os.getenv("SEED_PLAYA_RECEP_PASSWORD", "PlayaRecep2026!"),
+                    os.getenv("SEED_PLAYA_RECEP_PASSWORD", ""),
                     "recepcion",
                     2,
                 ),
                 (
                     "playa_doc",
-                    os.getenv("SEED_PLAYA_DOC_PASSWORD", "PlayaDoc2026!"),
+                    os.getenv("SEED_PLAYA_DOC_PASSWORD", ""),
                     "doctor",
                     2,
                 ),
@@ -1278,53 +1274,13 @@ def ensure_auth_schema():
 
             for username, raw_password, user_role, sucursal_id in seed_staff_users:
                 password_value = str(raw_password or "").strip()
-                if not password_value:
-                    continue
-                password_hash = argon2.hash(password_value)
-                if seed_staff_reset_password:
-                    cur.execute(
-                        """
-                        INSERT INTO core.usuarios (
-                          username, password_hash, rol, role, sucursal_id, activo, password_changed_at, pwd_changed_at
-                        )
-                        VALUES (%s, %s, %s, %s, %s, true, NOW(), NOW())
-                        ON CONFLICT (username) DO UPDATE
-                        SET
-                          password_hash = EXCLUDED.password_hash,
-                          rol = EXCLUDED.rol,
-                          role = EXCLUDED.role,
-                          sucursal_id = EXCLUDED.sucursal_id,
-                          activo = true,
-                          password_changed_at = NOW(),
-                          pwd_changed_at = NOW();
-                        """,
-                        (username, password_hash, user_role, user_role, sucursal_id),
-                    )
-                else:
-                    cur.execute(
-                        """
-                        INSERT INTO core.usuarios (
-                          username, password_hash, rol, role, sucursal_id, activo, password_changed_at, pwd_changed_at
-                        )
-                        VALUES (%s, %s, %s, %s, %s, true, NOW(), NOW())
-                        ON CONFLICT (username) DO NOTHING;
-                        """,
-                        (username, password_hash, user_role, user_role, sucursal_id),
-                    )
-                    cur.execute(
-                        """
-                        UPDATE core.usuarios
-                        SET
-                          rol = %s,
-                          role = %s,
-                          sucursal_id = %s,
-                          activo = true,
-                          password_changed_at = COALESCE(password_changed_at, pwd_changed_at, NOW()),
-                          pwd_changed_at = COALESCE(pwd_changed_at, password_changed_at, NOW())
-                        WHERE username = %s;
-                        """,
-                        (user_role, user_role, sucursal_id, username),
-                    )
+                _bootstrap_auth_user(
+                    cur,
+                    username=username,
+                    password=password_value,
+                    role=user_role,
+                    sucursal_id=sucursal_id,
+                )
 
 
 
@@ -3359,6 +3315,9 @@ def force_sucursal(user, sucursal_id: Optional[int]) -> Optional[int]:
 def require_roles(user, allowed: Iterable[str]):
     if user["rol"] not in allowed:
         raise HTTPException(status_code=403, detail="No tienes permisos para esta acción.")
+
+
+app.include_router(create_admin_fulfillment_router(DB_CONNINFO, get_current_user))
 
 
 PACIENTE_ESTRELLA_CONSULTAS_6M = 15
