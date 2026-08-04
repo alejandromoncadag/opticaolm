@@ -41,6 +41,12 @@ STATUS_TO_API = {
     "cancelada": "cancelled",
 }
 STATUS_FROM_API = {value: key for key, value in STATUS_TO_API.items()}
+RESERVATION_STATUS_TO_API = {
+    "activa": "active",
+    "liberada": "released",
+    "expirada": "expired",
+    "cancelada": "cancelled",
+}
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
@@ -82,6 +88,7 @@ class FulfillmentConfig:
     db_conninfo: str
     bearer_token: str
     enabled: bool
+    reservations_enabled: bool = False
 
     @classmethod
     def from_env(cls, db_conninfo: str) -> "FulfillmentConfig":
@@ -89,6 +96,7 @@ class FulfillmentConfig:
             db_conninfo=db_conninfo,
             bearer_token=os.getenv("ONLINE_COMMERCE_BEARER_TOKEN", "").strip(),
             enabled=_env_bool("PHASE_1FB1_ENABLED", False),
+            reservations_enabled=_env_bool("PHASE_1FB2_ENABLED", False),
         )
 
 
@@ -555,8 +563,35 @@ class FulfillmentRepository:
                 ),
                 "options": [self._option_payload(option) for option in options],
                 "ranking": labels,
+                "reservation": self._request_reservation_payload(cur, row["solicitud_id"]),
             }
         )
+
+    def _request_reservation_payload(self, cur, request_id: int) -> dict[str, Any] | None:
+        cur.execute(
+            """
+            SELECT reservation.*, request.solicitud_public_id,
+                   option.opcion_public_id, branch.nombre AS branch_name,
+                   config.vigencia_minutos AS lifetime_minutes
+            FROM core.online_reservas reservation
+            JOIN core.online_solicitudes_cotizacion_envio request
+              ON request.solicitud_id = reservation.solicitud_id
+            JOIN core.online_cotizacion_selecciones selection
+              ON selection.seleccion_id = reservation.seleccion_id
+            JOIN core.online_opciones_cotizacion_envio option
+              ON option.opcion_id = selection.opcion_id
+            JOIN core.sucursales branch ON branch.sucursal_id = reservation.sucursal_id
+            CROSS JOIN core.online_reserva_configuracion config
+            WHERE reservation.solicitud_id = %s
+            ORDER BY reservation.created_at DESC
+            LIMIT 1
+            """,
+            (request_id,),
+        )
+        reservation = cur.fetchone()
+        if not reservation:
+            return None
+        return self._reservation_payload(cur, reservation)
 
     def create_request(self, owner: CommerceOwner, data: CreateFulfillmentRequest, key: str) -> dict[str, Any]:
         if data.method == "shipping" and data.address is None:
@@ -867,6 +902,349 @@ class FulfillmentRepository:
                     raise FulfillmentRuleError(404, "REQUEST_NOT_FOUND", "Shipping request was not found.")
                 return self._preview_payload(cur, request)
 
+    @staticmethod
+    def _reservation_payload(cur, reservation: dict[str, Any]) -> dict[str, Any]:
+        cur.execute(
+            """
+            SELECT reserva_linea_id, producto_id, sucursal_id, carrito_item_id,
+                   configuracion_hash, sku_snapshot, nombre_snapshot, cantidad
+            FROM core.online_reserva_lineas
+            WHERE reserva_id = %s
+            ORDER BY reserva_linea_id
+            """,
+            (reservation["reserva_id"],),
+        )
+        lines = [
+            {
+                "lineId": str(row["reserva_linea_id"]),
+                "productId": str(row["producto_id"]),
+                "branchId": str(row["sucursal_id"]),
+                "cartItemId": str(row["carrito_item_id"]) if row["carrito_item_id"] else None,
+                "configurationHash": row["configuracion_hash"],
+                "sku": row["sku_snapshot"],
+                "name": row["nombre_snapshot"],
+                "quantity": int(row["cantidad"]),
+            }
+            for row in cur.fetchall()
+        ]
+        return _safe(
+            {
+                "schemaVersion": FULFILLMENT_SCHEMA_VERSION,
+                "reservationId": str(reservation["reserva_public_id"]),
+                "requestId": str(reservation["solicitud_public_id"]),
+                "selectedOptionId": str(reservation["opcion_public_id"]),
+                "branchId": str(reservation["sucursal_id"]),
+                "branchName": reservation["branch_name"],
+                "status": RESERVATION_STATUS_TO_API[reservation["estado"]],
+                "createdAt": reservation["created_at"],
+                "expiresAt": reservation["expires_at"],
+                "releasedAt": reservation["released_at"],
+                "lifetimeMinutes": int(reservation["lifetime_minutes"]),
+                "lines": lines,
+                "stockReserved": True,
+                "orderCreated": False,
+                "paymentCreated": False,
+                "saleCreated": False,
+                "shipmentCreated": False,
+            }
+        )
+
+    @staticmethod
+    def _reservation_query() -> str:
+        return """
+            SELECT reservation.*, request.solicitud_public_id,
+                   option.opcion_public_id, branch.nombre AS branch_name,
+                   config.vigencia_minutos AS lifetime_minutes
+            FROM core.online_reservas reservation
+            JOIN core.online_solicitudes_cotizacion_envio request
+              ON request.solicitud_id = reservation.solicitud_id
+            JOIN core.online_cotizacion_selecciones selection
+              ON selection.seleccion_id = reservation.seleccion_id
+            JOIN core.online_opciones_cotizacion_envio option
+              ON option.opcion_id = selection.opcion_id
+            JOIN core.sucursales branch
+              ON branch.sucursal_id = reservation.sucursal_id
+            CROSS JOIN core.online_reserva_configuracion config
+            WHERE reservation.reserva_id = %s
+        """
+
+    def _release_reservation(self, cur, reservation: dict[str, Any], *, status: str, actor_type: str, owner_hash: str | None = None, staff: dict[str, Any] | None = None) -> None:
+        cur.execute(
+            """
+            SELECT producto_id, sucursal_id, cantidad
+            FROM core.online_reserva_lineas
+            WHERE reserva_id = %s
+            ORDER BY sucursal_id, producto_id, reserva_linea_id
+            FOR UPDATE
+            """,
+            (reservation["reserva_id"],),
+        )
+        lines = list(cur.fetchall())
+        for line in lines:
+            cur.execute(
+                """
+                SELECT stock, stock_reservado
+                FROM core.catalogo_inventario_sucursal
+                WHERE producto_id = %s AND sucursal_id = %s
+                FOR UPDATE
+                """,
+                (line["producto_id"], line["sucursal_id"]),
+            )
+            inventory = cur.fetchone()
+            if not inventory or int(inventory["stock_reservado"]) < int(line["cantidad"]):
+                raise FulfillmentRuleError(
+                    409,
+                    "RESERVATION_INVENTORY_CORRUPTION",
+                    "The reservation cannot be released because reserved inventory is inconsistent.",
+                )
+            cur.execute(
+                """
+                UPDATE core.catalogo_inventario_sucursal
+                SET stock_reservado = stock_reservado - %s,
+                    version = version + 1,
+                    updated_at = NOW()
+                WHERE producto_id = %s AND sucursal_id = %s
+                """,
+                (line["cantidad"], line["producto_id"], line["sucursal_id"]),
+            )
+        cur.execute(
+            """
+            UPDATE core.online_reservas
+            SET estado = %s, released_at = NOW(), updated_at = NOW()
+            WHERE reserva_id = %s AND estado = 'activa'
+            RETURNING reserva_id
+            """,
+            (status, reservation["reserva_id"]),
+        )
+        if cur.fetchone():
+            cur.execute(
+                """
+                INSERT INTO core.online_reserva_eventos (
+                    reserva_id, evento_tipo, actor_tipo, actor_ref_hash,
+                    usuario_id, metadata
+                ) VALUES (%s, %s, %s, %s, %s, %s::jsonb)
+                """,
+                (
+                    reservation["reserva_id"],
+                    "reservation_expired" if status == "expirada" else "reservation_released",
+                    actor_type,
+                    owner_hash,
+                    staff["usuario_id"] if staff else None,
+                    _canonical({"branchId": str(reservation["sucursal_id"])}),
+                ),
+            )
+
+    def _release_expired_reservations(self, cur, *, limit: int = 100) -> int:
+        cur.execute(
+            """
+            SELECT reserva_id
+            FROM core.online_reservas
+            WHERE estado = 'activa' AND expires_at <= clock_timestamp()
+            ORDER BY expires_at, reserva_id
+            LIMIT %s
+            FOR UPDATE SKIP LOCKED
+            """,
+            (max(1, min(limit, 1000)),),
+        )
+        reservation_ids = [int(row["reserva_id"]) for row in cur.fetchall()]
+        released = 0
+        for reservation_id in reservation_ids:
+            cur.execute(self._reservation_query() + " FOR UPDATE", (reservation_id,))
+            reservation = cur.fetchone()
+            if reservation and reservation["estado"] == "activa" and reservation["expires_at"] <= datetime.now(timezone.utc):
+                self._release_reservation(cur, reservation, status="expirada", actor_type="sistema")
+                released += 1
+        return released
+
+    def create_reservation(self, owner: CommerceOwner, public_id: str, key: str) -> dict[str, Any]:
+        with self._connection() as conn:
+            with conn.cursor() as cur:
+                idempotency_id, cached = self._idempotency_begin(
+                    cur, owner, "fulfillment_reservation_create", key, {"requestId": public_id}
+                )
+                if cached is not None:
+                    conn.commit()
+                    return cached
+                self._release_expired_reservations(cur)
+                cur.execute(
+                    """
+                    SELECT *
+                    FROM core.online_solicitudes_cotizacion_envio
+                    WHERE solicitud_public_id = %s
+                      AND propietario_tipo = %s
+                      AND propietario_ref_hash = %s
+                    FOR UPDATE
+                    """,
+                    (public_id, owner.db_type, owner.owner_hash),
+                )
+                request = cur.fetchone()
+                if not request:
+                    raise FulfillmentRuleError(404, "REQUEST_NOT_FOUND", "Shipping request was not found.")
+                if request["estado"] != "seleccionada" or request["expira_at"] <= datetime.now(timezone.utc):
+                    raise FulfillmentRuleError(409, "REQUEST_NOT_RESERVABLE", "Select a valid checkout option before reserving inventory.")
+                cur.execute(
+                    """
+                    SELECT reservation.reserva_id
+                    FROM core.online_reservas reservation
+                    WHERE reservation.solicitud_id = %s AND reservation.estado = 'activa'
+                    FOR UPDATE
+                    """,
+                    (request["solicitud_id"],),
+                )
+                existing_id = cur.fetchone()
+                if existing_id:
+                    cur.execute(self._reservation_query(), (existing_id["reserva_id"],))
+                    result = self._reservation_payload(cur, cur.fetchone())
+                    self._idempotency_finish(cur, idempotency_id, result, int(existing_id["reserva_id"]))
+                    conn.commit()
+                    return result
+                cur.execute(
+                    """
+                    SELECT selection.seleccion_id, option.*, branch.nombre AS branch_name
+                    FROM core.online_cotizacion_selecciones selection
+                    JOIN core.online_opciones_cotizacion_envio option
+                      ON option.opcion_id = selection.opcion_id
+                    JOIN core.sucursales branch ON branch.sucursal_id = option.sucursal_id
+                    WHERE selection.solicitud_id = %s
+                      AND option.activa = TRUE
+                      AND option.expira_at > NOW()
+                    FOR UPDATE OF selection, option
+                    """,
+                    (request["solicitud_id"],),
+                )
+                option = cur.fetchone()
+                if not option:
+                    raise FulfillmentRuleError(409, "QUOTE_EXPIRED_OR_INVALID", "The selected checkout option is no longer valid.")
+                cur.execute(
+                    """
+                    SELECT 1 FROM core.online_checkout_previews
+                    WHERE solicitud_id = %s AND expira_at > NOW()
+                    """,
+                    (request["solicitud_id"],),
+                )
+                if not cur.fetchone():
+                    raise FulfillmentRuleError(409, "PREVIEW_EXPIRED", "The checkout preview has expired. Recalculate shipping options.")
+                cart, items = self._cart(cur, owner)
+                snapshot, fingerprint = self._cart_snapshot(cart, items)
+                if fingerprint != request["carrito_fingerprint"]:
+                    raise FulfillmentRuleError(409, "CART_CHANGED", "The cart changed. Create a new shipping request.")
+                cur.execute(
+                    "SELECT activa, vigencia_minutos FROM core.online_reserva_configuracion WHERE configuracion_id = 1"
+                )
+                config = cur.fetchone()
+                if not config or not config["activa"]:
+                    raise FulfillmentRuleError(503, "PHASE_1FB2_DISABLED", "Inventory reservations are disabled.")
+                now = datetime.now(timezone.utc)
+                expires_at = min(
+                    now.timestamp() + int(config["vigencia_minutos"]) * 60,
+                    request["expira_at"].timestamp(),
+                    option["expira_at"].timestamp(),
+                )
+                expires = datetime.fromtimestamp(expires_at, tz=timezone.utc)
+                if expires <= now:
+                    raise FulfillmentRuleError(409, "RESERVATION_WINDOW_EXPIRED", "The reservation window has expired.")
+                controlled = [item for item in items if item["controla_stock"]]
+                inventory_rows: list[tuple[dict[str, Any], dict[str, Any]]] = []
+                for item in sorted(controlled, key=lambda value: (int(option["sucursal_id"]), int(value["producto_id"]), int(value["carrito_item_id"]))):
+                    cur.execute(
+                        """
+                        SELECT stock, stock_reservado, disponible_venta
+                        FROM core.catalogo_inventario_sucursal
+                        WHERE producto_id = %s AND sucursal_id = %s
+                        FOR UPDATE
+                        """,
+                        (item["producto_id"], option["sucursal_id"]),
+                    )
+                    inventory = cur.fetchone()
+                    available = int(inventory["stock"] - inventory["stock_reservado"]) if inventory and inventory["disponible_venta"] else 0
+                    if not inventory or not inventory["disponible_venta"] or available < int(item["cantidad"]):
+                        raise FulfillmentRuleError(409, "INSUFFICIENT_AVAILABLE_STOCK", "The selected branch cannot reserve the complete cart.", {"productId": str(item["producto_id"]), "available": available})
+                    inventory_rows.append((item, inventory))
+                cur.execute(
+                    """
+                    INSERT INTO core.online_reservas (
+                        solicitud_id, seleccion_id, propietario_tipo, propietario_ref_hash,
+                        carrito_fingerprint, sucursal_id, expires_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    RETURNING reserva_id
+                    """,
+                    (request["solicitud_id"], option["seleccion_id"], request["propietario_tipo"], request["propietario_ref_hash"], fingerprint, option["sucursal_id"], expires),
+                )
+                reservation_id = int(cur.fetchone()["reserva_id"])
+                for item, _inventory in inventory_rows:
+                    cur.execute(
+                        """
+                        INSERT INTO core.online_reserva_lineas (
+                            reserva_id, producto_id, sucursal_id, carrito_item_id,
+                            configuracion_hash, sku_snapshot, nombre_snapshot, cantidad
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                        """,
+                        (reservation_id, item["producto_id"], option["sucursal_id"], item["carrito_item_id"], item["configuracion_hash"], item["sku"], item["nombre"], item["cantidad"]),
+                    )
+                    cur.execute(
+                        """
+                        UPDATE core.catalogo_inventario_sucursal
+                        SET stock_reservado = stock_reservado + %s,
+                            version = version + 1,
+                            updated_at = NOW()
+                        WHERE producto_id = %s AND sucursal_id = %s
+                        """,
+                        (item["cantidad"], item["producto_id"], option["sucursal_id"]),
+                    )
+                cur.execute(
+                    """
+                    INSERT INTO core.online_reserva_eventos (reserva_id, evento_tipo, actor_tipo, actor_ref_hash, metadata)
+                    VALUES (%s, 'reservation_created', %s, %s, %s::jsonb)
+                    """,
+                    (reservation_id, owner.db_type, owner.owner_hash, _canonical({"requestId": public_id, "lineCount": len(inventory_rows)})),
+                )
+                cur.execute(self._reservation_query(), (reservation_id,))
+                result = self._reservation_payload(cur, cur.fetchone())
+                self._idempotency_finish(cur, idempotency_id, result, reservation_id)
+            conn.commit()
+            return result
+
+    def get_reservation(self, owner: CommerceOwner, public_id: str) -> dict[str, Any]:
+        with self._connection() as conn:
+            with conn.cursor() as cur:
+                self._release_expired_reservations(cur)
+                cur.execute(
+                    self._reservation_query().replace("WHERE reservation.reserva_id = %s", "WHERE request.solicitud_public_id = %s AND request.propietario_tipo = %s AND request.propietario_ref_hash = %s ORDER BY reservation.created_at DESC LIMIT 1"),
+                    (public_id, owner.db_type, owner.owner_hash),
+                )
+                reservation = cur.fetchone()
+                if not reservation:
+                    raise FulfillmentRuleError(404, "RESERVATION_NOT_FOUND", "No reservation exists for this checkout request.")
+                result = self._reservation_payload(cur, reservation)
+            conn.commit()
+            return result
+
+    def release_reservation(self, owner: CommerceOwner, public_id: str, key: str) -> dict[str, Any]:
+        with self._connection() as conn:
+            with conn.cursor() as cur:
+                idempotency_id, cached = self._idempotency_begin(
+                    cur, owner, "fulfillment_reservation_release", key, {"requestId": public_id}
+                )
+                if cached is not None:
+                    conn.commit()
+                    return cached
+                self._release_expired_reservations(cur)
+                cur.execute(
+                    self._reservation_query().replace("WHERE reservation.reserva_id = %s", "WHERE request.solicitud_public_id = %s AND request.propietario_tipo = %s AND request.propietario_ref_hash = %s ORDER BY reservation.created_at DESC LIMIT 1 FOR UPDATE"),
+                    (public_id, owner.db_type, owner.owner_hash),
+                )
+                reservation = cur.fetchone()
+                if not reservation:
+                    raise FulfillmentRuleError(404, "RESERVATION_NOT_FOUND", "No reservation exists for this checkout request.")
+                if reservation["estado"] == "activa":
+                    self._release_reservation(cur, reservation, status="liberada", actor_type=owner.db_type, owner_hash=owner.owner_hash)
+                    cur.execute(self._reservation_query(), (reservation["reserva_id"],))
+                    reservation = cur.fetchone()
+                result = self._reservation_payload(cur, reservation)
+                self._idempotency_finish(cur, idempotency_id, result, int(reservation["reserva_id"]))
+            conn.commit()
+            return result
+
 
 class FulfillmentAdminRepository:
     def __init__(self, config: FulfillmentConfig, connect: Callable[..., Any] = psycopg.connect):
@@ -926,6 +1304,49 @@ class FulfillmentAdminRepository:
                 payload["eligibleBranches"] = _safe(list(cur.fetchall()))
             conn.commit()
         return payload
+
+    def list_reservations(self, user: dict[str, Any], status: str | None = None) -> dict[str, Any]:
+        with self._connection() as conn:
+            with conn.cursor() as cur:
+                staff = self._staff(cur)
+                self._customer._release_expired_reservations(cur)
+                params: tuple[Any, ...] = ()
+                query = """
+                    SELECT reservation.*, request.solicitud_public_id,
+                           option.opcion_public_id, branch.nombre AS branch_name,
+                           config.vigencia_minutos AS lifetime_minutes
+                    FROM core.online_reservas reservation
+                    JOIN core.online_solicitudes_cotizacion_envio request
+                      ON request.solicitud_id = reservation.solicitud_id
+                    JOIN core.online_cotizacion_selecciones selection
+                      ON selection.seleccion_id = reservation.seleccion_id
+                    JOIN core.online_opciones_cotizacion_envio option
+                      ON option.opcion_id = selection.opcion_id
+                    JOIN core.sucursales branch ON branch.sucursal_id = reservation.sucursal_id
+                    CROSS JOIN core.online_reserva_configuracion config
+                """
+                if status:
+                    query += " WHERE reservation.estado = %s"
+                    params = (status,)
+                query += " ORDER BY reservation.created_at DESC LIMIT 500"
+                cur.execute(query, params)
+                reservations = []
+                for row in cur.fetchall():
+                    payload = self._customer._reservation_payload(cur, row)
+                    payload["ownerType"] = row["propietario_tipo"]
+                    payload["lineCount"] = len(payload["lines"])
+                    payload["quantity"] = sum(line["quantity"] for line in payload["lines"])
+                    reservations.append(payload)
+            conn.commit()
+        return _safe({"schemaVersion": FULFILLMENT_SCHEMA_VERSION, "reservations": reservations, "viewer": staff})
+
+    def release_expired_reservations(self, user: dict[str, Any]) -> dict[str, Any]:
+        with self._connection() as conn:
+            with conn.cursor() as cur:
+                staff = self._staff(cur, user, admin_only=True)
+                released = self._customer._release_expired_reservations(cur, limit=1000)
+            conn.commit()
+        return _safe({"schemaVersion": FULFILLMENT_SCHEMA_VERSION, "releasedCount": released, "viewer": staff})
 
     def add_quote(self, user: dict[str, Any], public_id: str, data: ManualQuoteInput) -> dict[str, Any]:
         with self._connection() as conn:
@@ -1103,6 +1524,11 @@ def create_storefront_fulfillment_router(db_conninfo: str, config: FulfillmentCo
         if not credentials or credentials.scheme.lower() != "bearer" or not config.bearer_token or not secrets.compare_digest(credentials.credentials, config.bearer_token):
             raise HTTPException(status_code=401, detail="Invalid fulfillment credentials.")
 
+    def reservation_access(credentials: HTTPAuthorizationCredentials | None = Depends(bearer)):
+        access(credentials)
+        if not config.reservations_enabled:
+            raise HTTPException(status_code=503, detail={"code": "PHASE_1FB2_DISABLED", "message": "Inventory reservations are disabled.", "details": {}})
+
     def owner(owner_type: str = Header(alias="X-OLM-Owner-Type"), owner_hash: str = Header(alias="X-OLM-Owner-Hash")) -> CommerceOwner:
         normalized_type, normalized_hash = owner_type.strip().lower(), owner_hash.strip().lower()
         if normalized_type not in {"guest", "customer"} or not _valid_owner_hash(normalized_hash):
@@ -1113,7 +1539,7 @@ def create_storefront_fulfillment_router(db_conninfo: str, config: FulfillmentCo
 
     @router.get("/health", dependencies=dependencies)
     def health():
-        return {"schemaVersion": FULFILLMENT_SCHEMA_VERSION, "status": "ok", "reservationsEnabled": False, "ordersEnabled": False}
+        return {"schemaVersion": FULFILLMENT_SCHEMA_VERSION, "status": "ok", "reservationsEnabled": config.reservations_enabled, "ordersEnabled": False}
 
     @router.post("/requests", dependencies=dependencies)
     def create(data: CreateFulfillmentRequest, commerce_owner: CommerceOwner = Depends(owner), idempotency_key: str = Header(alias="Idempotency-Key")):
@@ -1139,6 +1565,18 @@ def create_storefront_fulfillment_router(db_conninfo: str, config: FulfillmentCo
     def preview(request_id: str, commerce_owner: CommerceOwner = Depends(owner)):
         return _run(lambda: repository.get_preview(commerce_owner, request_id))
 
+    @router.post("/requests/{request_id}/reservation", dependencies=[Depends(reservation_access)])
+    def reserve(request_id: str, commerce_owner: CommerceOwner = Depends(owner), idempotency_key: str = Header(alias="Idempotency-Key")):
+        return _run(lambda: repository.create_reservation(commerce_owner, request_id, idempotency_key))
+
+    @router.get("/requests/{request_id}/reservation", dependencies=[Depends(reservation_access)])
+    def reservation(request_id: str, commerce_owner: CommerceOwner = Depends(owner)):
+        return _run(lambda: repository.get_reservation(commerce_owner, request_id))
+
+    @router.post("/requests/{request_id}/reservation/release", dependencies=[Depends(reservation_access)])
+    def release_reservation(request_id: str, commerce_owner: CommerceOwner = Depends(owner), idempotency_key: str = Header(alias="Idempotency-Key")):
+        return _run(lambda: repository.release_reservation(commerce_owner, request_id, idempotency_key))
+
     return router
 
 
@@ -1150,6 +1588,11 @@ def create_admin_fulfillment_router(db_conninfo: str, current_user_dependency: C
     def enabled():
         if not config.enabled:
             raise HTTPException(status_code=503, detail={"code": "PHASE_1FB1_DISABLED", "message": "Phase 1F-B1 is disabled.", "details": {}})
+
+    def reservations_enabled():
+        enabled()
+        if not config.reservations_enabled:
+            raise HTTPException(status_code=503, detail={"code": "PHASE_1FB2_DISABLED", "message": "Inventory reservations are disabled.", "details": {}})
 
     dependencies = [Depends(enabled)]
 
@@ -1168,6 +1611,14 @@ def create_admin_fulfillment_router(db_conninfo: str, current_user_dependency: C
     @router.get("/configuration", dependencies=dependencies)
     def configuration(user=Depends(current_user_dependency)):
         return _run(lambda: repository.configuration(user))
+
+    @router.get("/reservations", dependencies=[Depends(reservations_enabled)])
+    def reservations(status: str | None = None, user=Depends(current_user_dependency)):
+        return _run(lambda: repository.list_reservations(user, status))
+
+    @router.post("/reservations/release-expired", dependencies=[Depends(reservations_enabled)])
+    def release_expired(user=Depends(current_user_dependency)):
+        return _run(lambda: repository.release_expired_reservations(user))
 
     @router.put("/products/{product_id}", dependencies=dependencies)
     def product(product_id: int, data: ProductShippingInput, user=Depends(current_user_dependency)):

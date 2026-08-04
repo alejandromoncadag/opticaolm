@@ -36,6 +36,19 @@ type RequestDetail = RequestSummary & {
   eligibleBranches: Array<{ sucursal_id: number; sucursal_snapshot: { nombre: string; ciudad?: string }; elegible: boolean }>;
 };
 
+type ReservationSummary = {
+  reservationId: string;
+  requestId: string;
+  branchName: string;
+  status: string;
+  createdAt: string;
+  expiresAt: string;
+  releasedAt: string | null;
+  lineCount: number;
+  quantity: number;
+  ownerType: string;
+};
+
 type Product = { producto_id: number; sku: string; nombre: string; categoria: string };
 
 const card = { border: "1px solid #d7e0e7", background: "#fff", padding: 16 } as const;
@@ -43,6 +56,7 @@ const input = { width: "100%", padding: 9, border: "1px solid #bdcad4", backgrou
 
 export default function OnlineShippingAdmin({ isAdmin, products }: { isAdmin: boolean; products: Product[] }) {
   const [requests, setRequests] = useState<RequestSummary[]>([]);
+  const [reservations, setReservations] = useState<ReservationSummary[]>([]);
   const [detail, setDetail] = useState<RequestDetail | null>(null);
   const [configuration, setConfiguration] = useState<any>(null);
   const [view, setView] = useState<"queue" | "configuration">("queue");
@@ -59,6 +73,24 @@ export default function OnlineShippingAdmin({ isAdmin, products }: { isAdmin: bo
     try { const result = await staffFetch("/online-fulfillment/admin/v1/requests"); setRequests(result.requests || []); }
     catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
     finally { setLoading(false); }
+  }
+
+  async function loadReservations() {
+    try {
+      const result = await staffFetch("/online-fulfillment/admin/v1/reservations");
+      setReservations(result.reservations || []);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    }
+  }
+
+  async function releaseExpiredReservations() {
+    setError(""); setNotice("");
+    try {
+      const result = await staffFetch("/online-fulfillment/admin/v1/reservations/release-expired", { method: "POST" });
+      setNotice(`Reservas vencidas liberadas: ${result.releasedCount || 0}.`);
+      await loadReservations();
+    } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
   }
 
   async function loadDetail(requestId: string) {
@@ -89,7 +121,7 @@ export default function OnlineShippingAdmin({ isAdmin, products }: { isAdmin: bo
     } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
   }
 
-  useEffect(() => { void loadRequests(); void loadConfiguration(); }, []);
+  useEffect(() => { void loadRequests(); void loadReservations(); void loadConfiguration(); }, []);
 
   function selectProduct(productId: string) {
     const current = configuration?.productShipping?.find((item: any) => String(item.producto_id) === productId);
@@ -189,10 +221,13 @@ export default function OnlineShippingAdmin({ isAdmin, products }: { isAdmin: bo
     </section>
     {error && <div style={{ padding: 12, background: "#fff1f2", color: "#9f1239", border: "1px solid #fecdd3" }}>{error}</div>}
     {notice && <div style={{ padding: 12, background: "#ecfdf5", color: "#166534", border: "1px solid #bbf7d0" }}>{notice}</div>}
-    {view === "queue" && <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 380px), 1fr))", gap: 14 }}>
+    {view === "queue" && <>
+    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 380px), 1fr))", gap: 14 }}>
       <section style={card}><div style={{ display: "flex", justifyContent: "space-between" }}><h3 style={{ margin: 0 }}>Cola manual</h3><button onClick={() => void loadRequests()} disabled={loading}>Actualizar</button></div><div style={{ display: "grid", gap: 8, marginTop: 12 }}>{requests.map((request) => <button key={request.requestId} onClick={() => void loadDetail(request.requestId)} style={{ padding: 12, textAlign: "left", border: detail?.requestId === request.requestId ? "2px solid #315d58" : "1px solid #d7e0e7", background: "#fff" }}><strong>{request.contact.fullName}</strong><div style={{ marginTop: 4, color: "#64748b", fontSize: 12 }}>{statusLabel[request.status] || request.status} · {request.itemCount} artículos</div><div style={{ marginTop: 3, color: "#64748b", fontSize: 11 }}>{new Date(request.createdAt).toLocaleString("es-MX")}</div></button>)}{!loading && requests.length === 0 && <p style={{ color: "#64748b" }}>No hay solicitudes.</p>}</div></section>
       <section style={card}>{!detail ? <p style={{ color: "#64748b" }}>Selecciona una solicitud para revisar todas sus sucursales elegibles.</p> : <><div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}><div><h3 style={{ margin: 0 }}>{detail.contact.fullName}</h3><p style={{ margin: "4px 0", color: "#64748b" }}>{detail.contact.email} · {detail.contact.phone}</p></div><strong>{statusLabel[detail.status] || detail.status}</strong></div>{detail.address && <div style={{ marginTop: 12, padding: 10, background: "#f8fafc" }}>{detail.address.street} {detail.address.exteriorNumber}, {detail.address.neighborhood}, CP {detail.address.postalCode}, {detail.address.city}, {detail.address.state}</div>}<h4>Sucursales que pueden surtir todo el carrito</h4><div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>{detail.eligibleBranches.filter((branch) => branch.elegible).map((branch) => <span key={branch.sucursal_id} style={{ padding: "6px 9px", background: "#ecfdf5", color: "#166534" }}>{branch.sucursal_snapshot.nombre}</span>)}</div>{detail.method === "shipping" && detail.status !== "selected" && <form onSubmit={saveQuote} style={{ display: "grid", gap: 9, marginTop: 16 }}><h4 style={{ margin: 0 }}>Agregar cotización</h4><select required value={quote.branchId} onChange={(e) => setQuote({ ...quote, branchId: e.target.value })} style={input}><option value="">Sucursal</option>{detail.eligibleBranches.filter((branch) => branch.elegible).map((branch) => <option key={branch.sucursal_id} value={branch.sucursal_id}>{branch.sucursal_snapshot.nombre}</option>)}</select><div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}><select value={quote.carrierCode} onChange={(e) => setQuote({ ...quote, carrierCode: e.target.value })} style={input}>{(configuration?.carriers || [{ codigo: "dhl", nombre: "DHL" }, { codigo: "fedex", nombre: "FedEx" }, { codigo: "estafeta", nombre: "Estafeta" }, { codigo: "other", nombre: "Otro" }]).filter((carrier: any) => carrier.activo !== false).map((carrier: any) => <option key={carrier.codigo} value={carrier.codigo}>{carrier.nombre}</option>)}</select><input required placeholder="Nivel de servicio" value={quote.serviceLevel} onChange={(e) => setQuote({ ...quote, serviceLevel: e.target.value })} style={input} /></div>{quote.carrierCode === "other" && <input required placeholder="Nombre del transportista" value={quote.otherCarrierName} onChange={(e) => setQuote({ ...quote, otherCarrierName: e.target.value })} style={input} />}<div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}><input required type="number" min="0" step="0.01" placeholder="Costo MXN" value={quote.amount} onChange={(e) => setQuote({ ...quote, amount: e.target.value })} style={input} /><input required type="number" min="0" placeholder="Días mín." value={quote.minimumDeliveryDays} onChange={(e) => setQuote({ ...quote, minimumDeliveryDays: e.target.value })} style={input} /><input required type="number" min="0" placeholder="Días máx." value={quote.maximumDeliveryDays} onChange={(e) => setQuote({ ...quote, maximumDeliveryDays: e.target.value })} style={input} /></div>{Number(quote.amount) === 0 && isAdmin && <textarea required placeholder="Razón de autorización de envío sin costo" value={quote.zeroAuthorizationReason} onChange={(e) => setQuote({ ...quote, zeroAuthorizationReason: e.target.value })} style={input} />}<button style={{ padding: 10, border: 0, background: "#315d58", color: "#fff", fontWeight: 900 }}>Guardar opción nueva</button></form>}<h4>Opciones guardadas</h4>{detail.options.map((option) => <div key={option.optionId} style={{ padding: 10, borderTop: "1px solid #e2e8f0" }}><strong>{option.carrierName} · {option.serviceLevel}</strong><span style={{ float: "right" }}>${option.amount} MXN</span><div style={{ color: "#64748b", fontSize: 12 }}>{option.branchName} · {option.minimumDeliveryDays}-{option.maximumDeliveryDays} días</div></div>)}</>}</section>
-    </div>}
+    </div>
+    <section style={card}><div style={{ display: "flex", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}><div><h3 style={{ margin: 0 }}>Reservas temporales B2</h3><p style={{ margin: "4px 0 0", color: "#64748b", fontSize: 12 }}>Solo inventario reservado; no crea órdenes, pagos ni ventas.</p></div><div style={{ display: "flex", gap: 8 }}><button onClick={() => void loadReservations()}>Actualizar reservas</button>{isAdmin && <button onClick={() => void releaseExpiredReservations()}>Liberar vencidas</button>}</div></div><div style={{ overflowX: "auto", marginTop: 12 }}><table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}><thead><tr style={{ textAlign: "left", borderBottom: "1px solid #d7e0e7" }}><th style={{ padding: 8 }}>Reserva</th><th style={{ padding: 8 }}>Sucursal</th><th style={{ padding: 8 }}>Estado</th><th style={{ padding: 8 }}>Artículos</th><th style={{ padding: 8 }}>Vence</th></tr></thead><tbody>{reservations.map((reservation) => <tr key={reservation.reservationId} style={{ borderBottom: "1px solid #eef2f4" }}><td style={{ padding: 8 }}><code>{reservation.reservationId.slice(0, 8)}</code><div style={{ color: "#64748b", fontSize: 11 }}>{reservation.ownerType} · solicitud {reservation.requestId.slice(0, 8)}</div></td><td style={{ padding: 8 }}>{reservation.branchName}</td><td style={{ padding: 8, color: reservation.status === "active" ? "#166534" : "#64748b", fontWeight: 700 }}>{reservation.status}</td><td style={{ padding: 8 }}>{reservation.lineCount} líneas · {reservation.quantity} unidades</td><td style={{ padding: 8 }}>{new Date(reservation.expiresAt).toLocaleString("es-MX")}</td></tr>)}</tbody></table>{reservations.length === 0 && <p style={{ color: "#64748b" }}>No hay reservas temporales.</p>}</div></section>
+    </>}
     {view === "configuration" && isAdmin && configuration && <div style={{ display: "grid", gap: 14 }}><form onSubmit={savePackaging} style={card}><h3 style={{ marginTop: 0 }}>Empaque y vigencias</h3><p style={{ color: "#64748b" }}>Activa únicamente después de capturar valores reales aprobados.</p><label><input type="checkbox" checked={packageForm.active} onChange={(e) => setPackageForm({ ...packageForm, active: e.target.checked })} /> Configuración activa</label><div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))", gap: 8, marginTop: 12 }}>{([['packagingWeightGrams','Peso empaque (g)'],['paddingLengthMm','Margen largo (mm)'],['paddingWidthMm','Margen ancho (mm)'],['paddingHeightMm','Margen alto (mm)'],['maximumWeightGrams','Peso máximo (g)'],['maximumLengthMm','Largo máximo (mm)'],['maximumWidthMm','Ancho máximo (mm)'],['maximumHeightMm','Alto máximo (mm)'],['costWeight','Peso costo'],['speedWeight','Peso velocidad'],['requestLifetimeHours','Vigencia solicitud (h)'],['quoteLifetimeHours','Vigencia opción (h)']] as const).map(([key,label]) => <label key={key} style={{ fontSize: 12 }}>{label}<input type="number" step={key.includes('Weight') ? '0.01' : '1'} value={packageForm[key]} onChange={(e) => setPackageForm({ ...packageForm, [key]: e.target.value })} style={input} /></label>)}</div><button style={{ marginTop: 12, padding: 10, background: "#9a5b1f", color: "#fff", border: 0, fontWeight: 900 }}>Guardar configuración</button></form><section style={{ ...card, display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 320px), 1fr))", gap: 18 }}><div><h3>Medidas por producto</h3><select value={productForm.productId} onChange={(e) => selectProduct(e.target.value)} style={input}><option value="">Seleccionar producto</option>{products.map((product) => <option key={product.producto_id} value={product.producto_id}>{product.sku} · {product.nombre}</option>)}</select><MeasurementFields value={productForm} onChange={setProductForm} /><button type="button" onClick={() => void saveMeasurements("product")} disabled={!productForm.productId} style={{ marginTop: 10 }}>Guardar producto</button></div><div><h3>Fallback por categoría</h3><select value={categoryForm.category} onChange={(e) => selectCategory(e.target.value)} style={input}><option value="">Seleccionar categoría</option>{configuration.categoryFallbacks.map((category: any) => <option key={category.categoria} value={category.categoria}>{category.categoria}</option>)}</select><MeasurementFields value={categoryForm} onChange={setCategoryForm} /><button type="button" onClick={() => void saveMeasurements("category")} disabled={!categoryForm.category} style={{ marginTop: 10 }}>Guardar categoría</button></div></section><section style={card}><h3>Transportistas controlados</h3><div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>{configuration.carriers.map((carrier: any) => <button type="button" key={carrier.codigo} onClick={() => void toggleCarrier(carrier)} style={{ padding: 8, border: "1px solid #d7e0e7", background: carrier.activo ? "#ecfdf5" : "#f8fafc", color: carrier.activo ? "#166534" : "#64748b" }}>{carrier.nombre} · {carrier.activo ? "Activo" : "Inactivo"}</button>)}</div></section></div>}
   </div>;
 }

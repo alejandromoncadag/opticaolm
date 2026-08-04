@@ -5876,7 +5876,7 @@ def _phase1b_apply_inventory_delta(
             continue
         cur.execute(
             """
-            SELECT stock
+            SELECT stock, stock_reservado
             FROM core.catalogo_inventario_sucursal
             WHERE producto_id = %s AND sucursal_id = %s
             FOR UPDATE;
@@ -5887,9 +5887,12 @@ def _phase1b_apply_inventory_delta(
         if row is None:
             raise HTTPException(status_code=409, detail="Falta inventario por sucursal para un producto físico.")
         before = int(row[0])
+        reserved = int(row[1])
         after = before - delta_sale
-        if after < 0:
-            raise HTTPException(status_code=409, detail=f"Stock insuficiente para el producto #{product_id}. Disponible: {before}.")
+        if delta_sale > 0 and before - reserved < delta_sale:
+            raise HTTPException(status_code=409, detail=f"Stock insuficiente para el producto #{product_id}. Disponible para venta: {before - reserved}.")
+        if after < reserved:
+            raise HTTPException(status_code=409, detail=f"El ajuste dejaría comprometido el inventario reservado del producto #{product_id}.")
         cur.execute(
             """
             UPDATE core.catalogo_inventario_sucursal
