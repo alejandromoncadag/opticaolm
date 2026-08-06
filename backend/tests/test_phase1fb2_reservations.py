@@ -57,7 +57,8 @@ class Phase1FB2SourceTests(unittest.TestCase):
         self.assertIn('"paymentCreated": False', source)
         self.assertIn('"saleCreated": False', source)
         self.assertIn('"shipmentCreated": False', source)
-        self.assertNotIn("INSERT INTO core.online_ordenes", source)
+        self.assertNotIn("INSERT INTO core.ventas", source)
+        self.assertNotIn("INSERT INTO core.venta_pagos", source)
         self.assertNotIn("INSERT INTO core.ventas", source)
 
 

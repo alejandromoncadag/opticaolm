@@ -49,6 +49,19 @@ type ReservationSummary = {
   ownerType: string;
 };
 
+type OnlineOrderSummary = {
+  orderId: string;
+  status: string;
+  fulfillmentMethod: string;
+  branch: { nombre?: string; name?: string };
+  subtotal: string;
+  shipping: string;
+  total: string;
+  currency: string;
+  createdAt: string;
+  lines: Array<{ name: string; quantity: number }>;
+};
+
 type Product = { producto_id: number; sku: string; nombre: string; categoria: string };
 
 const card = { border: "1px solid #d7e0e7", background: "#fff", padding: 16 } as const;
@@ -57,9 +70,10 @@ const input = { width: "100%", padding: 9, border: "1px solid #bdcad4", backgrou
 export default function OnlineShippingAdmin({ isAdmin, products }: { isAdmin: boolean; products: Product[] }) {
   const [requests, setRequests] = useState<RequestSummary[]>([]);
   const [reservations, setReservations] = useState<ReservationSummary[]>([]);
+  const [orders, setOrders] = useState<OnlineOrderSummary[]>([]);
   const [detail, setDetail] = useState<RequestDetail | null>(null);
   const [configuration, setConfiguration] = useState<any>(null);
-  const [view, setView] = useState<"queue" | "configuration">("queue");
+  const [view, setView] = useState<"queue" | "reservations" | "orders" | "configuration">("queue");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [loading, setLoading] = useState(false);
@@ -82,6 +96,13 @@ export default function OnlineShippingAdmin({ isAdmin, products }: { isAdmin: bo
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
     }
+  }
+
+  async function loadOrders() {
+    try {
+      const result = await staffFetch("/online-fulfillment/admin/v1/orders");
+      setOrders(result.orders || []);
+    } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
   }
 
   async function releaseExpiredReservations() {
@@ -121,7 +142,7 @@ export default function OnlineShippingAdmin({ isAdmin, products }: { isAdmin: bo
     } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
   }
 
-  useEffect(() => { void loadRequests(); void loadReservations(); void loadConfiguration(); }, []);
+  useEffect(() => { void loadRequests(); void loadReservations(); void loadOrders(); void loadConfiguration(); }, []);
 
   function selectProduct(productId: string) {
     const current = configuration?.productShipping?.find((item: any) => String(item.producto_id) === productId);
@@ -217,7 +238,7 @@ export default function OnlineShippingAdmin({ isAdmin, products }: { isAdmin: bo
 
   return <div style={{ display: "grid", gap: 14 }}>
     <section style={{ ...card, background: "linear-gradient(120deg,#f1f7f7,#fff8ec)" }}>
-      <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}><div><h2 style={{ margin: 0, color: "#263d3b" }}>Entregas en línea</h2><p style={{ margin: "5px 0 0", color: "#62736f" }}>Cotizaciones manuales para todas las sucursales elegibles. No crea órdenes ni reserva inventario.</p></div><div style={{ display: "flex", gap: 8 }}><button onClick={() => { setView("queue"); void loadRequests(); }} style={{ padding: "9px 13px", border: "1px solid #315d58", background: view === "queue" ? "#315d58" : "#fff", color: view === "queue" ? "#fff" : "#315d58", fontWeight: 800 }}>Solicitudes</button>{isAdmin && <button onClick={() => { setView("configuration"); void loadConfiguration(); }} style={{ padding: "9px 13px", border: "1px solid #9a5b1f", background: view === "configuration" ? "#9a5b1f" : "#fff", color: view === "configuration" ? "#fff" : "#9a5b1f", fontWeight: 800 }}>Configuración</button>}</div></div>
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}><div><h2 style={{ margin: 0, color: "#263d3b" }}>Entregas en línea</h2><p style={{ margin: "5px 0 0", color: "#62736f" }}>Cotizaciones, reservas y órdenes pendientes de pago. C1 no crea pagos, ventas ni envíos.</p></div><div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}><button onClick={() => { setView("queue"); void loadRequests(); }} style={{ padding: "9px 13px", border: "1px solid #315d58", background: view === "queue" ? "#315d58" : "#fff", color: view === "queue" ? "#fff" : "#315d58", fontWeight: 800 }}>Solicitudes</button><button onClick={() => { setView("reservations"); void loadReservations(); }} style={{ padding: "9px 13px", border: "1px solid #315d58", background: view === "reservations" ? "#315d58" : "#fff", color: view === "reservations" ? "#fff" : "#315d58", fontWeight: 800 }}>Reservas</button><button onClick={() => { setView("orders"); void loadOrders(); }} style={{ padding: "9px 13px", border: "1px solid #315d58", background: view === "orders" ? "#315d58" : "#fff", color: view === "orders" ? "#fff" : "#315d58", fontWeight: 800 }}>Órdenes online</button>{isAdmin && <button onClick={() => { setView("configuration"); void loadConfiguration(); }} style={{ padding: "9px 13px", border: "1px solid #9a5b1f", background: view === "configuration" ? "#9a5b1f" : "#fff", color: view === "configuration" ? "#fff" : "#9a5b1f", fontWeight: 800 }}>Configuración</button>}</div></div>
     </section>
     {error && <div style={{ padding: 12, background: "#fff1f2", color: "#9f1239", border: "1px solid #fecdd3" }}>{error}</div>}
     {notice && <div style={{ padding: 12, background: "#ecfdf5", color: "#166534", border: "1px solid #bbf7d0" }}>{notice}</div>}
@@ -228,6 +249,8 @@ export default function OnlineShippingAdmin({ isAdmin, products }: { isAdmin: bo
     </div>
     <section style={card}><div style={{ display: "flex", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}><div><h3 style={{ margin: 0 }}>Reservas temporales B2</h3><p style={{ margin: "4px 0 0", color: "#64748b", fontSize: 12 }}>Solo inventario reservado; no crea órdenes, pagos ni ventas.</p></div><div style={{ display: "flex", gap: 8 }}><button onClick={() => void loadReservations()}>Actualizar reservas</button>{isAdmin && <button onClick={() => void releaseExpiredReservations()}>Liberar vencidas</button>}</div></div><div style={{ overflowX: "auto", marginTop: 12 }}><table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}><thead><tr style={{ textAlign: "left", borderBottom: "1px solid #d7e0e7" }}><th style={{ padding: 8 }}>Reserva</th><th style={{ padding: 8 }}>Sucursal</th><th style={{ padding: 8 }}>Estado</th><th style={{ padding: 8 }}>Artículos</th><th style={{ padding: 8 }}>Vence</th></tr></thead><tbody>{reservations.map((reservation) => <tr key={reservation.reservationId} style={{ borderBottom: "1px solid #eef2f4" }}><td style={{ padding: 8 }}><code>{reservation.reservationId.slice(0, 8)}</code><div style={{ color: "#64748b", fontSize: 11 }}>{reservation.ownerType} · solicitud {reservation.requestId.slice(0, 8)}</div></td><td style={{ padding: 8 }}>{reservation.branchName}</td><td style={{ padding: 8, color: reservation.status === "active" ? "#166534" : "#64748b", fontWeight: 700 }}>{reservation.status}</td><td style={{ padding: 8 }}>{reservation.lineCount} líneas · {reservation.quantity} unidades</td><td style={{ padding: 8 }}>{new Date(reservation.expiresAt).toLocaleString("es-MX")}</td></tr>)}</tbody></table>{reservations.length === 0 && <p style={{ color: "#64748b" }}>No hay reservas temporales.</p>}</div></section>
     </>}
+    {view === "reservations" && <section style={card}><h3 style={{ marginTop: 0 }}>Reservas temporales B2</h3><button onClick={() => void loadReservations()}>Actualizar</button><div style={{ overflowX: "auto", marginTop: 12 }}><table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}><thead><tr style={{ textAlign: "left" }}><th>Reserva</th><th>Sucursal</th><th>Estado</th><th>Vence</th></tr></thead><tbody>{reservations.map((reservation) => <tr key={reservation.reservationId}><td>{reservation.reservationId.slice(0, 8)}</td><td>{reservation.branchName}</td><td>{reservation.status}</td><td>{new Date(reservation.expiresAt).toLocaleString("es-MX")}</td></tr>)}</tbody></table>{reservations.length === 0 && <p style={{ color: "#64748b" }}>No hay reservas temporales.</p>}</div></section>}
+    {view === "orders" && <section style={card}><div style={{ display: "flex", justifyContent: "space-between" }}><div><h3 style={{ marginTop: 0 }}>Órdenes online</h3><p style={{ color: "#64748b" }}>Solo órdenes pendientes de pago. No se muestran ni ejecutan pagos, ventas o envíos en C1.</p></div><button onClick={() => void loadOrders()}>Actualizar</button></div><div style={{ display: "grid", gap: 10 }}>{orders.map((order) => <div key={order.orderId} style={{ padding: 12, border: "1px solid #d7e0e7", background: "#fff" }}><div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}><strong>{order.orderId}</strong><strong>{order.status}</strong></div><div style={{ marginTop: 5, color: "#64748b", fontSize: 12 }}>{order.fulfillmentMethod} · {order.branch.name || order.branch.nombre || "Sucursal"} · {new Date(order.createdAt).toLocaleString("es-MX")}</div><div style={{ marginTop: 6 }}>Subtotal ${order.subtotal} · Envío ${order.shipping} · Total <strong>${order.total} {order.currency}</strong></div><div style={{ marginTop: 5, color: "#64748b", fontSize: 12 }}>{order.lines.map((line) => `${line.quantity} × ${line.name}`).join(" · ")}</div></div>)}{orders.length === 0 && <p style={{ color: "#64748b" }}>No hay órdenes online.</p>}</div></section>}
     {view === "configuration" && isAdmin && configuration && <div style={{ display: "grid", gap: 14 }}><form onSubmit={savePackaging} style={card}><h3 style={{ marginTop: 0 }}>Empaque y vigencias</h3><p style={{ color: "#64748b" }}>Activa únicamente después de capturar valores reales aprobados.</p><label><input type="checkbox" checked={packageForm.active} onChange={(e) => setPackageForm({ ...packageForm, active: e.target.checked })} /> Configuración activa</label><div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))", gap: 8, marginTop: 12 }}>{([['packagingWeightGrams','Peso empaque (g)'],['paddingLengthMm','Margen largo (mm)'],['paddingWidthMm','Margen ancho (mm)'],['paddingHeightMm','Margen alto (mm)'],['maximumWeightGrams','Peso máximo (g)'],['maximumLengthMm','Largo máximo (mm)'],['maximumWidthMm','Ancho máximo (mm)'],['maximumHeightMm','Alto máximo (mm)'],['costWeight','Peso costo'],['speedWeight','Peso velocidad'],['requestLifetimeHours','Vigencia solicitud (h)'],['quoteLifetimeHours','Vigencia opción (h)']] as const).map(([key,label]) => <label key={key} style={{ fontSize: 12 }}>{label}<input type="number" step={key.includes('Weight') ? '0.01' : '1'} value={packageForm[key]} onChange={(e) => setPackageForm({ ...packageForm, [key]: e.target.value })} style={input} /></label>)}</div><button style={{ marginTop: 12, padding: 10, background: "#9a5b1f", color: "#fff", border: 0, fontWeight: 900 }}>Guardar configuración</button></form><section style={{ ...card, display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 320px), 1fr))", gap: 18 }}><div><h3>Medidas por producto</h3><select value={productForm.productId} onChange={(e) => selectProduct(e.target.value)} style={input}><option value="">Seleccionar producto</option>{products.map((product) => <option key={product.producto_id} value={product.producto_id}>{product.sku} · {product.nombre}</option>)}</select><MeasurementFields value={productForm} onChange={setProductForm} /><button type="button" onClick={() => void saveMeasurements("product")} disabled={!productForm.productId} style={{ marginTop: 10 }}>Guardar producto</button></div><div><h3>Fallback por categoría</h3><select value={categoryForm.category} onChange={(e) => selectCategory(e.target.value)} style={input}><option value="">Seleccionar categoría</option>{configuration.categoryFallbacks.map((category: any) => <option key={category.categoria} value={category.categoria}>{category.categoria}</option>)}</select><MeasurementFields value={categoryForm} onChange={setCategoryForm} /><button type="button" onClick={() => void saveMeasurements("category")} disabled={!categoryForm.category} style={{ marginTop: 10 }}>Guardar categoría</button></div></section><section style={card}><h3>Transportistas controlados</h3><div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>{configuration.carriers.map((carrier: any) => <button type="button" key={carrier.codigo} onClick={() => void toggleCarrier(carrier)} style={{ padding: 8, border: "1px solid #d7e0e7", background: carrier.activo ? "#ecfdf5" : "#f8fafc", color: carrier.activo ? "#166534" : "#64748b" }}>{carrier.nombre} · {carrier.activo ? "Activo" : "Inactivo"}</button>)}</div></section></div>}
   </div>;
 }

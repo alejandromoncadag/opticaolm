@@ -123,7 +123,7 @@ def verify_phase1fa(cur, *, require_conservative: bool = False) -> list[str]:
         WHERE table_schema = 'core'
           AND table_name = ANY(%s)
         """,
-        (["online_ordenes", "online_pagos"],),
+        (["online_pagos"],),
     )
     if int(cur.fetchone()[0]) != 0:
         raise VerificationError("Out-of-scope Phase 1F-B/C objects were found")
@@ -134,7 +134,7 @@ def verify_phase1fa(cur, *, require_conservative: bool = False) -> list[str]:
         "guest/customer active-cart and favorite uniqueness",
         "optional positive per-line quantity limit",
         "no cascading foreign-key actions",
-        "no order or payment objects; reservation objects belong to the separately gated B2 phase",
+        "no payment objects; reservation and pending-order objects belong to separately gated later phases",
     ]
 
 
