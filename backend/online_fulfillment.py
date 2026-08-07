@@ -50,6 +50,14 @@ RESERVATION_STATUS_TO_API = {
 ORDER_STATUS_TO_API = {
     "pendiente_pago": "pending_payment",
 }
+PAYMENT_STATUS_TO_API = {
+    "pendiente": "pending",
+    "checkout_creado": "checkout_created",
+    "fallido": "failed",
+    "cancelado": "canceled",
+    "expirado": "expired",
+    "pagado": "paid",
+}
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
@@ -93,6 +101,7 @@ class FulfillmentConfig:
     enabled: bool
     reservations_enabled: bool = False
     orders_enabled: bool = False
+    payment_sessions_enabled: bool = False
 
     @classmethod
     def from_env(cls, db_conninfo: str) -> "FulfillmentConfig":
@@ -102,6 +111,7 @@ class FulfillmentConfig:
             enabled=_env_bool("PHASE_1FB1_ENABLED", False),
             reservations_enabled=_env_bool("PHASE_1FB2_ENABLED", False),
             orders_enabled=_env_bool("PHASE_1FC1_ENABLED", False),
+            payment_sessions_enabled=_env_bool("PHASE_1FC2A_ENABLED", False),
         )
 
 
@@ -1542,8 +1552,208 @@ class FulfillmentRepository:
             conn.commit()
             return result
 
+    def create_payment_session(self, owner: CommerceOwner, request_id: str, key: str) -> dict[str, Any]:
+        return PaymentSessionRepositoryMixin.create_payment_session(self, owner, request_id, key)
 
-class FulfillmentAdminRepository:
+    def get_payment_session(self, owner: CommerceOwner, request_id: str) -> dict[str, Any]:
+        return PaymentSessionRepositoryMixin.get_payment_session(self, owner, request_id)
+
+    @staticmethod
+    def _payment_session_query() -> str:
+        return PaymentSessionRepositoryMixin._payment_session_query()
+
+    @staticmethod
+    def _payment_payload(cur, session: dict[str, Any]) -> dict[str, Any]:
+        return PaymentSessionRepositoryMixin._payment_payload(cur, session)
+
+
+class PaymentSessionRepositoryMixin:
+    """Provider-neutral payment-session persistence; it never contacts a provider."""
+
+    @staticmethod
+    def _payment_payload(cur, session: dict[str, Any]) -> dict[str, Any]:
+        cur.execute(
+            """
+            SELECT intento_id, numero_intento, estado, proveedor_intento_ref,
+                   codigo_error, mensaje_error, created_at, updated_at
+            FROM core.online_pago_intentos
+            WHERE sesion_id = %s
+            ORDER BY numero_intento
+            """,
+            (session["sesion_id"],),
+        )
+        attempts = [
+            {
+                "attemptId": str(row["intento_id"]),
+                "number": int(row["numero_intento"]),
+                "status": PAYMENT_STATUS_TO_API[row["estado"]],
+                "providerAttemptRef": row["proveedor_intento_ref"],
+                "errorCode": row["codigo_error"],
+                "errorMessage": row["mensaje_error"],
+                "createdAt": row["created_at"],
+                "updatedAt": row["updated_at"],
+            }
+            for row in cur.fetchall()
+        ]
+        return _safe(
+            {
+                "schemaVersion": FULFILLMENT_SCHEMA_VERSION,
+                "paymentSessionId": str(session["sesion_public_id"]),
+                "orderId": str(session["orden_public_id"]),
+                "requestId": str(session["solicitud_public_id"]),
+                "provider": session["proveedor"],
+                "status": PAYMENT_STATUS_TO_API[session["estado"]],
+                "amount": f"{Decimal(session['monto']):.2f}",
+                "currency": str(session["moneda"]).strip(),
+                "providerSessionRef": session["proveedor_sesion_ref"],
+                "checkoutUrl": session["checkout_url"],
+                "expiresAt": session["expira_at"],
+                "createdAt": session["created_at"],
+                "updatedAt": session["updated_at"],
+                "attempts": attempts,
+                "paymentCreated": False,
+                "chargeCreated": False,
+                "orderMarkedPaid": False,
+            }
+        )
+
+    @staticmethod
+    def _payment_session_query() -> str:
+        return """
+            SELECT payment.*, order_row.orden_public_id,
+                   request.solicitud_public_id
+            FROM core.online_pago_sesiones payment
+            JOIN core.online_ordenes order_row
+              ON order_row.orden_id = payment.orden_id
+            JOIN core.online_solicitudes_cotizacion_envio request
+              ON request.solicitud_id = order_row.solicitud_id
+        """
+
+    def create_payment_session(self, owner: CommerceOwner, request_id: str, key: str) -> dict[str, Any]:
+        with self._connection() as conn:
+            with conn.cursor() as cur:
+                idempotency_id, cached = self._idempotency_begin(
+                    cur, owner, "fulfillment_payment_session_create", key, {"requestId": request_id}
+                )
+                if cached is not None:
+                    conn.commit()
+                    return cached
+                cur.execute(
+                    """
+                    SELECT order_row.*, request.solicitud_public_id
+                    FROM core.online_ordenes order_row
+                    JOIN core.online_solicitudes_cotizacion_envio request
+                      ON request.solicitud_id = order_row.solicitud_id
+                    WHERE request.solicitud_public_id = %s
+                      AND order_row.propietario_tipo = %s
+                      AND order_row.propietario_ref_hash = %s
+                      AND order_row.estado = 'pendiente_pago'
+                    FOR UPDATE OF order_row
+                    """,
+                    (request_id, owner.db_type, owner.owner_hash),
+                )
+                order = cur.fetchone()
+                if not order:
+                    raise FulfillmentRuleError(404, "PENDING_ORDER_NOT_FOUND", "A pending-payment order was not found.")
+                cur.execute(
+                    self._payment_session_query()
+                    + " WHERE payment.orden_id = %s AND payment.proveedor = 'conekta' FOR UPDATE",
+                    (order["orden_id"],),
+                )
+                session = cur.fetchone()
+                if not session:
+                    cur.execute(
+                        """
+                        INSERT INTO core.online_pago_sesiones
+                            (orden_id, proveedor, estado, monto, moneda, expira_at)
+                        VALUES (%s, 'conekta', 'pendiente', %s, %s, NOW() + INTERVAL '30 minutes')
+                        RETURNING sesion_id
+                        """,
+                        (order["orden_id"], order["total"], order["moneda"]),
+                    )
+                    session_id = int(cur.fetchone()["sesion_id"])
+                    cur.execute(
+                        """
+                        INSERT INTO core.online_pago_intentos (sesion_id, numero_intento, estado)
+                        VALUES (%s, 1, 'pendiente')
+                        """,
+                        (session_id,),
+                    )
+                    cur.execute(
+                        """
+                        INSERT INTO core.online_pago_eventos (sesion_id, evento_tipo, actor_tipo, metadata)
+                        VALUES (%s, 'payment_session_created', %s, %s::jsonb)
+                        """,
+                        (session_id, owner.db_type, _canonical({"provider": "conekta", "simulation": True})),
+                    )
+                    cur.execute(self._payment_session_query() + " WHERE payment.sesion_id = %s", (session_id,))
+                    session = cur.fetchone()
+                result = self._payment_payload(cur, session)
+                self._idempotency_finish(cur, idempotency_id, result, int(session["sesion_id"]))
+            conn.commit()
+            return result
+
+    def list_payment_sessions(self, user: dict[str, Any], status: str | None = None) -> dict[str, Any]:
+        with self._connection() as conn:
+            with conn.cursor() as cur:
+                staff = self._staff(cur, user)
+                query = self._payment_session_query()
+                params: tuple[Any, ...] = ()
+                if status:
+                    query += " WHERE payment.estado = %s"
+                    params = (status,)
+                query += " ORDER BY payment.created_at DESC LIMIT 500"
+                cur.execute(query, params)
+                sessions = [self._payment_payload(cur, row) for row in cur.fetchall()]
+            conn.commit()
+        return _safe({"schemaVersion": FULFILLMENT_SCHEMA_VERSION, "paymentSessions": sessions, "viewer": staff})
+
+    def list_payment_sessions_for_order(self, user: dict[str, Any], order_id: str) -> dict[str, Any]:
+        with self._connection() as conn:
+            with conn.cursor() as cur:
+                staff = self._staff(cur, user)
+                cur.execute(
+                    self._payment_session_query() + " WHERE order_row.orden_public_id = %s ORDER BY payment.created_at DESC",
+                    (order_id,),
+                )
+                sessions = [self._payment_payload(cur, row) for row in cur.fetchall()]
+            conn.commit()
+        return _safe({"schemaVersion": FULFILLMENT_SCHEMA_VERSION, "paymentSessions": sessions, "viewer": staff})
+
+    def get_payment_session_admin(self, user: dict[str, Any], session_id: str) -> dict[str, Any]:
+        with self._connection() as conn:
+            with conn.cursor() as cur:
+                staff = self._staff(cur, user)
+                cur.execute(self._payment_session_query() + " WHERE payment.sesion_public_id = %s", (session_id,))
+                session = cur.fetchone()
+                if not session:
+                    raise FulfillmentRuleError(404, "PAYMENT_SESSION_NOT_FOUND", "Payment session was not found.")
+                result = self._payment_payload(cur, session)
+            conn.commit()
+        return _safe({**result, "viewer": staff})
+
+    def get_payment_session(self, owner: CommerceOwner, request_id: str) -> dict[str, Any]:
+        with self._connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    self._payment_session_query()
+                    + """
+                    WHERE request.solicitud_public_id = %s
+                      AND order_row.propietario_tipo = %s
+                      AND order_row.propietario_ref_hash = %s
+                    ORDER BY payment.created_at DESC LIMIT 1
+                    """,
+                    (request_id, owner.db_type, owner.owner_hash),
+                )
+                session = cur.fetchone()
+                if not session:
+                    raise FulfillmentRuleError(404, "PAYMENT_SESSION_NOT_FOUND", "No payment session exists for this order.")
+                result = self._payment_payload(cur, session)
+            conn.commit()
+            return result
+
+
+class FulfillmentAdminRepository(PaymentSessionRepositoryMixin):
     def __init__(self, config: FulfillmentConfig, connect: Callable[..., Any] = psycopg.connect):
         self.config = config
         self._connect = connect
@@ -1872,6 +2082,11 @@ def create_storefront_fulfillment_router(db_conninfo: str, config: FulfillmentCo
         if not config.orders_enabled:
             raise HTTPException(status_code=503, detail={"code": "PHASE_1FC1_DISABLED", "message": "Online pending-payment orders are disabled.", "details": {}})
 
+    def payment_access(credentials: HTTPAuthorizationCredentials | None = Depends(bearer)):
+        order_access(credentials)
+        if not config.payment_sessions_enabled:
+            raise HTTPException(status_code=503, detail={"code": "PHASE_1FC2A_DISABLED", "message": "Online payment sessions are disabled.", "details": {}})
+
     def owner(owner_type: str = Header(alias="X-OLM-Owner-Type"), owner_hash: str = Header(alias="X-OLM-Owner-Hash")) -> CommerceOwner:
         normalized_type, normalized_hash = owner_type.strip().lower(), owner_hash.strip().lower()
         if normalized_type not in {"guest", "customer"} or not _valid_owner_hash(normalized_hash):
@@ -1882,7 +2097,7 @@ def create_storefront_fulfillment_router(db_conninfo: str, config: FulfillmentCo
 
     @router.get("/health", dependencies=dependencies)
     def health():
-        return {"schemaVersion": FULFILLMENT_SCHEMA_VERSION, "status": "ok", "reservationsEnabled": config.reservations_enabled, "ordersEnabled": config.orders_enabled}
+        return {"schemaVersion": FULFILLMENT_SCHEMA_VERSION, "status": "ok", "reservationsEnabled": config.reservations_enabled, "ordersEnabled": config.orders_enabled, "paymentSessionsEnabled": config.payment_sessions_enabled}
 
     @router.post("/requests", dependencies=dependencies)
     def create(data: CreateFulfillmentRequest, commerce_owner: CommerceOwner = Depends(owner), idempotency_key: str = Header(alias="Idempotency-Key")):
@@ -1928,6 +2143,14 @@ def create_storefront_fulfillment_router(db_conninfo: str, config: FulfillmentCo
     def order_detail(request_id: str, commerce_owner: CommerceOwner = Depends(owner)):
         return _run(lambda: repository.get_order(commerce_owner, request_id))
 
+    @router.post("/requests/{request_id}/payment-session", dependencies=[Depends(payment_access)])
+    def payment_session(request_id: str, commerce_owner: CommerceOwner = Depends(owner), idempotency_key: str = Header(alias="Idempotency-Key")):
+        return _run(lambda: repository.create_payment_session(commerce_owner, request_id, idempotency_key))
+
+    @router.get("/requests/{request_id}/payment-session", dependencies=[Depends(payment_access)])
+    def payment_session_detail(request_id: str, commerce_owner: CommerceOwner = Depends(owner)):
+        return _run(lambda: repository.get_payment_session(commerce_owner, request_id))
+
     return router
 
 
@@ -1949,6 +2172,11 @@ def create_admin_fulfillment_router(db_conninfo: str, current_user_dependency: C
         reservations_enabled()
         if not config.orders_enabled:
             raise HTTPException(status_code=503, detail={"code": "PHASE_1FC1_DISABLED", "message": "Online pending-payment orders are disabled.", "details": {}})
+
+    def payment_sessions_enabled():
+        orders_enabled()
+        if not config.payment_sessions_enabled:
+            raise HTTPException(status_code=503, detail={"code": "PHASE_1FC2A_DISABLED", "message": "Online payment sessions are disabled.", "details": {}})
 
     dependencies = [Depends(enabled)]
 
@@ -1983,6 +2211,18 @@ def create_admin_fulfillment_router(db_conninfo: str, current_user_dependency: C
     @router.get("/orders/{order_id}", dependencies=[Depends(orders_enabled)])
     def order_detail(order_id: str, user=Depends(current_user_dependency)):
         return _run(lambda: repository.get_order(user, order_id))
+
+    @router.get("/payment-sessions", dependencies=[Depends(payment_sessions_enabled)])
+    def payment_sessions(status: str | None = None, user=Depends(current_user_dependency)):
+        return _run(lambda: repository.list_payment_sessions(user, status))
+
+    @router.get("/orders/{order_id}/payment-sessions", dependencies=[Depends(payment_sessions_enabled)])
+    def order_payment_sessions(order_id: str, user=Depends(current_user_dependency)):
+        return _run(lambda: repository.list_payment_sessions_for_order(user, order_id))
+
+    @router.get("/payment-sessions/{session_id}", dependencies=[Depends(payment_sessions_enabled)])
+    def payment_session_detail(session_id: str, user=Depends(current_user_dependency)):
+        return _run(lambda: repository.get_payment_session_admin(user, session_id))
 
     @router.put("/products/{product_id}", dependencies=dependencies)
     def product(product_id: int, data: ProductShippingInput, user=Depends(current_user_dependency)):
