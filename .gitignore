@@ -42,6 +42,8 @@ backups/
 !backend/scripts/migrations/20260802_phase1fa_authoritative_commerce_rollback.sql
 !backend/scripts/migrations/20260802_phase1fb1_manual_fulfillment.sql
 !backend/scripts/migrations/20260802_phase1fb1_manual_fulfillment_rollback.sql
+!backend/scripts/migrations/20260803_phase1fb2_online_reservations.sql
+!backend/scripts/migrations/20260803_phase1fb2_online_reservations_rollback.sql
 backend/.env
 frontend/.env
 backend/oauth_client.json
