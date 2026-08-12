@@ -23,6 +23,7 @@ import psycopg
 from psycopg.rows import dict_row
 
 from online_commerce import CommerceOwner, _valid_owner_hash
+from online_optical_drafts import release_expired_optical_reservations
 from shipping_packages import (
     PackageRuleError,
     PackagingConfiguration,
@@ -1431,17 +1432,28 @@ class FulfillmentRepository:
                     inventory = cur.fetchone()
                     if not inventory:
                         raise FulfillmentRuleError(409, "RESERVATION_INVENTORY_MISMATCH", "Reserved inventory no longer exists.")
-                    cur.execute(
-                        """
-                        SELECT COALESCE(SUM(lines.cantidad), 0)::int AS quantity
-                        FROM core.online_reserva_lineas lines
-                        JOIN core.online_reservas reservations
-                          ON reservations.reserva_id = lines.reserva_id
-                        WHERE reservations.estado = 'activa'
-                          AND lines.producto_id = %s AND lines.sucursal_id = %s
-                        """,
-                        (line["producto_id"], line["sucursal_id"]),
-                    )
+                    cur.execute("SELECT to_regclass('core.online_inventario_reservas_activas') AS relation")
+                    if cur.fetchone()["relation"] is not None:
+                        cur.execute(
+                            """
+                            SELECT COALESCE(SUM(cantidad), 0)::int AS quantity
+                            FROM core.online_inventario_reservas_activas
+                            WHERE producto_id = %s AND sucursal_id = %s
+                            """,
+                            (line["producto_id"], line["sucursal_id"]),
+                        )
+                    else:
+                        cur.execute(
+                            """
+                            SELECT COALESCE(SUM(lines.cantidad), 0)::int AS quantity
+                            FROM core.online_reserva_lineas lines
+                            JOIN core.online_reservas reservations
+                              ON reservations.reserva_id = lines.reserva_id
+                            WHERE reservations.estado = 'activa'
+                              AND lines.producto_id = %s AND lines.sucursal_id = %s
+                            """,
+                            (line["producto_id"], line["sucursal_id"]),
+                        )
                     aggregate = int(cur.fetchone()["quantity"])
                     if int(inventory["stock_reservado"]) != aggregate or aggregate < int(line["quantity"]):
                         raise FulfillmentRuleError(409, "RESERVATION_INVENTORY_MISMATCH", "Reserved inventory no longer matches the reservation lines.")
@@ -1851,9 +1863,17 @@ class FulfillmentAdminRepository(PaymentSessionRepositoryMixin):
         with self._connection() as conn:
             with conn.cursor() as cur:
                 staff = self._staff(cur, user, admin_only=True)
-                released = self._customer._release_expired_reservations(cur, limit=1000)
+                normal_released = self._customer._release_expired_reservations(cur, limit=1000)
+                optical_released = release_expired_optical_reservations(cur, limit=1000)
+                released = normal_released + optical_released
             conn.commit()
-        return _safe({"schemaVersion": FULFILLMENT_SCHEMA_VERSION, "releasedCount": released, "viewer": staff})
+        return _safe({
+            "schemaVersion": FULFILLMENT_SCHEMA_VERSION,
+            "releasedCount": released,
+            "normalReservationsReleased": normal_released,
+            "opticalDraftReservationsReleased": optical_released,
+            "viewer": staff,
+        })
 
     def list_orders(self, user: dict[str, Any], status: str | None = None) -> dict[str, Any]:
         with self._connection() as conn:

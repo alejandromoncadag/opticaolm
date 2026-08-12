@@ -34,6 +34,7 @@ from online_commerce import (
     CommerceRuleError,
     commerce_credentials_valid,
 )
+from online_product_policy import is_direct_purchase_product
 
 
 class NonCommittingConnection:
@@ -56,6 +57,34 @@ class NonCommittingConnection:
 
 
 class Phase1FACommerceTests(unittest.TestCase):
+    def test_only_stock_controlled_optical_frames_use_direct_purchase_exception(self) -> None:
+        frame = {
+            "categoria": "lentes_opticos",
+            "subcategoria": "armazon",
+            "tipo_producto": "producto_fisico",
+            "controla_stock": True,
+        }
+        self.assertTrue(is_direct_purchase_product(frame))
+
+        for blocked in (
+            {**frame, "controla_stock": False},
+            {**frame, "subcategoria": "mica"},
+            {**frame, "tipo_producto": "componente_mica"},
+            {
+                "categoria": "micas",
+                "subcategoria": "tratamiento",
+                "tipo_producto": "componente_mica",
+                "controla_stock": False,
+            },
+            {
+                "categoria": "examen_de_la_vista",
+                "subcategoria": "consulta",
+                "tipo_producto": "servicio",
+                "controla_stock": False,
+            },
+        ):
+            self.assertFalse(is_direct_purchase_product(blocked))
+
     def test_migration_is_additive_and_rollback_only_isolates(self) -> None:
         migration = MIGRATION_PATH.read_text(encoding="utf-8")
         rollback = ROLLBACK_PATH.read_text(encoding="utf-8")

@@ -9873,12 +9873,19 @@ export default function App() {
                 </thead>
                 <tbody>
                   {inventarioFiltrado.map((producto) => {
-                    const categoriaComprable = [
+                    const categoriaComprableDirecta = [
                       "lentes_de_sol",
                       "lentes_de_contacto",
                       "accesorios_y_refacciones",
                       "soluciones_y_cuidado",
-                    ].includes(producto.categoria) && producto.tipo_producto === "producto_fisico";
+                    ].includes(producto.categoria);
+                    const esArmazonOpticoComprable =
+                      producto.categoria === "lentes_opticos"
+                      && producto.subcategoria === "armazon";
+                    const categoriaComprable =
+                      producto.tipo_producto === "producto_fisico"
+                      && Boolean(producto.controla_stock)
+                      && (categoriaComprableDirecta || esArmazonOpticoComprable);
                     const disponibleEnTienda = producto.activo && Boolean(producto.publicado_online);
                     const guardando = savingInventarioId === producto.producto_id;
                     const actualizarLocal = (changes: Partial<InventarioProducto>) => {

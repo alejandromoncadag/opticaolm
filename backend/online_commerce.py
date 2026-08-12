@@ -26,17 +26,10 @@ from public_catalog import (
     UnsafeImageUrl,
     normalize_public_image_url,
 )
+from online_product_policy import is_direct_purchase_product
 
 
 COMMERCE_SCHEMA_VERSION = "1.0"
-PURCHASABLE_CATEGORIES = {
-    "lentes_de_sol",
-    "lentes_de_contacto",
-    "accesorios_y_refacciones",
-    "soluciones_y_cuidado",
-}
-
-
 def _env_bool(name: str, default: bool = False) -> bool:
     value = os.getenv(name)
     if value is None:
@@ -179,6 +172,7 @@ class CommerceRepository:
                 product.nombre,
                 product.descripcion,
                 product.categoria,
+                product.subcategoria,
                 product.tipo_producto,
                 product.precio,
                 product.moneda,
@@ -204,8 +198,7 @@ class CommerceRepository:
             product["activo"]
             and product["publicado_online"]
             and product["comprable_online"]
-            and product["tipo_producto"] == "producto_fisico"
-            and product["categoria"] in PURCHASABLE_CATEGORIES
+            and is_direct_purchase_product(product)
             and product["sku"]
             and product["slug"]
             and product["precio"] is not None
@@ -420,6 +413,7 @@ class CommerceRepository:
                 product.nombre AS current_name,
                 product.descripcion AS current_description,
                 product.categoria,
+                product.subcategoria,
                 product.tipo_producto,
                 product.precio AS current_price,
                 product.moneda,
@@ -474,6 +468,8 @@ class CommerceRepository:
                 "comprable_online": row["comprable_online"],
                 "tipo_producto": row["tipo_producto"],
                 "categoria": row["categoria"],
+                "subcategoria": row["subcategoria"],
+                "controla_stock": row["controla_stock"],
                 "sku": row["current_sku"],
                 "slug": row["current_slug"],
                 "precio": row["current_price"],

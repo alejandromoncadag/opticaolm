@@ -28,7 +28,10 @@ import psycopg
 import os
 from dotenv import load_dotenv
 from public_catalog import create_public_catalog_router
-from online_commerce import PURCHASABLE_CATEGORIES, create_online_commerce_router
+from online_commerce import create_online_commerce_router
+from online_product_policy import is_direct_purchase_product
+from optical_preview import create_optical_preview_router
+from online_optical_drafts import create_online_optical_drafts_router
 from online_fulfillment import (
     create_admin_fulfillment_router,
     create_storefront_fulfillment_router,
@@ -107,6 +110,8 @@ DB_CONNINFO = _resolve_db_conninfo()
 
 app.include_router(create_public_catalog_router(DB_CONNINFO))
 app.include_router(create_online_commerce_router(DB_CONNINFO))
+app.include_router(create_optical_preview_router(DB_CONNINFO))
+app.include_router(create_online_optical_drafts_router(DB_CONNINFO))
 app.include_router(create_storefront_fulfillment_router(DB_CONNINFO))
 
 
@@ -4947,8 +4952,8 @@ def actualizar_comercio_online_producto(
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT producto_id, sku, nombre, categoria, tipo_producto,
-                       activo, publicado_online
+                SELECT producto_id, sku, nombre, categoria, subcategoria,
+                       tipo_producto, controla_stock, activo, publicado_online
                 FROM core.catalogo_productos
                 WHERE producto_id = %s
                 FOR UPDATE
@@ -4981,12 +4986,13 @@ def actualizar_comercio_online_producto(
             )
             comercio_anterior = cur.fetchone()
 
-            categoria = str(producto[3])
-            tipo_producto = str(producto[4])
-            if data.comprable_online and (
-                categoria not in PURCHASABLE_CATEGORIES
-                or tipo_producto != "producto_fisico"
-            ):
+            product_policy = {
+                "categoria": producto[3],
+                "subcategoria": producto[4],
+                "tipo_producto": producto[5],
+                "controla_stock": producto[6],
+            }
+            if data.comprable_online and not is_direct_purchase_product(product_policy):
                 raise HTTPException(
                     status_code=422,
                     detail=(
@@ -4996,7 +5002,7 @@ def actualizar_comercio_online_producto(
                 )
 
             anteriores = {
-                "publicado_online": bool(producto[6]),
+                "publicado_online": bool(producto[8]),
                 "comprable_online": bool(comercio_anterior[0]),
                 "permite_favorito": bool(comercio_anterior[1]),
                 "cantidad_maxima_por_linea": comercio_anterior[2],
@@ -5049,15 +5055,14 @@ def actualizar_comercio_online_producto(
                 )
         conn.commit()
 
-    storefront_activo = bool(producto[5]) and bool(data.publicado_online)
+    storefront_activo = bool(producto[7]) and bool(data.publicado_online)
     return {
         "producto_id": producto_id,
         **nuevos,
         "comprable_efectivo": bool(
             storefront_activo
             and data.comprable_online
-            and categoria in PURCHASABLE_CATEGORIES
-            and tipo_producto == "producto_fisico"
+            and is_direct_purchase_product(product_policy)
         ),
         "favorito_efectivo": bool(storefront_activo and data.permite_favorito),
         "updated": True,

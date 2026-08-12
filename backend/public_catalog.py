@@ -21,18 +21,11 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel
 import psycopg
 from psycopg.rows import dict_row
+from online_product_policy import is_direct_purchase_product
 
 
 CATALOG_SCHEMA_VERSION = "1.0"
 PUBLIC_PRODUCT_TYPES = {"producto_fisico", "componente_mica", "servicio"}
-PUBLIC_PURCHASABLE_CATEGORIES = {
-    "lentes_de_sol",
-    "lentes_de_contacto",
-    "accesorios_y_refacciones",
-    "soluciones_y_cuidado",
-}
-
-
 class SellingPrice(BaseModel):
     amount: str
     currency: str
@@ -387,8 +380,7 @@ class PublicCatalogRepository:
             )
             can_purchase = bool(
                 settings["purchasable"]
-                and product_type == "producto_fisico"
-                and str(row["categoria"]) in PUBLIC_PURCHASABLE_CATEGORIES
+                and is_direct_purchase_product(row)
             )
             products.append(
                 PublicCatalogProduct(
