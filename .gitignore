@@ -46,6 +46,14 @@ backups/
 !backend/scripts/migrations/20260803_phase1fb2_online_reservations_rollback.sql
 !backend/scripts/migrations/20260811_phase1gc_optical_order_drafts.sql
 !backend/scripts/migrations/20260811_phase1gc_optical_order_drafts_rollback.sql
+!backend/scripts/migrations/20260812_phase1gd_optical_operations.sql
+!backend/scripts/migrations/20260812_phase1gd_optical_operations_rollback.sql
+!backend/scripts/migrations/20260812_phase1ge_patient_identity.sql
+!backend/scripts/migrations/20260812_phase1ge_patient_identity_rollback.sql
+!backend/scripts/migrations/20260812_phase1gf_physical_optical_queue.sql
+!backend/scripts/migrations/20260812_phase1gf_physical_optical_queue_rollback.sql
+!backend/scripts/migrations/20260812_phase1gg_optical_pricing_admin.sql
+!backend/scripts/migrations/20260812_phase1gg_optical_pricing_admin_rollback.sql
 backend/.env
 frontend/.env
 backend/oauth_client.json

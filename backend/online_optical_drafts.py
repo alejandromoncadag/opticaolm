@@ -30,6 +30,10 @@ from optical_preview import (
     OpticalPreviewResponse,
 )
 from public_catalog import PublicCatalogConfig, catalog_credentials_valid
+from optical_operations import (
+    cancel_job_for_online_draft,
+    create_job_for_online_draft,
+)
 
 
 OPTICAL_DRAFT_SCHEMA_VERSION = "1.0"
@@ -202,6 +206,9 @@ def release_expired_optical_reservations(cur, *, limit: int = 100) -> int:
             cur, draft_id=int(reservation["borrador_id"]), reservation_id=reservation_id,
             event_type="reservation_expired", actor_type="sistema", owner_hash=None,
             metadata={"releasedFrameQuantity": 1},
+        )
+        cancel_job_for_online_draft(
+            cur, int(reservation["borrador_id"]), "cancelado_por_expiracion"
         )
         released += 1
     return released
@@ -447,6 +454,7 @@ class OpticalDraftRepository:
                 _event(cur, draft_id=draft_id, reservation_id=reservation_id,
                        event_type="reservation_created", actor_type=owner.db_type,
                        owner_hash=owner.owner_hash, metadata={"reservedFrameQuantity": 1})
+                create_job_for_online_draft(cur, draft_id)
                 result = self._draft_payload(cur, draft_id)
                 self._idempotency_finish(cur, idem_id, result, draft_id)
             conn.commit()
@@ -541,6 +549,9 @@ class OpticalDraftRepository:
                     _event(cur, draft_id=int(row["borrador_id"]), reservation_id=int(row["reserva_id"]),
                            event_type="draft_cancelled", actor_type=owner.db_type,
                            owner_hash=owner.owner_hash, metadata={"releasedFrameQuantity": 1 if row["reservation_state"] == "activa" else 0})
+                    cancel_job_for_online_draft(
+                        cur, int(row["borrador_id"]), "cancelado_por_borrador"
+                    )
                 result = self._draft_payload(cur, int(row["borrador_id"]))
                 self._idempotency_finish(cur, idem_id, result, int(row["borrador_id"]))
             conn.commit()

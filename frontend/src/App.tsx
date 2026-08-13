@@ -6,6 +6,8 @@ import "react-datepicker/dist/react-datepicker.css";
 import "./datepicker.css";
 import logoOlm from "./assets/optica.png";
 import OnlineShippingAdmin from "./OnlineShippingAdmin";
+import OpticalOperationsAdmin from "./OpticalOperationsAdmin";
+import OpticalCatalogPricingAdmin from "./OpticalCatalogPricingAdmin";
 
 
 
@@ -2741,7 +2743,7 @@ export default function App() {
   const [savingInventarioId, setSavingInventarioId] = useState<number | null>(null);
   const [inventarioBusqueda, setInventarioBusqueda] = useState("");
   const [inventarioCategoriaFiltro, setInventarioCategoriaFiltro] = useState("todos");
-  const [inventarioVista, setInventarioVista] = useState<"existencias" | "movimientos" | "analisis" | "costos" | "comercio">("existencias");
+  const [inventarioVista, setInventarioVista] = useState<"existencias" | "movimientos" | "analisis" | "costos" | "precios_opticos" | "comercio" | "bajo_pedido">("existencias");
   const [inventarioMetricaAyuda, setInventarioMetricaAyuda] = useState<"valor" | "ganancia" | null>(null);
   const [inventarioImagenAmpliada, setInventarioImagenAmpliada] = useState<InventarioProducto | null>(null);
   const [inventarioMovimientos, setInventarioMovimientos] = useState<InventarioMovimiento[]>([]);
@@ -4396,7 +4398,7 @@ export default function App() {
       me
       && (
         !["admin", "contador"].includes(me.rol)
-        || (inventarioVista === "comercio" && me.rol !== "admin")
+        || (["comercio", "bajo_pedido"].includes(inventarioVista) && me.rol !== "admin")
       )
     ) setInventarioVista("existencias");
   }, [me?.rol, inventarioVista]);
@@ -9768,6 +9770,23 @@ export default function App() {
                   Costos y rentabilidad
                 </button>
               )}
+              {(isAdmin || isContador) && (
+                <button
+                  type="button"
+                  onClick={() => setInventarioVista("precios_opticos")}
+                  aria-pressed={inventarioVista === "precios_opticos"}
+                  style={{
+                    padding: "9px 14px",
+                    border: inventarioVista === "precios_opticos" ? "1px solid #0f766e" : "1px solid #b9cce0",
+                    background: inventarioVista === "precios_opticos" ? "#0f766e" : "#fff",
+                    color: inventarioVista === "precios_opticos" ? "#fff" : "#40566c",
+                    fontWeight: 900,
+                    cursor: "pointer",
+                  }}
+                >
+                  Precios ópticos
+                </button>
+              )}
               {isAdmin && (
                 <button
                   type="button"
@@ -9783,6 +9802,23 @@ export default function App() {
                   }}
                 >
                   Comercio en línea
+                </button>
+              )}
+              {isAdmin && (
+                <button
+                  type="button"
+                  onClick={() => setInventarioVista("bajo_pedido")}
+                  aria-pressed={inventarioVista === "bajo_pedido"}
+                  style={{
+                    padding: "9px 14px",
+                    border: inventarioVista === "bajo_pedido" ? "1px solid #0f766e" : "1px solid #b9cce0",
+                    background: inventarioVista === "bajo_pedido" ? "#0f766e" : "#fff",
+                    color: inventarioVista === "bajo_pedido" ? "#fff" : "#40566c",
+                    fontWeight: 900,
+                    cursor: "pointer",
+                  }}
+                >
+                  Bajo pedido
                 </button>
               )}
             </div>
@@ -9974,6 +10010,15 @@ export default function App() {
                   })}
                 </tbody>
               </table>
+            </section>
+          )}
+
+          {isAdmin && inventarioVista === "bajo_pedido" && (
+            <section style={{ ...softCard, padding: 15, borderColor: "#9fd3cd" }}>
+              <OpticalOperationsAdmin
+                branches={sucursales}
+                activeBranchId={sucursalActivaId}
+              />
             </section>
           )}
 
@@ -10470,6 +10515,10 @@ export default function App() {
                 </table>
               </section>
             </div>
+          )}
+
+          {(isAdmin || isContador) && inventarioVista === "precios_opticos" && (
+            <OpticalCatalogPricingAdmin apiFetch={apiFetch} canEdit={isAdmin} />
           )}
 
           {(isAdmin || isContador) && inventarioVista === "costos" && (

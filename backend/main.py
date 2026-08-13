@@ -32,6 +32,16 @@ from online_commerce import create_online_commerce_router
 from online_product_policy import is_direct_purchase_product
 from optical_preview import create_optical_preview_router
 from online_optical_drafts import create_online_optical_drafts_router
+from optical_operations import (
+    create_optical_operations_router,
+    sync_physical_sale_jobs,
+    validate_physical_structural_edit,
+)
+from optical_catalog_admin import create_optical_catalog_admin_router
+from online_patient_identity import (
+    create_online_identity_router,
+    create_prescription_access_admin_router,
+)
 from online_fulfillment import (
     create_admin_fulfillment_router,
     create_storefront_fulfillment_router,
@@ -112,6 +122,7 @@ app.include_router(create_public_catalog_router(DB_CONNINFO))
 app.include_router(create_online_commerce_router(DB_CONNINFO))
 app.include_router(create_optical_preview_router(DB_CONNINFO))
 app.include_router(create_online_optical_drafts_router(DB_CONNINFO))
+app.include_router(create_online_identity_router(DB_CONNINFO))
 app.include_router(create_storefront_fulfillment_router(DB_CONNINFO))
 
 
@@ -3323,6 +3334,9 @@ def require_roles(user, allowed: Iterable[str]):
 
 
 app.include_router(create_admin_fulfillment_router(DB_CONNINFO, get_current_user))
+app.include_router(create_optical_operations_router(DB_CONNINFO, get_current_user))
+app.include_router(create_prescription_access_admin_router(DB_CONNINFO, get_current_user))
+app.include_router(create_optical_catalog_admin_router(DB_CONNINFO, get_current_user))
 
 
 PACIENTE_ESTRELLA_CONSULTAS_6M = 15
@@ -4755,6 +4769,13 @@ def _money(value: Any) -> Decimal:
         raise HTTPException(status_code=400, detail="Importe monetario inválido.")
 
 
+def _phase1b_effective_catalog_cost(
+    product: dict[str, Any], variant: dict[str, Any] | None = None,
+) -> Decimal | None:
+    """Return the selected record's own cost; NULL variants stay unknown."""
+    return variant["costo_unitario"] if variant else product["costo_unitario"]
+
+
 def _phase1b_patient_row(cur, paciente_id: int, *, lock: bool = False):
     cur.execute(
         f"""
@@ -5511,7 +5532,7 @@ def _phase1b_prepare_lines(
         if quantity <= 0:
             raise HTTPException(status_code=400, detail="La cantidad debe ser mayor a cero.")
         price = effective_price if effective_price is not None else product["precio"]
-        cost = variant["costo_unitario"] if variant and variant["costo_unitario"] is not None else product["costo_unitario"]
+        cost = _phase1b_effective_catalog_cost(product, variant)
         lines.append({
             "linea_ref": clean_ref, "tipo_linea": line_type,
             "producto_id": product["producto_id"], "variante_id": variant["variante_id"] if variant else None,
@@ -6401,6 +6422,8 @@ def _phase1b_save_sale(
                         config["estado_produccion"] = old_status_by_ref.get(
                             config["configuracion_ref"], config["estado_produccion"]
                         )
+                if is_edit:
+                    validate_physical_structural_edit(cur, int(venta_id), configs)
                 calculation = _phase1b_calculate_discounts(lines, discounts_normalized)
                 subtotal = _money(calculation["subtotal"])
                 discount_total = _money(calculation["descuento_total"])
@@ -6578,6 +6601,10 @@ def _phase1b_save_sale(
                         deposit_method, sale_state, payment_state, order_status,
                         data.notas, venta_id, branch_id,
                     ),
+                )
+                sync_physical_sale_jobs(
+                    cur, int(venta_id), username=user["username"],
+                    reason="edicion_venta" if is_edit else "creacion_venta",
                 )
                 result = _phase1b_sale_detail(cur, venta_id, user["rol"])
             conn.commit()
@@ -7004,6 +7031,10 @@ def _phase1b_cancel_sale_scope(
                             user["username"],
                         ),
                     )
+                sync_physical_sale_jobs(
+                    cur, venta_id, username=user["username"],
+                    reason="cancelacion_venta",
+                )
                 result = _phase1b_sale_detail(cur, venta_id, user["rol"])
                 result["cancelacion_id"] = cancellation_id
             conn.commit()
@@ -10035,6 +10066,10 @@ def actualizar_seguimiento_venta(
                     venta_id,
                     data.sucursal_id,
                 ),
+            )
+            sync_physical_sale_jobs(
+                cur, venta_id, username=user["username"],
+                reason="seguimiento_pago",
             )
         conn.commit()
 
