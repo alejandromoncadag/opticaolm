@@ -23,6 +23,7 @@ import psycopg
 from psycopg.rows import dict_row
 
 from online_commerce import CommerceOwner, _valid_owner_hash
+from online_checkout_identity import CheckoutIdentityRepository, verify_authenticated_identity_assertion
 from online_optical_drafts import release_expired_optical_reservations
 from shipping_packages import (
     PackageRuleError,
@@ -226,6 +227,7 @@ class FulfillmentRepository:
         self.config = config
         self._connect = connect
         self._calculator = SingleCombinedPackageCalculator()
+        self._checkout_identity = CheckoutIdentityRepository(connect, config)
 
     def _connection(self):
         return self._connect(self.config.db_conninfo, row_factory=dict_row)
@@ -1307,6 +1309,7 @@ class FulfillmentRepository:
                 "shipping": f"{Decimal(order['envio']):.2f}",
                 "total": f"{Decimal(order['total']):.2f}",
                 "currency": str(order["moneda"]).strip(),
+                "identityStatus": order.get("identidad_estado", "pendiente"),
                 "createdAt": order["created_at"],
                 "updatedAt": order["updated_at"],
                 "paymentCreated": False,
@@ -1329,7 +1332,7 @@ class FulfillmentRepository:
             WHERE order_row.orden_id = %s
         """
 
-    def create_order(self, owner: CommerceOwner, public_id: str, key: str) -> dict[str, Any]:
+    def create_order(self, owner: CommerceOwner, public_id: str, key: str, identity_assertion: str = "") -> dict[str, Any]:
         with self._connection() as conn:
             with conn.cursor() as cur:
                 idempotency_id, cached = self._idempotency_begin(
@@ -1515,6 +1518,18 @@ class FulfillmentRepository:
                     ),
                 )
                 order_id = int(cur.fetchone()["orden_id"])
+                contact_snapshot = dict(request["contacto_snapshot"])
+                authenticated_email_verified = verify_authenticated_identity_assertion(
+                    owner, str(contact_snapshot.get("email") or ""), identity_assertion, self.config.bearer_token
+                )
+                self._checkout_identity.resolve_order_identity(
+                    cur,
+                    order_id=order_id,
+                    owner=owner,
+                    contact=contact_snapshot,
+                    branch_id=int(reservation["sucursal_id"]),
+                    authenticated_email_verified=authenticated_email_verified,
+                )
                 for item in cart_snapshot["items"]:
                     unit_price = Decimal(item["unitPrice"])
                     quantity = int(item["quantity"])
@@ -2076,6 +2091,8 @@ def _run(action: Callable[[], dict[str, Any]]) -> dict[str, Any]:
         return action()
     except FulfillmentRuleError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail)
+    except CheckoutIdentityError as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.detail)
     except psycopg.Error:
         raise HTTPException(status_code=503, detail={"code": "FULFILLMENT_UNAVAILABLE", "message": "Fulfillment is temporarily unavailable.", "details": {}})
 
@@ -2156,8 +2173,8 @@ def create_storefront_fulfillment_router(db_conninfo: str, config: FulfillmentCo
         return _run(lambda: repository.release_reservation(commerce_owner, request_id, idempotency_key))
 
     @router.post("/requests/{request_id}/order", dependencies=[Depends(order_access)])
-    def order(request_id: str, commerce_owner: CommerceOwner = Depends(owner), idempotency_key: str = Header(alias="Idempotency-Key")):
-        return _run(lambda: repository.create_order(commerce_owner, request_id, idempotency_key))
+    def order(request_id: str, commerce_owner: CommerceOwner = Depends(owner), idempotency_key: str = Header(alias="Idempotency-Key"), identity_assertion: str = Header(default="", alias="X-OLM-Identity-Assertion")):
+        return _run(lambda: repository.create_order(commerce_owner, request_id, idempotency_key, identity_assertion.strip()))
 
     @router.get("/requests/{request_id}/order", dependencies=[Depends(order_access)])
     def order_detail(request_id: str, commerce_owner: CommerceOwner = Depends(owner)):

@@ -42,6 +42,7 @@ from online_patient_identity import (
     create_online_identity_router,
     create_prescription_access_admin_router,
 )
+from online_checkout_identity import create_checkout_identity_router
 from online_fulfillment import (
     create_admin_fulfillment_router,
     create_storefront_fulfillment_router,
@@ -123,6 +124,7 @@ app.include_router(create_online_commerce_router(DB_CONNINFO))
 app.include_router(create_optical_preview_router(DB_CONNINFO))
 app.include_router(create_online_optical_drafts_router(DB_CONNINFO))
 app.include_router(create_online_identity_router(DB_CONNINFO))
+app.include_router(create_checkout_identity_router(DB_CONNINFO, type("IdentityRouterConfig", (), {"db_conninfo": DB_CONNINFO, "bearer_token": os.getenv("ONLINE_IDENTITY_BEARER_TOKEN", "").strip()})(), psycopg.connect))
 app.include_router(create_storefront_fulfillment_router(DB_CONNINFO))
 
 
@@ -3316,6 +3318,41 @@ def get_current_user(token: str = Depends(oauth2_scheme)):
 
 
 from typing import Iterable, Optional
+
+REPORTING_SCOPE_VALUES = {"general", "online"}
+
+
+def _resolve_reporting_scope(user: dict[str, Any], raw_scope: str | int | None) -> tuple[str, int | None]:
+    """Resolve the shared Sucursal selector without conflating channel and branch."""
+    raw = "" if raw_scope is None else str(raw_scope).strip().lower()
+    if raw in REPORTING_SCOPE_VALUES:
+        if user.get("rol") in {"recepcion", "doctor"}:
+            raise HTTPException(status_code=403, detail="Este usuario solo puede consultar su sucursal.")
+        return raw, None
+    try:
+        branch_id = int(raw) if raw else None
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="sucursal_id inválido. Usa general, online o un entero.")
+    branch_id = force_sucursal(user, branch_id)
+    if branch_id is None:
+        raise HTTPException(status_code=400, detail="Sucursal es requerida.")
+    with psycopg.connect(DB_CONNINFO) as conn:
+        row = conn.execute(
+            "SELECT 1 FROM core.sucursales WHERE sucursal_id = %s AND COALESCE(activa, true) = true;",
+            (branch_id,),
+        ).fetchone()
+    if row is None:
+        raise HTTPException(status_code=400, detail="Sucursal física inválida.")
+    return "branch", branch_id
+
+
+def _report_scope_sql(alias: str, scope: str, branch_id: int | None) -> str:
+    """Return a validated SQL predicate; values are controlled integers/tokens only."""
+    if scope == "general":
+        return "TRUE"
+    if scope == "online":
+        return f"{alias}.canal_venta = 'online'"
+    return f"{alias}.canal_venta = 'fisica' AND {alias}.sucursal_id = {int(branch_id)}"
 
 def force_sucursal(user, sucursal_id: Optional[int]) -> Optional[int]:
     """
@@ -7558,7 +7595,7 @@ def delete_historia(
                 """
                 DELETE FROM core.historias_clinicas
                 WHERE paciente_id = %s
-                  AND sucursal_id = %s
+                  AND {physical_scope_c}
                 RETURNING historia_id;
                 """,
                 (paciente_id, sucursal_id),
@@ -7601,7 +7638,7 @@ def agenda_disponibilidad(
 @app.get("/ventas", summary="Listar ventas")
 def listar_ventas(
     limit: int = 50,
-    sucursal_id: int | None = None,
+    sucursal_id: str | None = None,
     fecha_desde: str | None = None,
     fecha_hasta: str | None = None,
     anio: int | None = None,
@@ -7610,8 +7647,8 @@ def listar_ventas(
     user=Depends(get_current_user),
 ):
     require_roles(user, ("admin", "recepcion", "doctor", "contador"))
-    sucursal_id = force_sucursal(user, sucursal_id)
-    tz_name = _timezone_for_sucursal(sucursal_id) if sucursal_id is not None else None
+    reporting_scope, branch_id = _resolve_reporting_scope(user, sucursal_id)
+    tz_name = _timezone_for_sucursal(branch_id) if branch_id is not None else None
     search_tz = tz_name or "America/Mexico_City"
     fecha_hora_local_expr = (
         f"DATE(v.fecha_hora AT TIME ZONE '{tz_name}')"
@@ -7629,12 +7666,8 @@ def listar_ventas(
         else "EXTRACT(MONTH FROM v.fecha_hora)"
     )
 
-    where = ["v.activo = true"]
+    where = ["v.activo = true", _report_scope_sql("venta_base", reporting_scope, branch_id)]
     params: list[Any] = []
-
-    if sucursal_id is not None:
-        where.append("v.sucursal_id = %s")
-        params.append(sucursal_id)
 
     if mes is not None and (mes < 1 or mes > 12):
         raise HTTPException(status_code=400, detail="Mes inválido. Debe ser entre 1 y 12.")
@@ -7704,7 +7737,9 @@ def listar_ventas(
       venta_base.estado_pago,
       venta_base.estado_pedido,
       venta_base.plazo_meses,
-      venta_base.descuento_monto
+      venta_base.descuento_monto,
+      venta_base.canal_venta,
+      venta_base.online_orden_id
     FROM core.ventas_detalle v
     JOIN core.ventas venta_base ON venta_base.venta_id = v.venta_id
     WHERE {" AND ".join(where)}
@@ -7773,7 +7808,7 @@ def listar_ventas(
                         cur, int(phase1b_venta_id), user["rol"]
                     )
 
-    estado_map = _estado_paciente_map(sucursal_id, [int(r[9]) for r in rows])
+    estado_map = _estado_paciente_map(branch_id, [int(r[9]) for r in rows])
     pagos_por_venta: dict[int, list[dict[str, Any]]] = {}
     for pago in pagos_rows:
         pagos_por_venta.setdefault(int(pago[1]), []).append(
@@ -7818,6 +7853,8 @@ def listar_ventas(
                 phase1b_detail["monto_pagado"]
                 if phase1b_detail["adelanto_aplica"] else None
             )
+            phase1b_detail["canal_venta"] = r[23] or "fisica"
+            phase1b_detail["online_orden_id"] = r[24]
             ventas_out.append(phase1b_detail)
             continue
         pagos = pagos_por_venta.get(int(r[0]), [])
@@ -7881,6 +7918,8 @@ def listar_ventas(
             "estado_venta": r[18] or "confirmada",
             "estado_pedido": r[20] or "pendiente_fabricacion",
             "plazo_meses": int(r[21]) if r[21] is not None else None,
+            "canal_venta": r[23] or "fisica",
+            "online_orden_id": r[24],
         })
     return ventas_out
 
@@ -7971,7 +8010,7 @@ def actualizar_stock_inventario(
                 UPDATE core.productos
                 SET stock = %s, updated_at = NOW()
                 WHERE producto_id = %s
-                  AND sucursal_id = %s
+                  AND {physical_scope_c}
                   AND stock = %s
                   AND controla_stock = true
                 RETURNING producto_id, stock;
@@ -8636,114 +8675,122 @@ def actualizar_estado_financiero(
 
 @app.get("/finanzas/datos", summary="Resumen y auxiliares financieros")
 def obtener_datos_finanzas(
-    sucursal_id: int | None = None,
+    sucursal_id: str | None = None,
     fecha_desde: str | None = None,
     fecha_hasta: str | None = None,
     user=Depends(get_current_user),
 ):
-    sucursal_id = _finanzas_scope(user, sucursal_id)
+    reporting_scope, branch_id = _resolve_reporting_scope(user, sucursal_id)
+    if reporting_scope == "online" and user.get("rol") not in {"admin", "contador"}:
+        raise HTTPException(status_code=403, detail="Sin permiso para consultar Finanzas en línea.")
     hoy = date.today()
     desde = _finanzas_fecha(fecha_desde, hoy.replace(day=1))
     hasta = _finanzas_fecha(fecha_hasta, hoy)
     if desde > hasta:
         raise HTTPException(status_code=400, detail="La fecha inicial no puede ser posterior a la final.")
-    params = (sucursal_id, desde, hasta)
+    sales_scope = _report_scope_sql("v", reporting_scope, branch_id)
+    branch_scope = (
+        "TRUE" if reporting_scope == "general"
+        else "FALSE" if reporting_scope == "online"
+        else f"sucursal_id = {int(branch_id)}"
+    )
+    params = (desde, hasta)
     with psycopg.connect(DB_CONNINFO) as conn:
         with conn.cursor() as cur:
             cur.execute(
-                """
+                f"""
                 SELECT COALESCE(SUM(v.subtotal),0), COALESCE(SUM(v.subtotal-v.monto_total),0), COALESCE(SUM(v.monto_total),0)
-                FROM core.ventas v WHERE v.sucursal_id=%s AND v.activo=true
+                FROM core.ventas v WHERE {sales_scope} AND v.activo=true
                   AND COALESCE(v.estado_venta,'confirmada') NOT IN ('cancelada','devuelta')
                   AND v.fecha_hora::date BETWEEN %s AND %s;
                 """, params,
             )
             ventas_brutas, descuentos, ventas_netas = cur.fetchone()
             cur.execute(
-                """SELECT COALESCE(SUM(p.monto),0) FROM core.venta_pagos p
+                f"""SELECT COALESCE(SUM(p.monto),0) FROM core.venta_pagos p
                    JOIN core.ventas v ON v.venta_id=p.venta_id
-                   WHERE v.sucursal_id=%s AND p.activo=true AND p.created_at::date BETWEEN %s AND %s;""", params,
+                   WHERE {sales_scope} AND p.activo=true AND p.created_at::date BETWEEN %s AND %s;""", params,
             )
             cobrado = cur.fetchone()[0]
             cur.execute(
-                """SELECT COALESCE(SUM(GREATEST(v.monto_total-COALESCE(p.pagado,0),0)),0)
+                f"""SELECT COALESCE(SUM(GREATEST(v.monto_total-COALESCE(p.pagado,0),0)),0)
                    FROM core.ventas v
                    LEFT JOIN (SELECT venta_id,SUM(monto) pagado FROM core.venta_pagos WHERE activo=true GROUP BY venta_id) p ON p.venta_id=v.venta_id
-                   WHERE v.sucursal_id=%s AND v.activo=true
+                   WHERE {sales_scope} AND v.activo=true
                      AND COALESCE(v.estado_venta,'confirmada') NOT IN ('cancelada','devuelta')
                      AND v.fecha_hora::date BETWEEN %s AND %s;""", params,
             )
             cuentas_cobrar_total = cur.fetchone()[0]
             cur.execute(
-                """SELECT COALESCE(SUM(d.cantidad*COALESCE(d.costo_unitario,p.costo_unitario,0)),0)
+                f"""SELECT COALESCE(SUM(d.cantidad*COALESCE(d.costo_unitario,p.costo_unitario,0)),0)
                    FROM core.venta_detalles d JOIN core.ventas v ON v.venta_id=d.venta_id
                    JOIN core.productos p ON p.producto_id=d.producto_id
-                   WHERE v.sucursal_id=%s AND v.activo=true
+                     WHERE {sales_scope} AND v.activo=true
                      AND COALESCE(v.estado_venta,'confirmada') NOT IN ('cancelada','devuelta')
                      AND v.fecha_hora::date BETWEEN %s AND %s;""", params,
             )
             costo_productos = cur.fetchone()[0]
-            cur.execute("SELECT COALESCE(SUM(monto),0) FROM core.fin_gastos WHERE sucursal_id=%s AND fecha BETWEEN %s AND %s AND estado IN ('pagado','aprobado');", params)
+            cur.execute(f"SELECT COALESCE(SUM(monto),0) FROM core.fin_gastos WHERE {branch_scope} AND fecha BETWEEN %s AND %s AND estado IN ('pagado','aprobado');", params)
             gastos_total = cur.fetchone()[0]
-            cur.execute("SELECT COALESCE(SUM(costo_patronal),0) FROM core.fin_nomina WHERE sucursal_id=%s AND periodo_inicio BETWEEN %s AND %s AND estado IN ('pagada','aprobada');", params)
+            cur.execute(f"SELECT COALESCE(SUM(costo_patronal),0) FROM core.fin_nomina WHERE {branch_scope} AND periodo_inicio BETWEEN %s AND %s AND estado IN ('pagada','aprobada');", params)
             nomina_total = cur.fetchone()[0]
-            cur.execute("SELECT COALESCE(SUM(costo_unitario*stock),0) FROM core.productos WHERE sucursal_id=%s AND activo=true AND controla_stock=true;", (sucursal_id,))
+            cur.execute(f"SELECT COALESCE(SUM(costo_unitario*stock),0) FROM core.productos WHERE {branch_scope} AND activo=true AND controla_stock=true;")
             valor_inventario = cur.fetchone()[0]
-            cur.execute("SELECT COALESCE(SUM(GREATEST(monto_total-monto_pagado,0)),0) FROM core.fin_cuentas_pagar WHERE sucursal_id=%s AND estado NOT IN ('pagada','cancelada');", (sucursal_id,))
+            cur.execute(f"SELECT COALESCE(SUM(GREATEST(monto_total-monto_pagado,0)),0) FROM core.fin_cuentas_pagar WHERE {branch_scope} AND estado NOT IN ('pagada','cancelada');")
             cuentas_pagar_total = cur.fetchone()[0]
 
             cur.execute(
-                """SELECT v.venta_id,v.fecha_hora,
+                f"""SELECT v.venta_id,v.fecha_hora,
                           COALESCE(NULLIF(TRIM(CONCAT_WS(' ',p.primer_nombre,p.apellido_paterno)),''),CONCAT('Cliente #',v.paciente_id)),
                           v.monto_total,COALESCE(pg.pagado,0),GREATEST(v.monto_total-COALESCE(pg.pagado,0),0),v.estado_pago
                    FROM core.ventas v LEFT JOIN core.pacientes p ON p.paciente_id=v.paciente_id
                    LEFT JOIN (SELECT venta_id,SUM(monto) pagado FROM core.venta_pagos WHERE activo=true GROUP BY venta_id) pg ON pg.venta_id=v.venta_id
-                   WHERE v.sucursal_id=%s AND v.activo=true AND GREATEST(v.monto_total-COALESCE(pg.pagado,0),0)>0
+                   WHERE {sales_scope} AND v.activo=true AND GREATEST(v.monto_total-COALESCE(pg.pagado,0),0)>0
                      AND COALESCE(v.estado_venta,'confirmada') NOT IN ('cancelada','devuelta')
-                   ORDER BY v.fecha_hora DESC LIMIT 500;""", (sucursal_id,),
+                   ORDER BY v.fecha_hora DESC LIMIT 500;""", (),
             )
             cuentas_cobrar = [{"venta_id":r[0],"fecha":r[1].isoformat() if r[1] else None,"cliente":r[2],"total":float(r[3]),"pagado":float(r[4]),"saldo":float(r[5]),"estado_pago":r[6]} for r in cur.fetchall()]
-            cur.execute("""SELECT g.gasto_id,g.fecha,g.categoria,g.proveedor,g.descripcion,g.monto,g.cuenta,g.estado,g.comprobante_url,g.fecha_pago,
+            cur.execute(f"""SELECT g.gasto_id,g.fecha,g.categoria,g.proveedor,g.descripcion,g.monto,g.cuenta,g.estado,g.comprobante_url,g.fecha_pago,
                                   c.comprobante_id,c.nombre_archivo
                            FROM core.fin_gastos g
                            LEFT JOIN LATERAL (SELECT comprobante_id,nombre_archivo FROM core.fin_comprobantes WHERE sucursal_id=g.sucursal_id AND recurso='gasto' AND registro_id=g.gasto_id ORDER BY created_at DESC LIMIT 1) c ON true
-                           WHERE g.sucursal_id=%s AND g.fecha BETWEEN %s AND %s ORDER BY g.fecha DESC,g.gasto_id DESC LIMIT 500;""", params)
+                           WHERE {branch_scope} AND g.fecha BETWEEN %s AND %s ORDER BY g.fecha DESC,g.gasto_id DESC LIMIT 500;""", params)
             gastos = [{"gasto_id":r[0],"fecha":str(r[1]),"categoria":r[2],"proveedor":r[3],"descripcion":r[4],"monto":float(r[5]),"cuenta":r[6],"estado":r[7],"comprobante_url":r[8],"fecha_pago":str(r[9]) if r[9] else None,"comprobante_id":r[10],"comprobante_nombre":r[11]} for r in cur.fetchall()]
-            cur.execute("SELECT nomina_id,empleado,periodo_inicio,periodo_fin,salario_base,horas,comisiones,bonos,deducciones,pago_neto,costo_patronal,fecha_pago,estado FROM core.fin_nomina WHERE sucursal_id=%s AND periodo_inicio BETWEEN %s AND %s ORDER BY periodo_inicio DESC,nomina_id DESC LIMIT 500;", params)
+            cur.execute(f"SELECT nomina_id,empleado,periodo_inicio,periodo_fin,salario_base,horas,comisiones,bonos,deducciones,pago_neto,costo_patronal,fecha_pago,estado FROM core.fin_nomina WHERE {branch_scope} AND periodo_inicio BETWEEN %s AND %s ORDER BY periodo_inicio DESC,nomina_id DESC LIMIT 500;", params)
             nomina = [{"nomina_id":r[0],"empleado":r[1],"periodo_inicio":str(r[2]),"periodo_fin":str(r[3]),"salario_base":float(r[4]),"horas":float(r[5]),"comisiones":float(r[6]),"bonos":float(r[7]),"deducciones":float(r[8]),"pago_neto":float(r[9]),"costo_patronal":float(r[10]),"fecha_pago":str(r[11]) if r[11] else None,"estado":r[12]} for r in cur.fetchall()]
-            cur.execute("""SELECT cp.cuenta_pagar_id,cp.proveedor,cp.categoria,cp.concepto,cp.folio,cp.fecha_emision,cp.fecha_vencimiento,cp.monto_total,cp.monto_pagado,cp.estado,cp.comprobante_url,
+            cur.execute(f"""SELECT cp.cuenta_pagar_id,cp.proveedor,cp.categoria,cp.concepto,cp.folio,cp.fecha_emision,cp.fecha_vencimiento,cp.monto_total,cp.monto_pagado,cp.estado,cp.comprobante_url,
                                   c.comprobante_id,c.nombre_archivo
                            FROM core.fin_cuentas_pagar cp
                            LEFT JOIN LATERAL (SELECT comprobante_id,nombre_archivo FROM core.fin_comprobantes WHERE sucursal_id=cp.sucursal_id AND recurso='cuenta_pagar' AND registro_id=cp.cuenta_pagar_id ORDER BY created_at DESC LIMIT 1) c ON true
-                           WHERE cp.sucursal_id=%s AND cp.fecha_emision BETWEEN %s AND %s ORDER BY cp.fecha_vencimiento NULLS LAST,cp.cuenta_pagar_id DESC LIMIT 500;""", params)
+                           WHERE {branch_scope.replace('sucursal_id', 'cp.sucursal_id')} AND cp.fecha_emision BETWEEN %s AND %s ORDER BY cp.fecha_vencimiento NULLS LAST,cp.cuenta_pagar_id DESC LIMIT 500;""", params)
             cuentas_pagar = [{"cuenta_pagar_id":r[0],"proveedor":r[1],"categoria":r[2],"concepto":r[3],"folio":r[4],"fecha_emision":str(r[5]),"fecha_vencimiento":str(r[6]) if r[6] else None,"monto_total":float(r[7]),"monto_pagado":float(r[8]),"saldo":float(r[7]-r[8]),"estado":r[9],"comprobante_url":r[10],"comprobante_id":r[11],"comprobante_nombre":r[12]} for r in cur.fetchall()]
             cur.execute(
-                """SELECT fecha,cuenta,tipo,categoria,descripcion,monto,fuente FROM (
+                f"""SELECT fecha,cuenta,tipo,categoria,descripcion,monto,fuente FROM (
                      SELECT p.created_at fecha,p.metodo cuenta,'ingreso' tipo,'venta' categoria,CONCAT('Pago venta #',v.venta_id) descripcion,p.monto,'venta' fuente
-                     FROM core.venta_pagos p JOIN core.ventas v ON v.venta_id=p.venta_id WHERE v.sucursal_id=%s AND p.activo=true AND p.created_at::date BETWEEN %s AND %s
-                     UNION ALL SELECT m.fecha,m.cuenta,m.tipo,m.categoria,m.descripcion,m.monto,'manual' FROM core.fin_movimientos m WHERE m.sucursal_id=%s AND m.estado<>'cancelado' AND m.fecha::date BETWEEN %s AND %s
-                     UNION ALL SELECT COALESCE(g.fecha_pago,g.fecha)::timestamptz,COALESCE(g.cuenta,'Sin cuenta'),'egreso','gasto',g.descripcion,g.monto,'gasto' FROM core.fin_gastos g WHERE g.sucursal_id=%s AND g.estado='pagado' AND COALESCE(g.fecha_pago,g.fecha) BETWEEN %s AND %s
-                     UNION ALL SELECT COALESCE(n.fecha_pago,n.periodo_fin)::timestamptz,COALESCE(n.cuenta,'Sin cuenta'),'egreso','nomina',CONCAT('Nómina: ',n.empleado),n.pago_neto,'nomina' FROM core.fin_nomina n WHERE n.sucursal_id=%s AND n.estado='pagada' AND COALESCE(n.fecha_pago,n.periodo_fin) BETWEEN %s AND %s
+                     FROM core.venta_pagos p JOIN core.ventas v ON v.venta_id=p.venta_id WHERE {sales_scope} AND p.activo=true AND p.created_at::date BETWEEN %s AND %s
+                     UNION ALL SELECT m.fecha,m.cuenta,m.tipo,m.categoria,m.descripcion,m.monto,'manual' FROM core.fin_movimientos m WHERE {branch_scope.replace('sucursal_id', 'm.sucursal_id')} AND m.estado<>'cancelado' AND m.fecha::date BETWEEN %s AND %s
+                     UNION ALL SELECT COALESCE(g.fecha_pago,g.fecha)::timestamptz,COALESCE(g.cuenta,'Sin cuenta'),'egreso','gasto',g.descripcion,g.monto,'gasto' FROM core.fin_gastos g WHERE {branch_scope.replace('sucursal_id', 'g.sucursal_id')} AND g.estado='pagado' AND COALESCE(g.fecha_pago,g.fecha) BETWEEN %s AND %s
+                     UNION ALL SELECT COALESCE(n.fecha_pago,n.periodo_fin)::timestamptz,COALESCE(n.cuenta,'Sin cuenta'),'egreso','nomina',CONCAT('Nómina: ',n.empleado),n.pago_neto,'nomina' FROM core.fin_nomina n WHERE {branch_scope.replace('sucursal_id', 'n.sucursal_id')} AND n.estado='pagada' AND COALESCE(n.fecha_pago,n.periodo_fin) BETWEEN %s AND %s
                    ) movimientos ORDER BY fecha DESC LIMIT 1000;""", params + params + params + params,
             )
             movimientos = [{"fecha":r[0].isoformat() if r[0] else None,"cuenta":r[1],"tipo":r[2],"categoria":r[3],"descripcion":r[4],"monto":float(r[5]),"fuente":r[6]} for r in cur.fetchall()]
             cur.execute(
-                """SELECT COALESCE(SUM(monto_firmado), 0) FROM (
+                f"""SELECT COALESCE(SUM(monto_firmado), 0) FROM (
                      SELECT p.monto AS monto_firmado
                      FROM core.venta_pagos p JOIN core.ventas v ON v.venta_id=p.venta_id
-                     WHERE v.sucursal_id=%s AND p.activo=true AND p.created_at::date < %s
+                     WHERE {sales_scope} AND p.activo=true AND p.created_at::date < %s
                      UNION ALL
                      SELECT CASE WHEN m.tipo='ingreso' THEN m.monto ELSE -m.monto END
                      FROM core.fin_movimientos m
-                     WHERE m.sucursal_id=%s AND m.estado<>'cancelado' AND m.fecha::date < %s
+                     WHERE {branch_scope.replace('sucursal_id', 'm.sucursal_id')} AND m.estado<>'cancelado' AND m.fecha::date < %s
                      UNION ALL
                      SELECT -g.monto FROM core.fin_gastos g
-                     WHERE g.sucursal_id=%s AND g.estado='pagado' AND COALESCE(g.fecha_pago,g.fecha) < %s
+                     WHERE {branch_scope.replace('sucursal_id', 'g.sucursal_id')} AND g.estado='pagado' AND COALESCE(g.fecha_pago,g.fecha) < %s
                      UNION ALL
                      SELECT -n.pago_neto FROM core.fin_nomina n
-                     WHERE n.sucursal_id=%s AND n.estado='pagada' AND COALESCE(n.fecha_pago,n.periodo_fin) < %s
+                     WHERE {branch_scope.replace('sucursal_id', 'n.sucursal_id')} AND n.estado='pagada' AND COALESCE(n.fecha_pago,n.periodo_fin) < %s
                    ) saldo_anterior;""",
-                (sucursal_id, desde, sucursal_id, desde, sucursal_id, desde, sucursal_id, desde),
+                (desde, desde, desde, desde),
             )
             saldo_inicial = float(cur.fetchone()[0] or 0)
 
@@ -10185,7 +10232,7 @@ def eliminar_venta(venta_id: int, sucursal_id: int, user=Depends(get_current_use
 
 @app.get("/estadisticas/resumen", summary="Resumen estadístico por sucursal")
 def estadisticas_resumen(
-    sucursal_id: int | None = None,
+    sucursal_id: str | None = None,
     modo: str = "hoy",
     fecha: str | None = None,
     fecha_desde: str | None = None,
@@ -10204,9 +10251,14 @@ def estadisticas_resumen(
     user=Depends(get_current_user),
 ):
     require_roles(user, ("admin", "recepcion", "doctor"))
-    sucursal_id = force_sucursal(user, sucursal_id)
-    if user["rol"] == "admin" and sucursal_id is None:
-        raise HTTPException(status_code=400, detail="Sucursal es requerida.")
+    reporting_scope, branch_id = _resolve_reporting_scope(user, sucursal_id)
+    if reporting_scope == "online" and user.get("rol") not in {"admin", "contador"}:
+        raise HTTPException(status_code=403, detail="Sin permiso para consultar Estadísticas en línea.")
+    sucursal_id = branch_id
+    sales_scope = _report_scope_sql("v", reporting_scope, branch_id)
+    physical_scope_c = "TRUE" if reporting_scope == "general" else "FALSE" if reporting_scope == "online" else f"c.sucursal_id = {int(branch_id)}"
+    physical_scope_v = "TRUE" if reporting_scope == "general" else "FALSE" if reporting_scope == "online" else f"v.sucursal_id = {int(branch_id)}"
+    physical_scope_p = "TRUE" if reporting_scope == "general" else "FALSE" if reporting_scope == "online" else f"p.sucursal_id = {int(branch_id)}"
 
     modo = (modo or "hoy").strip().lower()
     hoy = date.today()
@@ -10300,13 +10352,13 @@ def estadisticas_resumen(
                   COUNT(*) FILTER (
                     WHERE LOWER(COALESCE(tipo_consulta, '')) LIKE '%%no_show%%'
                   )::int AS no_show
-                FROM core.consultas
+                FROM core.consultas c
                 WHERE activo = true
-                  AND sucursal_id = %s
+                  AND {physical_scope_c}
                   AND DATE(fecha_hora) BETWEEN %s AND %s
                   {c_patient_sql};
                 """,
-                (sucursal_id, fecha_desde, fecha_hasta, *c_patient_params),
+                (fecha_desde, fecha_hasta, *c_patient_params),
             )
             c_total, c_no_show = cur.fetchone()
 
@@ -10315,43 +10367,43 @@ def estadisticas_resumen(
                 SELECT
                   COUNT(*)::int AS total,
                   COALESCE(SUM(monto_total), 0)::numeric AS monto_total
-                FROM core.ventas
+                FROM core.ventas v
                 WHERE activo = true
-                  AND sucursal_id = %s
+                  AND {sales_scope}
                   AND DATE(fecha_hora) BETWEEN %s AND %s
                   {v_patient_sql};
                 """,
-                (sucursal_id, fecha_desde, fecha_hasta, *v_patient_params),
+                (fecha_desde, fecha_hasta, *v_patient_params),
             )
             v_total, v_monto_total = cur.fetchone()
 
             cur.execute(
                 f"""
                 SELECT DATE(fecha_hora) AS dia, COUNT(*)::int
-                FROM core.consultas
+                FROM core.consultas c
                 WHERE activo = true
-                  AND sucursal_id = %s
+                  AND {physical_scope_c}
                   AND DATE(fecha_hora) BETWEEN %s AND %s
                   {c_patient_sql}
                 GROUP BY DATE(fecha_hora)
                 ORDER BY dia;
                 """,
-                (sucursal_id, fecha_desde, fecha_hasta, *c_patient_params),
+                (fecha_desde, fecha_hasta, *c_patient_params),
             )
             consultas_dia_rows = cur.fetchall()
 
             cur.execute(
                 f"""
                 SELECT DATE(fecha_hora) AS dia, COUNT(*)::int
-                FROM core.ventas
+                FROM core.ventas v
                 WHERE activo = true
-                  AND sucursal_id = %s
+                  AND {sales_scope}
                   AND DATE(fecha_hora) BETWEEN %s AND %s
                   {v_patient_sql}
                 GROUP BY DATE(fecha_hora)
                 ORDER BY dia;
                 """,
-                (sucursal_id, fecha_desde, fecha_hasta, *v_patient_params),
+                (fecha_desde, fecha_hasta, *v_patient_params),
             )
             ventas_dia_rows = cur.fetchall()
 
@@ -10360,15 +10412,15 @@ def estadisticas_resumen(
                 SELECT
                   COALESCE(NULLIF(LOWER(TRIM(metodo_pago)), ''), 'sin_metodo') AS etiqueta,
                   COUNT(*)::int AS total
-                FROM core.ventas
+                FROM core.ventas v
                 WHERE activo = true
-                  AND sucursal_id = %s
+                  AND {sales_scope}
                   AND DATE(fecha_hora) BETWEEN %s AND %s
                   {v_patient_sql}
                 GROUP BY etiqueta
                 ORDER BY total DESC, etiqueta ASC;
                 """,
-                (sucursal_id, fecha_desde, fecha_hasta, *v_patient_params),
+                (fecha_desde, fecha_hasta, *v_patient_params),
             )
             ventas_metodo_rows = cur.fetchall()
 
@@ -10382,7 +10434,7 @@ def estadisticas_resumen(
                   FROM core.consultas c
                   CROSS JOIN LATERAL regexp_split_to_table(COALESCE(NULLIF(c.motivo_consulta, ''), COALESCE(c.tipo_consulta, '')), '\\|') AS x(item)
                   WHERE c.activo = true
-                    AND c.sucursal_id = %s
+                    AND {physical_scope_c}
                     AND DATE(c.fecha_hora) BETWEEN %s AND %s
                     {c_patient_sql}
                 ) t
@@ -10391,7 +10443,7 @@ def estadisticas_resumen(
                 ORDER BY total DESC, etiqueta ASC
                 LIMIT 10;
                 """,
-                (sucursal_id, fecha_desde, fecha_hasta, *c_patient_params),
+                (fecha_desde, fecha_hasta, *c_patient_params),
             )
             consultas_tipo_rows = cur.fetchall()
 
@@ -10408,7 +10460,7 @@ def estadisticas_resumen(
                   FROM core.ventas v
                   CROSS JOIN LATERAL regexp_split_to_table(COALESCE(v.compra, ''), '\\|') AS x(item)
                   WHERE v.activo = true
-                    AND v.sucursal_id = %s
+                    AND {sales_scope}
                     AND DATE(v.fecha_hora) BETWEEN %s AND %s
                     {v_patient_sql}
                 ) t
@@ -10417,7 +10469,7 @@ def estadisticas_resumen(
                 ORDER BY total DESC, producto ASC
                 LIMIT 10;
                 """,
-                (sucursal_id, fecha_desde, fecha_hasta, *v_patient_params),
+                (fecha_desde, fecha_hasta, *v_patient_params),
             )
             productos_top_rows = cur.fetchall()
 
@@ -10429,7 +10481,7 @@ def estadisticas_resumen(
                 top_mes_extra_sql = "AND CONCAT_WS(' ', p.primer_nombre, p.segundo_nombre, p.apellido_paterno, p.apellido_materno) ILIKE %s"
                 top_mes_extra_params.append(q_like)
             cur.execute(
-                """
+                f"""
                 SELECT
                   v.paciente_id,
                   CONCAT_WS(' ', p.primer_nombre, p.segundo_nombre, p.apellido_paterno, p.apellido_materno) AS paciente_nombre,
@@ -10439,14 +10491,14 @@ def estadisticas_resumen(
                 JOIN core.pacientes p ON p.paciente_id = v.paciente_id
                 WHERE v.activo = true
                   AND p.activo = true
-                  AND v.sucursal_id = %s
+                  AND {sales_scope}
                   AND DATE(v.fecha_hora) BETWEEN %s AND %s
                   {top_mes_extra_sql}
                 GROUP BY v.paciente_id, paciente_nombre
                 ORDER BY monto_total DESC, total_ventas DESC, paciente_nombre ASC
                 LIMIT 10;
                 """.format(top_mes_extra_sql=top_mes_extra_sql),
-                (sucursal_id, mes_actual_desde, mes_actual_hasta, *top_mes_extra_params),
+                (mes_actual_desde, mes_actual_hasta, *top_mes_extra_params),
             )
             top_pacientes_mes_actual_rows = cur.fetchall()
 
@@ -10456,7 +10508,7 @@ def estadisticas_resumen(
                 top_consultas_extra_sql = "AND CONCAT_WS(' ', p.primer_nombre, p.segundo_nombre, p.apellido_paterno, p.apellido_materno) ILIKE %s"
                 top_consultas_extra_params.append(q_like)
             cur.execute(
-                """
+                f"""
                 SELECT
                   c.paciente_id,
                   CONCAT_WS(' ', p.primer_nombre, p.segundo_nombre, p.apellido_paterno, p.apellido_materno) AS paciente_nombre,
@@ -10467,14 +10519,14 @@ def estadisticas_resumen(
                  AND p.sucursal_id = c.sucursal_id
                 WHERE c.activo = true
                   AND p.activo = true
-                  AND c.sucursal_id = %s
+                  AND {physical_scope_c}
                   AND DATE(c.fecha_hora) BETWEEN %s AND %s
                   {top_consultas_extra_sql}
                 GROUP BY c.paciente_id, paciente_nombre
                 ORDER BY total_consultas DESC, paciente_nombre ASC
                 LIMIT 10;
                 """.format(top_consultas_extra_sql=top_consultas_extra_sql),
-                (sucursal_id, fecha_desde, fecha_hasta, *top_consultas_extra_params),
+                (fecha_desde, fecha_hasta, *top_consultas_extra_params),
             )
             top_pacientes_consultas_rows = cur.fetchall()
 
@@ -10499,13 +10551,13 @@ def estadisticas_resumen(
                     SELECT EXTRACT(MONTH FROM p.creado_en)::int AS mes_idx, COUNT(*)::int AS total
                     FROM core.pacientes p
                     WHERE p.activo = true
-                      AND p.sucursal_id = %s
+                      AND {physical_scope_p}
                       AND EXTRACT(YEAR FROM p.creado_en) = %s
                       {p_extra_sql}
                     GROUP BY mes_idx
                     ORDER BY mes_idx;
                     """,
-                    (sucursal_id, p_anio, *p_extra_params),
+                    (p_anio, *p_extra_params),
                 )
                 rows = cur.fetchall()
                 month_map = {int(r[0]): int(r[1]) for r in rows}
@@ -10524,13 +10576,13 @@ def estadisticas_resumen(
                     SELECT DATE(p.creado_en) AS dia, COUNT(*)::int AS total
                     FROM core.pacientes p
                     WHERE p.activo = true
-                      AND p.sucursal_id = %s
+                      AND {physical_scope_p}
                       AND DATE(p.creado_en) BETWEEN %s AND %s
                       {p_extra_sql}
                     GROUP BY dia
                     ORDER BY dia;
                     """,
-                    (sucursal_id, p_desde, p_hasta, *p_extra_params),
+                    (p_desde, p_hasta, *p_extra_params),
                 )
                 day_map = {str(r[0]): int(r[1]) for r in cur.fetchall()}
                 pacientes_series = [
@@ -10551,12 +10603,12 @@ def estadisticas_resumen(
                     SELECT COUNT(*)::int AS total
                     FROM core.pacientes p
                     WHERE p.activo = true
-                      AND p.sucursal_id = %s
+                      AND {physical_scope_p}
                       AND DATE(p.creado_en) = %s
                       {p_extra_sql}
                     ;
                     """,
-                    (sucursal_id, p_fecha, *p_extra_params),
+                    (p_fecha, *p_extra_params),
                 )
                 total_dia = int((cur.fetchone() or [0])[0] or 0)
                 pacientes_series = [{"etiqueta": str(p_fecha), "total": total_dia}]
@@ -10582,13 +10634,13 @@ def estadisticas_resumen(
                     SELECT DATE(p.creado_en) AS dia, COUNT(*)::int AS total
                     FROM core.pacientes p
                     WHERE p.activo = true
-                      AND p.sucursal_id = %s
+                      AND {physical_scope_p}
                       AND DATE(p.creado_en) BETWEEN %s AND %s
                       {p_extra_sql}
                     GROUP BY dia
                     ORDER BY dia;
                     """,
-                    (sucursal_id, p_desde, p_hasta, *p_extra_params),
+                    (p_desde, p_hasta, *p_extra_params),
                 )
                 rows = cur.fetchall()
                 day_map = {str(r[0]): int(r[1]) for r in rows}
@@ -10611,13 +10663,13 @@ def estadisticas_resumen(
                     SELECT DATE(p.creado_en) AS dia, COUNT(*)::int AS total
                     FROM core.pacientes p
                     WHERE p.activo = true
-                      AND p.sucursal_id = %s
+                      AND {physical_scope_p}
                       AND DATE(p.creado_en) BETWEEN %s AND %s
                       {p_extra_sql}
                     GROUP BY dia
                     ORDER BY dia;
                     """,
-                    (sucursal_id, p_desde, p_hasta, *p_extra_params),
+                    (p_desde, p_hasta, *p_extra_params),
                 )
                 rows = cur.fetchall()
                 day_map = {str(r[0]): int(r[1]) for r in rows}
@@ -10630,44 +10682,44 @@ def estadisticas_resumen(
 
             series_year = series_anio or hoy.year
             cur.execute(
-                """
+                f"""
                 SELECT EXTRACT(MONTH FROM v.fecha_hora)::int AS mes_idx, COALESCE(SUM(v.monto_total), 0)::numeric AS total
                 FROM core.ventas v
                 WHERE v.activo = true
-                  AND v.sucursal_id = %s
+                  AND {sales_scope}
                   AND EXTRACT(YEAR FROM v.fecha_hora) = %s
                 GROUP BY mes_idx
                 ORDER BY mes_idx;
                 """,
-                (sucursal_id, series_year),
+                (series_year,),
             )
             ingresos_rows = cur.fetchall()
 
             cur.execute(
-                """
+                f"""
                 SELECT EXTRACT(MONTH FROM c.fecha_hora)::int AS mes_idx, COUNT(*)::int AS total
                 FROM core.consultas c
                 WHERE c.activo = true
-                  AND c.sucursal_id = %s
+                  AND {physical_scope_c}
                   AND EXTRACT(YEAR FROM c.fecha_hora) = %s
                 GROUP BY mes_idx
                 ORDER BY mes_idx;
                 """,
-                (sucursal_id, series_year),
+                (series_year,),
             )
             consultas_mensuales_rows = cur.fetchall()
 
             cur.execute(
-                """
+                f"""
                 SELECT EXTRACT(MONTH FROM v.fecha_hora)::int AS mes_idx, COUNT(*)::int AS total
                 FROM core.ventas v
                 WHERE v.activo = true
-                  AND v.sucursal_id = %s
+                  AND {sales_scope}
                   AND EXTRACT(YEAR FROM v.fecha_hora) = %s
                 GROUP BY mes_idx
                 ORDER BY mes_idx;
                 """,
-                (sucursal_id, series_year),
+                (series_year,),
             )
             ventas_mensuales_count_rows = cur.fetchall()
 

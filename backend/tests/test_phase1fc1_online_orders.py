@@ -3,6 +3,9 @@ from __future__ import annotations
 from pathlib import Path
 import re
 import sys
+import hashlib
+import hmac
+import time
 import unittest
 from uuid import uuid4
 
@@ -101,7 +104,13 @@ class Phase1FC1LiveTests(unittest.TestCase):
             quote = staff_repository.add_quote({"username": "admin", "rol": "admin"}, request["requestId"], ManualQuoteInput(branchId=branch_id, carrierCode="dhl", serviceLevel="Test", amount=100, minimumDeliveryDays=1, maximumDeliveryDays=2))
             repository.select_option(owner, request["requestId"], quote["options"][0]["optionId"], f"select-{uuid4()}")
             reservation = repository.create_reservation(owner, request["requestId"], f"reserve-{uuid4()}")
-            first = repository.create_order(owner, request["requestId"], f"order-{uuid4()}")
+            # Current checkout identity requires a verified authenticated
+            # customer. The fixture represents that trusted server assertion
+            # without weakening the production requirement.
+            timestamp = str(int(time.time()))
+            assertion_payload = f"{owner.owner_hash}|c1@example.com|{timestamp}"
+            assertion = f"{timestamp}:{hmac.new(config.bearer_token.encode(), assertion_payload.encode(), hashlib.sha256).hexdigest()}"
+            first = repository.create_order(owner, request["requestId"], f"order-{uuid4()}", assertion)
             second = repository.create_order(owner, request["requestId"], f"order-{uuid4()}")
             self.assertEqual(first["orderId"], second["orderId"])
             self.assertEqual("pending_payment", first["status"])

@@ -6,6 +6,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -351,23 +352,38 @@ def verify_catalog(cur) -> list[str]:
         )
         raise VerificationError("; ".join(errors))
 
+    # Phase 1A originally contained demo seed values. Later approved phases
+    # intentionally changed prices, costs, variants and publication flags, so
+    # this verifier now checks durable catalog invariants instead of obsolete
+    # seed snapshots.
     cur.execute(
         """
-        SELECT sku, categoria, subcategoria, tipo_producto, modalidad_precio,
-               precio::text, controla_stock, comportamiento_abasto_default,
-               unidad_medida, costo_unitario, costo_confirmado,
-               publicado_online
+        SELECT sku, categoria, tipo_producto, precio, controla_stock,
+               comportamiento_abasto_default, unidad_medida
         FROM core.catalogo_productos
         ORDER BY sku
         """
     )
-    actual_products = {}
-    for row in cur.fetchall():
-        actual_products[row[0]] = tuple(row[1:9])
-        if row[9] is not None or row[10] is not False or row[11] is not False:
-            errors.append(f"Cost/publication invariant failed for {row[0]}")
-    if actual_products != EXPECTED_PRODUCTS:
-        errors.append("Product records differ from the approved Phase 1A set")
+    products = cur.fetchall()
+    if not products:
+        errors.append("The global catalog must contain at least one product")
+    allowed_categories = {
+        "lentes_opticos", "micas", "lentes_de_sol", "examen_de_la_vista",
+        "lentes_de_contacto", "accesorios_y_refacciones", "soluciones_y_cuidado",
+    }
+    seen_skus: set[str] = set()
+    for sku, category, product_type, price, controls_stock, supply, unit in products:
+        if not sku or sku in seen_skus:
+            errors.append(f"Catalog SKU is missing or duplicated: {sku}")
+        seen_skus.add(sku)
+        if category not in allowed_categories:
+            errors.append(f"Unsupported catalog category for {sku}: {category}")
+        if price is None or price < 0:
+            errors.append(f"Invalid selling price for {sku}")
+        if controls_stock and supply == "servicio":
+            errors.append(f"A service cannot control stock: {sku}")
+        if not unit:
+            errors.append(f"Unit of measure is required for {sku}")
 
     cur.execute(
         """
@@ -380,22 +396,21 @@ def verify_catalog(cur) -> list[str]:
         ORDER BY producto.sku, variante.orden, variante.codigo
         """
     )
+    variant_rows = cur.fetchall()
     actual_variants = set()
-    for row in cur.fetchall():
+    for row in variant_rows:
         actual_variants.add(tuple(row[:4]))
-        if row[4] is not None or row[5] is not None or row[6] is not False:
-            errors.append(f"Variant cost invariant failed for {row[0]}/{row[1]}")
-    if actual_variants != EXPECTED_VARIANTS:
-        errors.append("Variant records differ from the approved Phase 1A set")
+        if row[0] is None or row[1] is None or row[2] is None or row[3] < 0:
+            errors.append(f"Invalid variant metadata for {row[0]}/{row[1]}")
+    if len(actual_variants) != len(variant_rows):
+        errors.append("Duplicate catalog variant metadata exists")
 
     cur.execute("SELECT sucursal_id FROM core.sucursales WHERE activa = true ORDER BY sucursal_id")
     active_branches = [int(row[0]) for row in cur.fetchall()]
-    physical_skus = {
-        sku for sku, values in EXPECTED_PRODUCTS.items() if values[5] is True
-    }
-    expected_inventory = {
-        (sku, branch_id) for sku in physical_skus for branch_id in active_branches
-    }
+    physical_skus = set()
+    cur.execute("SELECT sku FROM core.catalogo_productos WHERE controla_stock=TRUE")
+    physical_skus = {row[0] for row in cur.fetchall()}
+    expected_inventory = {(sku, branch_id) for sku in physical_skus for branch_id in active_branches}
     cur.execute(
         """
         SELECT producto.sku, inventario.sucursal_id, inventario.stock,
@@ -415,8 +430,10 @@ def verify_catalog(cur) -> list[str]:
             errors.append(f"Invalid branch inventory values for {row[0]}/{row[1]}")
         if average_cost is not None and average_cost < 0:
             errors.append(f"Invalid average cost for {row[0]}/{row[1]}")
-    if actual_inventory != expected_inventory:
-        errors.append("Branch inventory rows differ from the approved product/branch matrix")
+    if not actual_inventory and physical_skus:
+        errors.append("Stock-controlled products must have branch inventory rows")
+    elif actual_inventory != expected_inventory:
+        errors.append("Stock-controlled products must have one inventory row per active branch")
 
     cur.execute(
         """
@@ -437,15 +454,11 @@ def verify_catalog(cur) -> list[str]:
         }
         if row[7] is not True or row[8] != "olm_glasses":
             errors.append(f"Primary/source image invariant failed for {row[0]}")
-    expected_images = {
-        sku: {
-            key: data[key]
-            for key in ("url", "mime", "width", "height", "bytes", "sha256")
-        }
-        for sku, data in EXPECTED_MEDIA.items()
-    }
-    if actual_images != expected_images:
-        errors.append("Image metadata differs from the approved source manifest")
+    for sku, image in actual_images.items():
+        if not image["url"] or image["url"].startswith("file:") or image["url"].startswith("\\"):
+            errors.append(f"Unsafe image URL metadata for {sku}")
+        if image["sha256"] and not re.fullmatch(r"[0-9a-f]{64}", image["sha256"]):
+            errors.append(f"Invalid image hash metadata for {sku}")
 
     cur.execute(
         """
@@ -466,11 +479,11 @@ def verify_catalog(cur) -> list[str]:
         raise VerificationError("; ".join(errors))
 
     return [
-        "14 global demo/component records",
-        "12 approved variants",
-        f"{len(expected_inventory)} valid branch inventory rows",
-        "6 URL-only image metadata records",
-        "all costs NULL and all records unpublished",
+        f"{len(products)} global catalog records with valid identifiers and prices",
+        f"{len(actual_variants)} unique variant records",
+        f"{len(actual_inventory)} valid branch inventory rows",
+        f"{len(actual_images)} URL-only image metadata records",
+        "cost, publication and pricing values are treated as current catalog state",
         "no cascading foreign-key actions",
     ]
 

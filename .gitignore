@@ -54,6 +54,10 @@ backups/
 !backend/scripts/migrations/20260812_phase1gf_physical_optical_queue_rollback.sql
 !backend/scripts/migrations/20260812_phase1gg_optical_pricing_admin.sql
 !backend/scripts/migrations/20260812_phase1gg_optical_pricing_admin_rollback.sql
+!backend/scripts/migrations/20260815_online_checkout_identity.sql
+!backend/scripts/migrations/20260815_online_checkout_identity_rollback.sql
+!backend/scripts/migrations/20260815_reporting_sale_origin.sql
+!backend/scripts/migrations/20260815_reporting_sale_origin_rollback.sql
 backend/.env
 frontend/.env
 backend/oauth_client.json

@@ -2812,6 +2812,7 @@ export default function App() {
   const [editingConsultaId, setEditingConsultaId] = useState<number | null>(null);
   const [sucursales, setSucursales] = useState<Sucursal[]>([]);
   const [sucursalActivaId, setSucursalActivaId] = useState<number>(1);
+  const [sucursalFiltro, setSucursalFiltro] = useState<number | "general" | "online">("general");
 
   const [historiaPacienteId, setHistoriaPacienteId] = useState<number | null>(null);
   const [historiaPacienteInfo, setHistoriaPacienteInfo] = useState<Paciente | null>(null);
@@ -3836,7 +3837,7 @@ export default function App() {
     const seriesAnio = override?.seriesAnio ?? statsSeriesAnio;
 
     const params = new URLSearchParams();
-    params.set("sucursal_id", String(sucursalActivaId));
+    params.set("sucursal_id", String(sucursalFiltro));
     params.set("modo", modo);
     params.set("pacientes_modo", pacientesModo);
     if ((pacientesModo === "mes" || pacientesModo === "anio") && pacientesAnio) params.set("pacientes_anio", pacientesAnio);
@@ -4390,6 +4391,10 @@ export default function App() {
 
   useEffect(() => {
     if (!me) return;
+    if (!isAdmin && !isContador && me.sucursal_id) {
+      setSucursalActivaId(me.sucursal_id);
+      setSucursalFiltro(me.sucursal_id);
+    }
     loadSucursales();
   }, [me]);
 
@@ -4412,17 +4417,17 @@ export default function App() {
   useEffect(() => {
     if (!me || tab !== "estadisticas") return;
     loadStats();
-  }, [me, tab, sucursalActivaId]);
+  }, [me, tab, sucursalFiltro]);
 
   useEffect(() => {
     if (!me || tab !== "resumen_ventas") return;
     loadVentasResumen();
-  }, [me, tab, sucursalActivaId]);
+  }, [me, tab, sucursalFiltro]);
 
   useEffect(() => {
     if (!me || tab !== "finanzas" || !["admin", "contador"].includes(me.rol)) return;
     loadFinanzas();
-  }, [me, tab, sucursalActivaId]);
+  }, [me, tab, sucursalFiltro]);
 
   useEffect(() => {
     if (!me || tab !== "inventario" || inventarioVista !== "movimientos") return;
@@ -5220,7 +5225,7 @@ export default function App() {
     setFinanzasError(null);
     try {
       const params = new URLSearchParams({
-        sucursal_id: String(sucursalActivaId),
+        sucursal_id: String(sucursalFiltro),
         fecha_desde: desde,
         fecha_hasta: hasta,
       });
@@ -7438,9 +7443,18 @@ export default function App() {
       <div className="olm-branch-row" style={{ marginBottom: 16, display: "flex", gap: 12, alignItems: "center" }}>
         <div style={{ fontWeight: 800, color: "#526b7b" }}>Sucursal</div>
         <select
-          value={sucursalActivaId}
+          value={String(sucursalFiltro)}
           disabled={!isAdmin && !isContador}
-          onChange={(e) => setSucursalActivaId(Number(e.target.value))}
+          onChange={(e) => {
+            const value = e.target.value;
+            if (value === "general" || value === "online") {
+              setSucursalFiltro(value);
+            } else {
+              const branchId = Number(value);
+              setSucursalActivaId(branchId);
+              setSucursalFiltro(branchId);
+            }
+          }}
           style={{
             padding: 10,
             borderRadius: 10,
@@ -7449,14 +7463,18 @@ export default function App() {
             minWidth: 280,
           }}
         >
+          <option value="general">General</option>
           {sucursales.length === 0 ? (
-            <option value={sucursalActivaId}>Cargando...</option>
+            <option value={String(sucursalActivaId)}>Cargando...</option>
           ) : (
-            sucursales.map((s) => (
+            <>
+            {sucursales.map((s) => (
               <option key={s.sucursal_id} value={s.sucursal_id}>
                 {s.nombre}
               </option>
-            ))
+            ))}
+            <option value="online">Tienda en línea</option>
+            </>
           )}
         </select>
       </div>
