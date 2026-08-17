@@ -214,6 +214,81 @@ def release_expired_optical_reservations(cur, *, limit: int = 100) -> int:
     return released
 
 
+def convert_optical_reservation(
+    cur,
+    *,
+    draft_public_id: str,
+    owner: CommerceOwner,
+    normal_reservation_id: int,
+    expected_fingerprint: str | None = None,
+    expected_total: str | None = None,
+) -> dict[str, Any]:
+    """Transfer an active optical frame reservation to a normal checkout reservation.
+
+    Caller owns the transaction. The optical reservation is locked and its reserved
+    quantity is transferred without changing net reserved stock.
+    """
+    cur.execute(
+        """SELECT draft.*, reservation.reserva_id AS optical_reservation_id,
+                  reservation.armazon_producto_id, reservation.sucursal_id,
+                  reservation.cantidad, reservation.estado AS reservation_estado,
+                  reservation.expires_at, reservation.converted_reserva_id,
+                  config.snapshot_comercial
+             FROM core.online_borradores_opticos draft
+             JOIN core.online_reservas_opticas_borrador reservation
+               ON reservation.borrador_id = draft.borrador_id
+             JOIN core.online_configuraciones_opticas_borrador config
+               ON config.borrador_id = draft.borrador_id
+            WHERE draft.borrador_public_id = %s
+              AND draft.propietario_tipo = %s
+              AND draft.propietario_ref_hash = %s
+            FOR UPDATE OF draft, reservation, config""",
+        (draft_public_id, owner.db_type, owner.owner_hash),
+    )
+    row = cur.fetchone()
+    if not row:
+        raise OpticalDraftRuleError(404, "OPTICAL_DRAFT_NOT_FOUND", "Optical draft was not found.")
+    if row["converted_reserva_id"]:
+        if int(row["converted_reserva_id"]) != int(normal_reservation_id):
+            raise OpticalDraftRuleError(409, "OPTICAL_DRAFT_ALREADY_CONVERTED", "Optical draft is already linked to checkout.")
+        return {"opticalReservationId": int(row["optical_reservation_id"]), "normalReservationId": int(normal_reservation_id), "configuration": row["snapshot_comercial"]}
+    if row["estado"] in {"cancelado", "expirado"} or row["reservation_estado"] != "activa":
+        raise OpticalDraftRuleError(409, "OPTICAL_DRAFT_INACTIVE", "Optical draft is no longer active.")
+    if row["expires_at"] <= datetime.now(timezone.utc):
+        raise OpticalDraftRuleError(409, "OPTICAL_RESERVATION_EXPIRED", "Optical frame reservation has expired.")
+    if row["prescription_status"] != "provided":
+        raise OpticalDraftRuleError(409, "OPTICAL_PRESCRIPTION_PENDING", "Prescription must be completed before checkout.")
+    if expected_fingerprint and str(row["preview_fingerprint"]) != expected_fingerprint:
+        raise OpticalDraftRuleError(409, "OPTICAL_FINGERPRINT_MISMATCH", "Optical configuration has changed.")
+    if expected_total and str(row["total_configurado_snapshot"]) != expected_total:
+        raise OpticalDraftRuleError(409, "OPTICAL_TOTAL_MISMATCH", "Optical price has changed.")
+    cur.execute(
+        """SELECT sucursal_id, producto_id, cantidad
+             FROM core.online_reserva_lineas WHERE reserva_id = %s
+             FOR UPDATE""",
+        (normal_reservation_id,),
+    )
+    lines = cur.fetchall()
+    if len(lines) != 1 or int(lines[0]["producto_id"]) != int(row["armazon_producto_id"]) or int(lines[0]["sucursal_id"]) != int(row["sucursal_id"]) or int(lines[0]["cantidad"]) != int(row["cantidad"]):
+        raise OpticalDraftRuleError(409, "OPTICAL_RESERVATION_MISMATCH", "Checkout reservation does not match the optical frame reservation.")
+    cur.execute(
+        """UPDATE core.online_reservas_opticas_borrador
+              SET converted_reserva_id = %s, estado = 'cancelada', released_at = NOW(), updated_at = NOW()
+            WHERE reserva_id = %s AND estado = 'activa'""",
+        (normal_reservation_id, row["optical_reservation_id"]),
+    )
+    if cur.rowcount != 1:
+        raise OpticalDraftRuleError(409, "OPTICAL_RESERVATION_CHANGED", "Optical reservation changed during checkout.")
+    cur.execute(
+        """INSERT INTO core.online_borrador_optico_eventos
+          (borrador_id, reserva_id, evento_tipo, actor_tipo, actor_ref_hash, metadata)
+          VALUES (%s, %s, 'reservation_converted_to_checkout', %s, %s, %s::jsonb)""",
+        (row["borrador_id"], row["optical_reservation_id"], owner.db_type, owner.owner_hash,
+         json.dumps({"normalReservationId": normal_reservation_id}, separators=(",", ":"))),
+    )
+    return {"opticalReservationId": int(row["optical_reservation_id"]), "normalReservationId": int(normal_reservation_id), "configuration": row["snapshot_comercial"]}
+
+
 @dataclass(frozen=True)
 class OpticalDraftRepository:
     config: OpticalDraftConfig

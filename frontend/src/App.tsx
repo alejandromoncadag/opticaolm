@@ -6517,10 +6517,19 @@ export default function App() {
       ].join(" "),
     ).includes(q);
   });
-  const inventarioGrupos = inventarioCategorias
+  const inventarioGrupoKey = (producto: InventarioProducto) =>
+    producto.categoria === "lentes_opticos" && producto.subcategoria === "clip_on"
+      ? "clip_on"
+      : producto.categoria;
+  const inventarioGrupoLabel = (grupo: string) =>
+    grupo === "clip_on" ? "Clip-on" : formatVentaCompraLabel(grupo);
+  const inventarioGrupoKeys = Array.from(
+    new Set(inventarioVisible.map(inventarioGrupoKey)),
+  );
+  const inventarioGrupos = inventarioGrupoKeys
     .map((categoria) => ({
       categoria,
-      productos: inventarioFiltrado.filter((producto) => producto.categoria === categoria),
+      productos: inventarioFiltrado.filter((producto) => inventarioGrupoKey(producto) === categoria),
     }))
     .filter((grupo) => grupo.productos.length > 0);
   const inventarioControladoFiltrado = inventarioFiltrado.filter((producto) => producto.controla_stock);
@@ -9935,7 +9944,7 @@ export default function App() {
                     ].includes(producto.categoria);
                     const esArmazonOpticoComprable =
                       producto.categoria === "lentes_opticos"
-                      && producto.subcategoria === "armazon";
+                      && ["armazon", "clip_on"].includes(producto.subcategoria || "");
                     const categoriaComprable =
                       producto.tipo_producto === "producto_fisico"
                       && Boolean(producto.controla_stock)
@@ -10082,7 +10091,7 @@ export default function App() {
                 <option value="">Seleccionar categoría...</option>
                 {inventarioGrupos.map((grupo) => (
                   <option key={`nav-${grupo.categoria}`} value={grupo.categoria}>
-                    {formatVentaCompraLabel(grupo.categoria)}
+                    {inventarioGrupoLabel(grupo.categoria)}
                   </option>
                 ))}
               </select>
@@ -10109,7 +10118,7 @@ export default function App() {
                   style={{ scrollMarginTop: 86 }}
                 >
                   <div style={{ padding: "9px 12px", background: "#dceaff", border: "1px solid #b8cfe8", color: "#173b61" }}>
-                    <strong style={{ fontSize: 15 }}>{formatVentaCompraLabel(grupo.categoria)}</strong>
+                    <strong style={{ fontSize: 15 }}>{inventarioGrupoLabel(grupo.categoria)}</strong>
                     <span style={{ marginLeft: 8, color: "#5d7690", fontSize: 12 }}>
                       {grupo.productos.length} producto(s)
                     </span>

@@ -57,7 +57,7 @@ class NonCommittingConnection:
 
 
 class Phase1FACommerceTests(unittest.TestCase):
-    def test_only_stock_controlled_optical_frames_use_direct_purchase_exception(self) -> None:
+    def test_stock_controlled_optical_frames_and_clip_ons_use_direct_purchase_exception(self) -> None:
         frame = {
             "categoria": "lentes_opticos",
             "subcategoria": "armazon",
@@ -65,6 +65,8 @@ class Phase1FACommerceTests(unittest.TestCase):
             "controla_stock": True,
         }
         self.assertTrue(is_direct_purchase_product(frame))
+        clip_on = {**frame, "subcategoria": "clip_on"}
+        self.assertTrue(is_direct_purchase_product(clip_on))
 
         for blocked in (
             {**frame, "controla_stock": False},

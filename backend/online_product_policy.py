@@ -23,4 +23,4 @@ def is_direct_purchase_product(product: Mapping[str, Any]) -> bool:
         return False
     if category in PURCHASABLE_CATEGORIES:
         return True
-    return category == "lentes_opticos" and subcategory == "armazon"
+    return category == "lentes_opticos" and subcategory in {"armazon", "clip_on"}
