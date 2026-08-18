@@ -737,7 +737,20 @@ class OpticalDraftRepository:
                     raise OpticalDraftRuleError(409, "FRAME_OUT_OF_STOCK", "Este armazón ya no está disponible por el momento.")
                 cur.execute("SELECT sku, nombre FROM core.catalogo_productos WHERE producto_id=%s", (row["armazon_producto_id"],))
                 frame = cur.fetchone()
-                cur.execute("""INSERT INTO core.online_reservas_opticas_borrador (borrador_id,configuracion_id,armazon_producto_id,sucursal_id,cantidad,configuracion_hash,sku_snapshot,nombre_snapshot,expires_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,NOW()+make_interval(mins=>%s)) RETURNING reserva_id""", (row["borrador_id"], row["configuracion_id"], row["armazon_producto_id"], row["sucursal_id"], row["cantidad"], row["configuracion_hash"], frame["sku"], frame["nombre"], int(reservation_config["vigencia_minutos"])))
+                # The additive schema keeps one optical reservation row per
+                # draft. Reuse that row when a temporary hold is refreshed;
+                # never create a duplicate reservation chain.
+                cur.execute(
+                    """
+                    UPDATE core.online_reservas_opticas_borrador
+                    SET estado = 'activa', released_at = NULL,
+                        expires_at = NOW() + make_interval(mins => %s),
+                        sku_snapshot = %s, nombre_snapshot = %s, updated_at = NOW()
+                    WHERE reserva_id = %s
+                    RETURNING reserva_id
+                    """,
+                    (int(reservation_config["vigencia_minutos"]), frame["sku"], frame["nombre"], row["old_reservation_id"]),
+                )
                 new_reservation_id = int(cur.fetchone()["reserva_id"])
                 cur.execute("UPDATE core.online_borradores_opticos SET estado=CASE WHEN prescription_status='provided' THEN 'listo_para_pago' ELSE 'pendiente_receta' END, expirado_at=NULL, updated_at=NOW() WHERE borrador_id=%s", (row["borrador_id"],))
                 cur.execute("SELECT carrito_item_id, configuracion FROM core.online_carrito_items WHERE activo=TRUE AND configuracion->>'opticalDraftId'=%s FOR UPDATE", (public_id,))

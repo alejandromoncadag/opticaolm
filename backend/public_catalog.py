@@ -21,7 +21,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel
 import psycopg
 from psycopg.rows import dict_row
-from online_product_policy import is_direct_purchase_product
+from online_product_policy import is_online_purchase_product
 
 
 CATALOG_SCHEMA_VERSION = "1.0"
@@ -380,7 +380,7 @@ class PublicCatalogRepository:
             )
             can_purchase = bool(
                 settings["purchasable"]
-                and is_direct_purchase_product(row)
+                and is_online_purchase_product(row)
             )
             products.append(
                 PublicCatalogProduct(

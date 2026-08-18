@@ -13,6 +13,27 @@ PURCHASABLE_CATEGORIES = {
 }
 
 
+def is_configurable_optical_product(product: Mapping[str, Any]) -> bool:
+    """Return whether a stocked eyewear product can use the optical configurator."""
+    category = str(product.get("categoria") or "")
+    subcategory = str(product.get("subcategoria") or "")
+    return (
+        str(product.get("tipo_producto") or "") == "producto_fisico"
+        and bool(product.get("controla_stock"))
+        and bool(product.get("activo", True))
+        and bool(product.get("publicado_online", True))
+        and (
+            (category == "lentes_opticos" and subcategory in {"armazon", "clip_on"})
+            or (category == "lentes_de_sol" and subcategory == "armazon")
+        )
+    )
+
+
+def is_online_purchase_product(product: Mapping[str, Any]) -> bool:
+    """Return whether a published product is eligible for an online purchase path."""
+    return is_direct_purchase_product(product) or is_configurable_optical_product(product)
+
+
 def is_direct_purchase_product(product: Mapping[str, Any]) -> bool:
     """Return whether a product type is eligible for a simple online cart line."""
     category = str(product.get("categoria") or "")

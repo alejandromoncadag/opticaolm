@@ -12,6 +12,7 @@ from decimal import Decimal
 import hashlib
 import json
 import os
+import re
 import secrets
 from typing import Any, Callable, Literal
 from uuid import UUID, uuid4
@@ -179,6 +180,19 @@ class CreateFulfillmentRequest(BaseModel):
     address: AddressInput | None = None
     pickupBranchId: int | None = Field(default=None, gt=0)
     opticalDraftId: str | None = Field(default=None, min_length=1, max_length=80)
+    couponCode: str | None = Field(default=None, max_length=40)
+
+    @field_validator("couponCode")
+    @classmethod
+    def normalize_coupon(cls, value: str | None) -> str | None:
+        if value is None or not value.strip():
+            return None
+        normalized = value.strip().upper()
+        if not re.fullmatch(r"[A-Z0-9]+", normalized):
+            raise ValueError("El cupón solo puede contener letras y números.")
+        if normalized != "NEW":
+            raise ValueError("El cupón no es válido.")
+        return normalized
 
 
 class SelectOptionRequest(BaseModel):
@@ -238,6 +252,46 @@ class CarrierUpdateInput(BaseModel):
 
 
 class FulfillmentRepository:
+    @staticmethod
+    def _inventory_item(item: dict[str, Any]) -> bool:
+        """Components are always available in development; physical frames remain checked."""
+        return bool(item["controla_stock"] and item["tipo_producto"] == "producto_fisico")
+
+    @staticmethod
+    def _optical_hold_quantity(cur, item: dict[str, Any], branch_id: int) -> int:
+        optical_id = (item.get("configuracion") or {}).get("opticalDraftId")
+        if not optical_id:
+            return 0
+        cur.execute(
+            """
+            SELECT reservation.cantidad
+            FROM core.online_borradores_opticos draft
+            JOIN core.online_configuraciones_opticas_borrador config USING (borrador_id)
+            JOIN core.online_reservas_opticas_borrador reservation USING (borrador_id)
+            WHERE (draft.borrador_public_id::text = %s OR draft.borrador_id::text = %s)
+              AND config.armazon_producto_id = %s
+              AND reservation.sucursal_id = %s
+              AND reservation.estado = 'activa'
+              AND reservation.expires_at > NOW()
+            FOR SHARE OF reservation
+            """,
+            (str(optical_id), str(optical_id), int(item["producto_id"]), branch_id),
+        )
+        row = cur.fetchone()
+        return int(row["cantidad"]) if row else 0
+
+    @staticmethod
+    def _coupon_values(items: list[dict[str, Any]], code: str | None) -> tuple[Decimal, Decimal, Decimal]:
+        gross = sum(
+            Decimal(item["precio_reconocido"] if (item.get("configuracion") or {}).get("opticalDraftId") else item["precio"])
+            * int(item["cantidad"])
+            for item in items
+        )
+        if (code or "").strip().upper() != "NEW":
+            return gross, Decimal("0.00"), gross
+        discount = (gross * Decimal("0.50")).quantize(Decimal("0.01"))
+        return gross, discount, gross - discount
+
     def __init__(self, config: FulfillmentConfig, connect: Callable[..., Any] = psycopg.connect):
         self.config = config
         self._connect = connect
@@ -370,8 +424,9 @@ class FulfillmentRepository:
                 if not optical_valid:
                     raise FulfillmentRuleError(409, "OPTICAL_CART_STALE", "Tu reserva temporal venció. Verificaremos nuevamente la disponibilidad de tu armazón.")
             if not (
-                item["activo"] and item["publicado_online"] and (optical_id or item["comprable_online"])
-                and item["tipo_producto"] == "producto_fisico"
+                item["activo"] and item["publicado_online"]
+                and (optical_id or item["comprable_online"] or item["tipo_producto"] == "componente_mica")
+                and item["tipo_producto"] in {"producto_fisico", "componente_mica"}
                 and not item["requiere_revision"]
                 and (optical_id or Decimal(item["precio_reconocido"]) == Decimal(item["precio"]))
             ):
@@ -400,6 +455,7 @@ class FulfillmentRepository:
                     "unitPrice": f"{Decimal(item['precio_reconocido'] if (item.get('configuracion') or {}).get('opticalDraftId') else item['precio']):.2f}",
                     "currency": str(item["moneda"]).strip(),
                     "controlsStock": bool(item["controla_stock"]),
+                    "productType": item["tipo_producto"],
                     "configurationHash": item["configuracion_hash"],
                     "configuration": item.get("configuracion") or {},
                     "productUpdatedAt": item["updated_at"],
@@ -513,7 +569,7 @@ class FulfillmentRepository:
 
     @staticmethod
     def _eligible_branches(cur, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        controlled = [item for item in items if item["controla_stock"]]
+        controlled = [item for item in items if FulfillmentRepository._inventory_item(item)]
         cur.execute(
             """
             SELECT sucursal_id, nombre, codigo, ciudad, estado, calle, numero,
@@ -537,6 +593,7 @@ class FulfillmentRepository:
                 )
                 inventory = cur.fetchone()
                 available = int(inventory["disponible"]) if inventory and inventory["disponible_venta"] else 0
+                available += FulfillmentRepository._optical_hold_quantity(cur, item, int(branch["sucursal_id"]))
                 valid = valid and available >= int(item["cantidad"])
                 availability.append(
                     {"productId": str(item["producto_id"]), "requested": int(item["cantidad"]), "available": available}
@@ -552,7 +609,7 @@ class FulfillmentRepository:
         if not branch or not branch["activa"]:
             return False
         for item in cart_snapshot["items"]:
-            if not item["controlsStock"]:
+            if not item["controlsStock"] or item.get("productType") == "componente_mica":
                 continue
             cur.execute(
                 """
@@ -563,7 +620,9 @@ class FulfillmentRepository:
                 (branch_id, int(item["productId"])),
             )
             inventory = cur.fetchone()
-            if not inventory or not inventory["disponible_venta"] or int(inventory["disponible"]) < item["quantity"]:
+            available = int(inventory["disponible"]) if inventory and inventory["disponible_venta"] else 0
+            available += FulfillmentRepository._optical_hold_quantity(cur, item, branch_id)
+            if not inventory or not inventory["disponible_venta"] or available < item["quantity"]:
                 return False
         return True
 
@@ -703,6 +762,8 @@ class FulfillmentRepository:
                 cart, items = self._cart(cur, owner)
                 optical_draft_id = data.opticalDraftId
                 cart_snapshot, fingerprint = self._cart_snapshot(cart, items)
+                if data.couponCode:
+                    cart_snapshot["couponCode"] = data.couponCode
                 packages = self._packages(cur, items) if data.method == "shipping" else []
                 branches = self._eligible_branches(cur, items)
                 if data.method == "shipping":
@@ -777,7 +838,7 @@ class FulfillmentRepository:
                     branch = branches[0]["branch"]
                     cur.execute("SELECT usuario_id FROM core.usuarios WHERE rol = 'admin' AND activo = TRUE ORDER BY usuario_id LIMIT 1")
                     admin = cur.fetchone()
-                    subtotal = sum(Decimal(item["precio_reconocido"]) * int(item["cantidad"]) for item in items)
+                    subtotal, _discount, _net = self._coupon_values(items, data.couponCode)
                     amount = Decimal("0.00") if subtotal >= Decimal("1100.00") else self.config.default_shipping_price
                     if amount == Decimal("0.00") and not admin:
                         raise FulfillmentRuleError(503, "DEFAULT_SHIPPING_UNAVAILABLE", "No pudimos confirmar el envío gratis para este pedido.")
@@ -977,14 +1038,18 @@ class FulfillmentRepository:
         current_snapshot, fingerprint = self._cart_snapshot(cart, items)
         if fingerprint != request["carrito_fingerprint"]:
             raise FulfillmentRuleError(409, "CART_CHANGED", "The cart changed. Create a new shipping request.")
-        subtotal = sum(Decimal(item["precio"]) * int(item["cantidad"]) for item in items)
+        gross_subtotal, discount, subtotal = self._coupon_values(items, request["carrito_snapshot"].get("couponCode"))
         shipping = Decimal(option["monto"])
         preview = {
             "label": "Checkout preview - not an order or invoice",
             "requestId": str(request["solicitud_public_id"]),
             "cart": current_snapshot,
             "fulfillment": self._option_payload(option),
-            "subtotal": f"{subtotal:.2f}", "shipping": f"{shipping:.2f}",
+            "subtotal": f"{gross_subtotal:.2f}",
+            "discount": f"{discount:.2f}",
+            "discountCode": "NEW" if discount else None,
+            "netSubtotal": f"{subtotal:.2f}",
+            "shipping": f"{shipping:.2f}",
             "total": f"{subtotal + shipping:.2f}", "currency": "MXN",
             "reservationCreated": False, "orderCreated": False,
         }
@@ -1195,6 +1260,45 @@ class FulfillmentRepository:
             cur.execute(self._reservation_query() + " FOR UPDATE", (reservation_id,))
             reservation = cur.fetchone()
             if reservation and reservation["estado"] == "activa" and reservation["expires_at"] <= datetime.now(timezone.utc):
+                cur.execute(
+                    """
+                    SELECT line.producto_id, line.sucursal_id, line.cantidad,
+                           inventory.stock_reservado
+                    FROM core.online_reserva_lineas line
+                    LEFT JOIN core.catalogo_inventario_sucursal inventory
+                      ON inventory.producto_id = line.producto_id
+                     AND inventory.sucursal_id = line.sucursal_id
+                    WHERE line.reserva_id = %s
+                    """,
+                    (reservation_id,),
+                )
+                inconsistent = any(
+                    row["stock_reservado"] is None
+                    or int(row["stock_reservado"]) < int(row["cantidad"])
+                    for row in cur.fetchall()
+                )
+                if inconsistent:
+                    # A stale local reservation may already have had its stock
+                    # released. Mark it terminal without decrementing again;
+                    # never make inventory negative just to clean old state.
+                    cur.execute(
+                        """
+                        UPDATE core.online_reservas
+                        SET estado = 'expirada', released_at = NOW(), updated_at = NOW()
+                        WHERE reserva_id = %s AND estado = 'activa'
+                        """,
+                        (reservation_id,),
+                    )
+                    cur.execute(
+                        """
+                        INSERT INTO core.online_reserva_eventos
+                            (reserva_id, evento_tipo, actor_tipo, metadata)
+                        VALUES (%s, 'reservation_expired_inconsistent_state', 'sistema', %s::jsonb)
+                        """,
+                        (reservation_id, _canonical({"stockReleaseSkipped": True})),
+                    )
+                    released += 1
+                    continue
                 self._release_reservation(cur, reservation, status="expirada", actor_type="sistema")
                 released += 1
         return released
@@ -1286,7 +1390,7 @@ class FulfillmentRepository:
                 expires = datetime.fromtimestamp(expires_at, tz=timezone.utc)
                 if expires <= now:
                     raise FulfillmentRuleError(409, "RESERVATION_WINDOW_EXPIRED", "The reservation window has expired.")
-                controlled = [item for item in items if item["controla_stock"]]
+                controlled = [item for item in items if self._inventory_item(item)]
                 inventory_rows: list[tuple[dict[str, Any], dict[str, Any]]] = []
                 for item in sorted(controlled, key=lambda value: (int(option["sucursal_id"]), int(value["producto_id"]), int(value["carrito_item_id"]))):
                     cur.execute(
@@ -1300,6 +1404,7 @@ class FulfillmentRepository:
                     )
                     inventory = cur.fetchone()
                     available = int(inventory["stock"] - inventory["stock_reservado"]) if inventory and inventory["disponible_venta"] else 0
+                    available += self._optical_hold_quantity(cur, item, int(option["sucursal_id"]))
                     if not inventory or not inventory["disponible_venta"] or available < int(item["cantidad"]):
                         raise FulfillmentRuleError(409, "INSUFFICIENT_AVAILABLE_STOCK", "The selected branch cannot reserve the complete cart.", {"productId": str(item["producto_id"]), "available": available})
                     inventory_rows.append((item, inventory))
@@ -1629,9 +1734,9 @@ class FulfillmentRepository:
                     "quoteIdentifier": reservation["quote_identifier"],
                     "expiresAt": reservation["option_expires_at"],
                 })
-                subtotal = sum(Decimal(item["unitPrice"]) * int(item["quantity"]) for item in cart_snapshot["items"])
+                subtotal = Decimal(preview["subtotal"])
                 shipping = Decimal("0") if quote_snapshot is None else Decimal(reservation["option_amount"])
-                total = subtotal + shipping
+                total = Decimal(preview["total"])
                 cur.execute(
                     """
                     INSERT INTO core.online_ordenes (

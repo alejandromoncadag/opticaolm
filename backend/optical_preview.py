@@ -16,6 +16,7 @@ import psycopg
 from psycopg.rows import dict_row
 
 from public_catalog import PublicCatalogConfig, catalog_credentials_valid
+from online_product_policy import is_configurable_optical_product
 
 
 OPTICAL_PREVIEW_SCHEMA_VERSION = "1.0"
@@ -138,14 +139,7 @@ class OpticalPreviewRepository:
     def _validate_frame(frame: dict[str, Any] | None) -> dict[str, Any]:
         if frame is None:
             raise HTTPException(status_code=404, detail="Optical frame not found.")
-        valid = (
-            frame["categoria"] == "lentes_opticos"
-            and frame["subcategoria"] == "armazon"
-            and frame["tipo_producto"] == "producto_fisico"
-            and frame["controla_stock"] is True
-            and frame["activo"] is True
-            and frame["publicado_online"] is True
-        )
+        valid = is_configurable_optical_product(frame)
         if not valid:
             raise HTTPException(status_code=400, detail="Product is not an eligible optical frame.")
         return frame

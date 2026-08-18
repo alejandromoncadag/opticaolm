@@ -29,7 +29,7 @@ import os
 from dotenv import load_dotenv
 from public_catalog import create_public_catalog_router
 from online_commerce import create_online_commerce_router
-from online_product_policy import is_direct_purchase_product
+from online_product_policy import is_configurable_optical_product, is_online_purchase_product
 from optical_preview import create_optical_preview_router
 from online_optical_drafts import create_online_optical_drafts_router
 from optical_operations import (
@@ -5050,7 +5050,7 @@ def actualizar_comercio_online_producto(
                 "tipo_producto": producto[5],
                 "controla_stock": producto[6],
             }
-            if data.comprable_online and not is_direct_purchase_product(product_policy):
+            if data.comprable_online and not is_online_purchase_product(product_policy):
                 raise HTTPException(
                     status_code=422,
                     detail=(
@@ -5120,7 +5120,7 @@ def actualizar_comercio_online_producto(
         "comprable_efectivo": bool(
             storefront_activo
             and data.comprable_online
-            and is_direct_purchase_product(product_policy)
+            and is_online_purchase_product(product_policy)
         ),
         "favorito_efectivo": bool(storefront_activo and data.permite_favorito),
         "updated": True,
@@ -5620,10 +5620,8 @@ def _phase1b_prepare_lines(
         if config_type == "par_completo":
             if frame is None or design is None:
                 raise HTTPException(status_code=400, detail="Un par completo requiere armazón y diseño.")
-            if frame["categoria"] not in {"lentes_opticos", "lentes_de_sol"} or frame["subcategoria"] != "armazon":
+            if not is_configurable_optical_product(frame):
                 raise HTTPException(status_code=400, detail="El armazón seleccionado no es válido.")
-            if frame["categoria"] == "lentes_de_sol" and not frame["permite_graduacion"]:
-                raise HTTPException(status_code=400, detail="Este modelo de lentes de sol no permite graduación.")
         elif config_type == "solo_micas":
             if frame is not None or design is None:
                 raise HTTPException(status_code=400, detail="Solo micas usa el armazón del cliente y requiere diseño.")
