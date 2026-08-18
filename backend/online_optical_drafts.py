@@ -38,6 +38,11 @@ from optical_operations import (
 
 OPTICAL_DRAFT_SCHEMA_VERSION = "1.0"
 TERMINAL_STATES = {"cancelado", "expirado"}
+# A prescription may still be pending validation while the customer buys.
+# Production/lab readiness applies a stricter rule in optical_operations.py.
+PURCHASABLE_PRESCRIPTION_STATUSES = {
+    "provided", "received_pending_validation", "pending", "exam_requested",
+}
 
 
 def _canonical(value: Any) -> str:
@@ -87,6 +92,15 @@ class CreateOpticalDraftRequest(BaseModel):
     intendedUse: Literal[
         "lejos", "cerca", "intermedio", "multifocal", "sin_graduacion", "otro"
     ] | None = None
+
+
+class AttachOpticalDraftToCartRequest(BaseModel):
+    """Client echoes the preview values; the server remains authoritative."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    previewFingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
+    configuredTotal: Decimal = Field(gt=0)
 
 
 @dataclass(frozen=True)
@@ -239,11 +253,11 @@ def convert_optical_reservation(
                ON reservation.borrador_id = draft.borrador_id
              JOIN core.online_configuraciones_opticas_borrador config
                ON config.borrador_id = draft.borrador_id
-            WHERE draft.borrador_public_id = %s
+            WHERE (draft.borrador_public_id::text = %s OR draft.borrador_id::text = %s)
               AND draft.propietario_tipo = %s
               AND draft.propietario_ref_hash = %s
             FOR UPDATE OF draft, reservation, config""",
-        (draft_public_id, owner.db_type, owner.owner_hash),
+        (draft_public_id, draft_public_id, owner.db_type, owner.owner_hash),
     )
     row = cur.fetchone()
     if not row:
@@ -256,8 +270,8 @@ def convert_optical_reservation(
         raise OpticalDraftRuleError(409, "OPTICAL_DRAFT_INACTIVE", "Optical draft is no longer active.")
     if row["expires_at"] <= datetime.now(timezone.utc):
         raise OpticalDraftRuleError(409, "OPTICAL_RESERVATION_EXPIRED", "Optical frame reservation has expired.")
-    if row["prescription_status"] != "provided":
-        raise OpticalDraftRuleError(409, "OPTICAL_PRESCRIPTION_PENDING", "Prescription must be completed before checkout.")
+    if row["prescription_status"] not in PURCHASABLE_PRESCRIPTION_STATUSES:
+        raise OpticalDraftRuleError(409, "OPTICAL_PRESCRIPTION_STATUS_INVALID", "El estado de la receta no permite continuar con este pedido.")
     if expected_fingerprint and str(row["preview_fingerprint"]) != expected_fingerprint:
         raise OpticalDraftRuleError(409, "OPTICAL_FINGERPRINT_MISMATCH", "Optical configuration has changed.")
     if expected_total and str(row["total_configurado_snapshot"]) != expected_total:
@@ -269,7 +283,8 @@ def convert_optical_reservation(
         (normal_reservation_id,),
     )
     lines = cur.fetchall()
-    if len(lines) != 1 or int(lines[0]["producto_id"]) != int(row["armazon_producto_id"]) or int(lines[0]["sucursal_id"]) != int(row["sucursal_id"]) or int(lines[0]["cantidad"]) != int(row["cantidad"]):
+    matching_lines = [line for line in lines if int(line["producto_id"]) == int(row["armazon_producto_id"]) and int(line["sucursal_id"]) == int(row["sucursal_id"])]
+    if len(matching_lines) != 1 or int(matching_lines[0]["cantidad"]) != int(row["cantidad"]):
         raise OpticalDraftRuleError(409, "OPTICAL_RESERVATION_MISMATCH", "Checkout reservation does not match the optical frame reservation.")
     cur.execute(
         """UPDATE core.online_reservas_opticas_borrador
@@ -297,6 +312,118 @@ class OpticalDraftRepository:
 
     def _connection(self):
         return self.connect(self.config.db_conninfo, row_factory=dict_row)
+
+    def attach_to_cart(
+        self,
+        owner: CommerceOwner,
+        draft_public_id: str,
+        data: AttachOpticalDraftToCartRequest,
+        key: str,
+    ) -> dict[str, Any]:
+        """Attach one active optical draft to the owner's normal cart.
+
+        This is deliberately separate from the generic cart mutation: an optical
+        line is allowed to carry its authoritative configured price and snapshot,
+        while ordinary cart items retain their existing rules.
+        """
+        payload = {"draftPublicId": draft_public_id, **data.model_dump(mode="json")}
+        with self._connection() as conn:
+            with conn.cursor() as cur:
+                idem_id, cached = self._idempotency_begin(cur, owner, "optical_draft_cart_attach", key, payload)
+                if cached is not None:
+                    conn.commit()
+                    return cached
+                cur.execute(
+                    """
+                    SELECT draft.*, reservation.reserva_id AS optical_reservation_id,
+                           reservation.armazon_producto_id,
+                           reservation.reserva_public_id, reservation.estado AS reservation_state,
+                           reservation.expires_at, reservation.released_at,
+                           reservation.configuracion_hash AS reservation_fingerprint,
+                           config.snapshot_comercial, config.configuracion_hash,
+                           config.armazon_producto_id, config.diseno_producto_id,
+                           config.tratamiento_producto_id, config.variante_id
+                    FROM core.online_borradores_opticos draft
+                    JOIN core.online_reservas_opticas_borrador reservation
+                      ON reservation.borrador_id = draft.borrador_id
+                    JOIN core.online_configuraciones_opticas_borrador config
+                      ON config.borrador_id = draft.borrador_id
+                    WHERE (draft.borrador_public_id::text = %s OR draft.borrador_id::text = %s)
+                      AND draft.propietario_tipo = %s AND draft.propietario_ref_hash = %s
+                    FOR UPDATE OF draft, reservation, config
+                    """,
+                    (draft_public_id, draft_public_id, owner.db_type, owner.owner_hash),
+                )
+                row = cur.fetchone()
+                if not row:
+                    raise OpticalDraftRuleError(404, "OPTICAL_DRAFT_NOT_FOUND", "Optical draft was not found.")
+                now = datetime.now(timezone.utc)
+                if row["estado"] in TERMINAL_STATES:
+                    raise OpticalDraftRuleError(409, "OPTICAL_DRAFT_INACTIVE", "Optical draft is no longer active.")
+                if row["reservation_state"] != "activa" or row["expires_at"] <= now:
+                    raise OpticalDraftRuleError(409, "OPTICAL_RESERVATION_EXPIRED", "Optical frame reservation has expired.")
+                if row["prescription_status"] not in PURCHASABLE_PRESCRIPTION_STATUSES:
+                    raise OpticalDraftRuleError(409, "OPTICAL_PRESCRIPTION_STATUS_INVALID", "El estado de la receta no permite agregar estas gafas al carrito.")
+                authoritative_total = Decimal(row["total_configurado_snapshot"]).quantize(Decimal("0.01"))
+                try:
+                    current_preview = self.preview_repository.preview_in_transaction(
+                        cur,
+                        OpticalPreviewRequest(
+                            frameProductId=int(row["armazon_producto_id"]),
+                            lensDesignProductId=int(row["diseno_producto_id"]),
+                            treatmentProductId=int(row["tratamiento_producto_id"]) if row["tratamiento_producto_id"] else None,
+                            treatmentVariantId=int(row["variante_id"]) if row["variante_id"] else None,
+                        ),
+                        lock_catalog=True,
+                    )
+                except HTTPException as exc:
+                    raise OpticalDraftRuleError(409, "OPTICAL_PREVIEW_STALE", "The optical configuration is no longer available.") from exc
+                if (str(current_preview.previewFingerprint) != str(row["preview_fingerprint"])
+                        or Decimal(current_preview.configuredTotal).quantize(Decimal("0.01")) != authoritative_total):
+                    raise OpticalDraftRuleError(409, "OPTICAL_PREVIEW_STALE", "The optical configuration changed. Review it before continuing.")
+                if str(row["preview_fingerprint"]) != data.previewFingerprint:
+                    raise OpticalDraftRuleError(409, "OPTICAL_PREVIEW_STALE", "The optical configuration changed. Review it before continuing.")
+                if authoritative_total != data.configuredTotal.quantize(Decimal("0.01")):
+                    raise OpticalDraftRuleError(409, "OPTICAL_TOTAL_STALE", "The optical price changed. Review it before continuing.")
+                snapshot = row["snapshot_comercial"] or {}
+                configuration = {
+                    "opticalDraftId": str(row["borrador_public_id"]),
+                    "frame": snapshot.get("frame"),
+                    "lensDesign": snapshot.get("lensDesign"),
+                    "treatment": snapshot.get("treatment"),
+                    "variant": snapshot.get("variant"),
+                    "prescriptionMethod": row["prescription_method"],
+                    "prescriptionStatus": row["prescription_status"],
+                    "configuredTotal": f"{authoritative_total:.2f}",
+                    "previewFingerprint": str(row["preview_fingerprint"]),
+                    "reservation": {
+                        "reservationPublicId": str(row["reserva_public_id"]),
+                        "status": row["reservation_state"],
+                        "expiresAt": row["expires_at"].isoformat(),
+                    },
+                }
+                configuration_hash = _hash(configuration)
+                cur.execute("SELECT * FROM core.online_carritos WHERE propietario_tipo=%s AND propietario_ref_hash=%s AND estado='activo' ORDER BY carrito_id DESC LIMIT 1 FOR UPDATE", (owner.db_type, owner.owner_hash))
+                cart = cur.fetchone()
+                if not cart:
+                    cur.execute("INSERT INTO core.online_carritos (propietario_tipo, propietario_ref_hash, expira_at) VALUES (%s,%s,CASE WHEN %s='invitado' THEN NOW() + INTERVAL '30 days' ELSE NULL END) RETURNING *", (owner.db_type, owner.owner_hash, owner.db_type))
+                    cart = cur.fetchone()
+                cur.execute("SELECT producto_id, sku, slug, nombre, precio, updated_at FROM core.catalogo_productos WHERE producto_id=%s FOR SHARE", (row["armazon_producto_id"],))
+                product = cur.fetchone()
+                if not product:
+                    raise OpticalDraftRuleError(409, "OPTICAL_FRAME_MISSING", "The reserved frame is no longer available.")
+                cur.execute("SELECT * FROM core.online_carrito_items WHERE carrito_id=%s AND activo=TRUE AND configuracion->>'opticalDraftId'=%s FOR UPDATE", (cart["carrito_id"], str(row["borrador_public_id"])))
+                item = cur.fetchone()
+                if item:
+                    cur.execute("UPDATE core.online_carrito_items SET cantidad=1, configuracion=%s::jsonb, configuracion_hash=%s, precio_reconocido=%s, precio_observado=%s, requiere_revision=FALSE, updated_at=NOW() WHERE carrito_item_id=%s RETURNING carrito_item_id", (_canonical(configuration), configuration_hash, authoritative_total, product["precio"], item["carrito_item_id"]))
+                else:
+                    cur.execute("INSERT INTO core.online_carrito_items (carrito_id, producto_id, sku_snapshot, slug_snapshot, nombre_snapshot, cantidad, configuracion, configuracion_hash, precio_observado, precio_reconocido, producto_updated_at_observado, requiere_revision) VALUES (%s,%s,%s,%s,%s,1,%s::jsonb,%s,%s,%s,%s,FALSE) RETURNING carrito_item_id", (cart["carrito_id"], product["producto_id"], product["sku"], product["slug"], product["nombre"], _canonical(configuration), configuration_hash, product["precio"], authoritative_total, product["updated_at"] or now))
+                item_id = int(cur.fetchone()["carrito_item_id"])
+                cur.execute("UPDATE core.online_carritos SET ultima_actividad_at=NOW(), updated_at=NOW(), version=version+1 WHERE carrito_id=%s", (cart["carrito_id"],))
+                result = {"schemaVersion": OPTICAL_DRAFT_SCHEMA_VERSION, "cartId": str(cart["carrito_id"]), "cartItemId": str(item_id), "opticalDraftId": str(row["borrador_public_id"]), "configuration": _safe(configuration), "configuredTotal": f"{authoritative_total:.2f}", "reservation": _safe(configuration["reservation"])}
+                self._idempotency_finish(cur, idem_id, result, item_id)
+            conn.commit()
+            return result
 
     @staticmethod
     def _idempotency_begin(cur, owner: CommerceOwner, scope: str, key: str, payload: dict[str, Any]):
@@ -468,11 +595,13 @@ class OpticalDraftRepository:
                          prescription_method, prescription_status, estado_pago,
                          sucursal_id, moneda, total_configurado_snapshot,
                          preview_fingerprint, preview_schema_version)
-                    VALUES (%s, %s, 'pendiente_receta', %s, 'pending', 'sin_pago',
+                    VALUES (%s, %s, 'pendiente_receta', %s,
+                            CASE WHEN %s = 'exam' THEN 'exam_requested' ELSE 'pending' END,
+                            'sin_pago',
                             %s, %s, %s, %s, %s)
                     RETURNING borrador_id
                     """,
-                    (owner.db_type, owner.owner_hash, data.prescriptionMethod, data.branchId,
+                    (owner.db_type, owner.owner_hash, data.prescriptionMethod, data.prescriptionMethod, data.branchId,
                      preview.currency, Decimal(preview.configuredTotal), preview.previewFingerprint,
                      OPTICAL_PREVIEW_SCHEMA_VERSION),
                 )
@@ -532,6 +661,96 @@ class OpticalDraftRepository:
                 create_job_for_online_draft(cur, draft_id)
                 result = self._draft_payload(cur, draft_id)
                 self._idempotency_finish(cur, idem_id, result, draft_id)
+            conn.commit()
+        return result
+
+    def refresh_reservation(self, owner: CommerceOwner, public_id: str, key: str) -> dict[str, Any]:
+        """Revalidate and renew one expired optical draft hold atomically."""
+        payload = {"draftPublicId": public_id}
+        with self._connection() as conn:
+            with conn.cursor() as cur:
+                idem_id, cached = self._idempotency_begin(cur, owner, "optical_reservation_refresh", key, payload)
+                if cached is not None:
+                    conn.commit()
+                    return cached
+                cur.execute(
+                    """SELECT draft.*, reservation.reserva_id AS old_reservation_id,
+                              reservation.estado AS reservation_state, reservation.expires_at,
+                              reservation.converted_reserva_id,
+                              reservation.armazon_producto_id, reservation.sucursal_id,
+                              reservation.cantidad, config.configuracion_id,
+                              config.configuracion_hash, config.diseno_producto_id,
+                              config.tratamiento_producto_id, config.variante_id
+                         FROM core.online_borradores_opticos draft
+                         JOIN core.online_reservas_opticas_borrador reservation USING (borrador_id)
+                         JOIN core.online_configuraciones_opticas_borrador config USING (borrador_id)
+                        WHERE draft.borrador_public_id=%s
+                          AND draft.propietario_tipo=%s AND draft.propietario_ref_hash=%s
+                        ORDER BY reservation.created_at DESC LIMIT 1
+                        FOR UPDATE OF draft, reservation, config""",
+                    (public_id, owner.db_type, owner.owner_hash),
+                )
+                row = cur.fetchone()
+                if not row:
+                    raise OpticalDraftRuleError(404, "OPTICAL_DRAFT_NOT_FOUND", "No encontramos la configuración óptica.")
+                if row["estado"] == "cancelado":
+                    raise OpticalDraftRuleError(409, "OPTICAL_DRAFT_CANCELLED", "Este pedido óptico fue cancelado.")
+                if row["converted_reserva_id"]:
+                    raise OpticalDraftRuleError(409, "OPTICAL_DRAFT_ALREADY_CONVERTED", "Este pedido óptico ya está en proceso de checkout.")
+                now = datetime.now(timezone.utc)
+                if row["reservation_state"] == "activa" and row["expires_at"] > now:
+                    result = self._draft_payload(cur, int(row["borrador_id"]))
+                    self._idempotency_finish(cur, idem_id, result, int(row["old_reservation_id"]))
+                    conn.commit()
+                    return result
+                current = self.preview_repository.preview_in_transaction(
+                    cur,
+                    OpticalPreviewRequest(
+                        frameProductId=int(row["armazon_producto_id"]),
+                        lensDesignProductId=int(row["diseno_producto_id"]),
+                        treatmentProductId=int(row["tratamiento_producto_id"]) if row["tratamiento_producto_id"] else None,
+                        treatmentVariantId=int(row["variante_id"]) if row["variante_id"] else None,
+                    ), lock_catalog=True,
+                )
+                if str(current.previewFingerprint) != str(row["preview_fingerprint"]) or Decimal(current.configuredTotal).quantize(Decimal("0.01")) != Decimal(row["total_configurado_snapshot"]).quantize(Decimal("0.01")):
+                    raise OpticalDraftRuleError(409, "OPTICAL_PREVIEW_STALE", "La configuración o el precio de tus lentes cambiaron. Revísalos antes de continuar.")
+                cur.execute("SELECT activa, vigencia_minutos FROM core.online_reserva_configuracion WHERE configuracion_id=1 FOR SHARE")
+                reservation_config = cur.fetchone()
+                if not reservation_config or not reservation_config["activa"]:
+                    raise OpticalDraftRuleError(503, "OPTICAL_RESERVATIONS_DISABLED", "Las reservas temporales no están disponibles por el momento.")
+                cur.execute("SELECT stock, stock_reservado, disponible_venta FROM core.catalogo_inventario_sucursal WHERE producto_id=%s AND sucursal_id=%s FOR UPDATE", (row["armazon_producto_id"], row["sucursal_id"]))
+                inventory = cur.fetchone()
+                old_hold = row["reservation_state"] == "activa"
+                if old_hold:
+                    if not inventory or int(inventory["stock_reservado"]) < int(row["cantidad"]):
+                        raise OpticalDraftRuleError(409, "OPTICAL_RESERVATION_INTEGRITY_ERROR", "No pudimos validar de forma segura la reserva anterior.")
+                    cur.execute("UPDATE core.catalogo_inventario_sucursal SET stock_reservado=stock_reservado-%s, version=version+1, updated_at=NOW() WHERE producto_id=%s AND sucursal_id=%s AND stock_reservado >= %s", (row["cantidad"], row["armazon_producto_id"], row["sucursal_id"], row["cantidad"]))
+                    if cur.rowcount != 1:
+                        raise OpticalDraftRuleError(409, "OPTICAL_RESERVATION_INTEGRITY_ERROR", "No pudimos liberar de forma segura la reserva anterior.")
+                    cur.execute("UPDATE core.online_reservas_opticas_borrador SET estado='expirada', released_at=NOW(), updated_at=NOW() WHERE reserva_id=%s AND estado='activa'", (row["old_reservation_id"],))
+                cur.execute("SELECT stock, stock_reservado, disponible_venta FROM core.catalogo_inventario_sucursal WHERE producto_id=%s AND sucursal_id=%s FOR UPDATE", (row["armazon_producto_id"], row["sucursal_id"]))
+                inventory = cur.fetchone()
+                if not inventory or not inventory["disponible_venta"] or int(inventory["stock"]) - int(inventory["stock_reservado"]) < int(row["cantidad"]):
+                    raise OpticalDraftRuleError(409, "FRAME_OUT_OF_STOCK", "Este armazón ya no está disponible por el momento.")
+                cur.execute("UPDATE core.catalogo_inventario_sucursal SET stock_reservado=stock_reservado+%s, version=version+1, updated_at=NOW() WHERE producto_id=%s AND sucursal_id=%s AND disponible_venta=TRUE AND stock-stock_reservado >= %s", (row["cantidad"], row["armazon_producto_id"], row["sucursal_id"], row["cantidad"]))
+                if cur.rowcount != 1:
+                    raise OpticalDraftRuleError(409, "FRAME_OUT_OF_STOCK", "Este armazón ya no está disponible por el momento.")
+                cur.execute("SELECT sku, nombre FROM core.catalogo_productos WHERE producto_id=%s", (row["armazon_producto_id"],))
+                frame = cur.fetchone()
+                cur.execute("""INSERT INTO core.online_reservas_opticas_borrador (borrador_id,configuracion_id,armazon_producto_id,sucursal_id,cantidad,configuracion_hash,sku_snapshot,nombre_snapshot,expires_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,NOW()+make_interval(mins=>%s)) RETURNING reserva_id""", (row["borrador_id"], row["configuracion_id"], row["armazon_producto_id"], row["sucursal_id"], row["cantidad"], row["configuracion_hash"], frame["sku"], frame["nombre"], int(reservation_config["vigencia_minutos"])))
+                new_reservation_id = int(cur.fetchone()["reserva_id"])
+                cur.execute("UPDATE core.online_borradores_opticos SET estado=CASE WHEN prescription_status='provided' THEN 'listo_para_pago' ELSE 'pendiente_receta' END, expirado_at=NULL, updated_at=NOW() WHERE borrador_id=%s", (row["borrador_id"],))
+                cur.execute("SELECT carrito_item_id, configuracion FROM core.online_carrito_items WHERE activo=TRUE AND configuracion->>'opticalDraftId'=%s FOR UPDATE", (public_id,))
+                cart_item = cur.fetchone()
+                if cart_item:
+                    configuration = cart_item["configuracion"] or {}
+                    cur.execute("SELECT reserva_public_id, expires_at FROM core.online_reservas_opticas_borrador WHERE reserva_id=%s", (new_reservation_id,))
+                    refreshed = cur.fetchone()
+                    configuration["reservation"] = {"reservationPublicId": str(refreshed["reserva_public_id"]), "status": "activa", "expiresAt": refreshed["expires_at"].isoformat()}
+                    cur.execute("UPDATE core.online_carrito_items SET configuracion=%s::jsonb, configuracion_hash=%s, updated_at=NOW() WHERE carrito_item_id=%s", (_canonical(configuration), _hash(configuration), cart_item["carrito_item_id"]))
+                _event(cur, draft_id=int(row["borrador_id"]), reservation_id=new_reservation_id, event_type="reservation_refreshed", actor_type=owner.db_type, owner_hash=owner.owner_hash, metadata={"previousReservationId": row["old_reservation_id"]})
+                result = self._draft_payload(cur, int(row["borrador_id"]))
+                self._idempotency_finish(cur, idem_id, result, new_reservation_id)
             conn.commit()
         return result
 
@@ -677,6 +896,19 @@ def create_online_optical_drafts_router(
     @router.get("/{draft_public_id}", dependencies=dependencies)
     def get_draft(draft_public_id: str, commerce_owner: CommerceOwner = Depends(owner)):
         return run(lambda: repository.get(commerce_owner, draft_public_id))
+
+    @router.post("/{draft_public_id}/cart", dependencies=dependencies)
+    def attach_draft_to_cart(
+        draft_public_id: str,
+        data: AttachOpticalDraftToCartRequest,
+        commerce_owner: CommerceOwner = Depends(owner),
+        idempotency_key: str = Header(alias="Idempotency-Key"),
+    ):
+        return run(lambda: repository.attach_to_cart(commerce_owner, draft_public_id, data, idempotency_key))
+
+    @router.post("/{draft_public_id}/refresh-reservation", dependencies=dependencies)
+    def refresh_reservation(draft_public_id: str, commerce_owner: CommerceOwner = Depends(owner), idempotency_key: str = Header(alias="Idempotency-Key")):
+        return run(lambda: repository.refresh_reservation(commerce_owner, draft_public_id, idempotency_key))
 
     @router.post("/{draft_public_id}/cancel", dependencies=dependencies)
     def cancel_draft(draft_public_id: str, commerce_owner: CommerceOwner = Depends(owner), idempotency_key: str = Header(alias="Idempotency-Key")):

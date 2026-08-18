@@ -24,7 +24,11 @@ from psycopg.rows import dict_row
 
 from online_commerce import CommerceOwner, _valid_owner_hash
 from online_checkout_identity import CheckoutIdentityRepository, verify_authenticated_identity_assertion
-from online_optical_drafts import release_expired_optical_reservations
+from online_optical_drafts import (
+    PURCHASABLE_PRESCRIPTION_STATUSES,
+    convert_optical_reservation,
+    release_expired_optical_reservations,
+)
 from shipping_packages import (
     PackageRuleError,
     PackagingConfiguration,
@@ -104,9 +108,17 @@ class FulfillmentConfig:
     reservations_enabled: bool = False
     orders_enabled: bool = False
     payment_sessions_enabled: bool = False
+    default_shipping_enabled: bool = False
+    default_shipping_price: Decimal = Decimal("99.00")
 
     @classmethod
     def from_env(cls, db_conninfo: str) -> "FulfillmentConfig":
+        try:
+            default_shipping_price = Decimal(os.getenv("ONLINE_DEFAULT_SHIPPING_PRICE", "99.00")).quantize(Decimal("0.01"))
+        except Exception:
+            default_shipping_price = Decimal("99.00")
+        if default_shipping_price < 0:
+            default_shipping_price = Decimal("99.00")
         return cls(
             db_conninfo=db_conninfo,
             bearer_token=os.getenv("ONLINE_COMMERCE_BEARER_TOKEN", "").strip(),
@@ -114,6 +126,8 @@ class FulfillmentConfig:
             reservations_enabled=_env_bool("PHASE_1FB2_ENABLED", False),
             orders_enabled=_env_bool("PHASE_1FC1_ENABLED", False),
             payment_sessions_enabled=_env_bool("PHASE_1FC2A_ENABLED", False),
+            default_shipping_enabled=_env_bool("ONLINE_DEFAULT_SHIPPING_ENABLED", False),
+            default_shipping_price=default_shipping_price,
         )
 
 
@@ -164,6 +178,7 @@ class CreateFulfillmentRequest(BaseModel):
     contact: ContactInput
     address: AddressInput | None = None
     pickupBranchId: int | None = Field(default=None, gt=0)
+    opticalDraftId: str | None = Field(default=None, min_length=1, max_length=80)
 
 
 class SelectOptionRequest(BaseModel):
@@ -308,7 +323,7 @@ class FulfillmentRepository:
         cur.execute(
             """
             SELECT item.carrito_item_id, item.producto_id, item.cantidad,
-                   item.configuracion_hash, item.precio_reconocido, item.requiere_revision,
+                   item.configuracion, item.configuracion_hash, item.precio_reconocido, item.requiere_revision,
                    product.sku, product.nombre, product.categoria, product.precio,
                    product.moneda, product.controla_stock, product.activo,
                    product.publicado_online, product.tipo_producto, product.updated_at,
@@ -325,11 +340,40 @@ class FulfillmentRepository:
         if not items:
             raise FulfillmentRuleError(409, "CART_EMPTY", "The authoritative cart is empty.")
         for item in items:
+            optical_id = (item.get("configuracion") or {}).get("opticalDraftId")
+            if optical_id:
+                cur.execute(
+                    """
+                    SELECT draft.estado, draft.prescription_status, draft.total_configurado_snapshot,
+                           draft.preview_fingerprint, reservation.estado AS reservation_state,
+                           reservation.expires_at
+                    FROM core.online_borradores_opticos draft
+                    JOIN core.online_reservas_opticas_borrador reservation ON reservation.borrador_id=draft.borrador_id
+                    WHERE (draft.borrador_public_id::text=%s OR draft.borrador_id::text=%s)
+                      AND draft.propietario_tipo=%s AND draft.propietario_ref_hash=%s
+                    FOR SHARE
+                    """,
+                    (str(optical_id), str(optical_id), owner.db_type, owner.owner_hash),
+                )
+                optical = cur.fetchone()
+                optical_configuration = item.get("configuracion") or {}
+                optical_valid = bool(
+                    optical
+                    and optical["estado"] not in {"cancelado", "expirado"}
+                    and optical["prescription_status"] in PURCHASABLE_PRESCRIPTION_STATUSES
+                    and optical["reservation_state"] == "activa"
+                    and optical["expires_at"] > datetime.now(timezone.utc)
+                    and Decimal(item["precio_reconocido"]) == Decimal(optical["total_configurado_snapshot"])
+                    and str(optical_configuration.get("previewFingerprint")) == str(optical["preview_fingerprint"])
+                    and Decimal(str(optical_configuration.get("configuredTotal"))) == Decimal(optical["total_configurado_snapshot"])
+                )
+                if not optical_valid:
+                    raise FulfillmentRuleError(409, "OPTICAL_CART_STALE", "Tu reserva temporal venció. Verificaremos nuevamente la disponibilidad de tu armazón.")
             if not (
-                item["activo"] and item["publicado_online"] and item["comprable_online"]
+                item["activo"] and item["publicado_online"] and (optical_id or item["comprable_online"])
                 and item["tipo_producto"] == "producto_fisico"
                 and not item["requiere_revision"]
-                and Decimal(item["precio_reconocido"]) == Decimal(item["precio"])
+                and (optical_id or Decimal(item["precio_reconocido"]) == Decimal(item["precio"]))
             ):
                 raise FulfillmentRuleError(
                     409,
@@ -341,6 +385,7 @@ class FulfillmentRepository:
 
     @staticmethod
     def _cart_snapshot(cart: dict[str, Any], items: list[dict[str, Any]]) -> tuple[dict[str, Any], str]:
+        optical_items = [item for item in items if (item.get("configuracion") or {}).get("opticalDraftId")]
         snapshot = {
             "cartId": str(cart["carrito_id"]),
             "version": int(cart["version"]),
@@ -352,18 +397,40 @@ class FulfillmentRepository:
                     "sku": item["sku"],
                     "name": item["nombre"],
                     "quantity": int(item["cantidad"]),
-                    "unitPrice": f"{Decimal(item['precio']):.2f}",
+                    "unitPrice": f"{Decimal(item['precio_reconocido'] if (item.get('configuracion') or {}).get('opticalDraftId') else item['precio']):.2f}",
                     "currency": str(item["moneda"]).strip(),
                     "controlsStock": bool(item["controla_stock"]),
                     "configurationHash": item["configuracion_hash"],
+                    "configuration": item.get("configuracion") or {},
                     "productUpdatedAt": item["updated_at"],
                 }
                 for item in items
             ],
         }
+        if optical_items:
+            snapshot["opticalConfigurationSnapshot"] = optical_items[0].get("configuracion") or {}
         return _safe(snapshot), _hash(snapshot)
 
+    @staticmethod
+    def _ensure_optical_checkout_link(cur, *, draft_id: int, request_id: int, configuration: dict[str, Any], order_id: int | None = None) -> None:
+        """Maintain the single draft→request→order linkage row."""
+        cur.execute(
+            """
+            INSERT INTO core.online_optical_checkout_links
+                (borrador_id, solicitud_id, orden_id, configuration_snapshot)
+            VALUES (%s, %s, %s, %s::jsonb)
+            ON CONFLICT (borrador_id) DO UPDATE SET
+                solicitud_id = EXCLUDED.solicitud_id,
+                orden_id = COALESCE(EXCLUDED.orden_id, core.online_optical_checkout_links.orden_id),
+                configuration_snapshot = EXCLUDED.configuration_snapshot,
+                updated_at = NOW()
+            """,
+            (draft_id, request_id, order_id, _canonical(configuration)),
+        )
+
     def _packages(self, cur, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        if self.config.default_shipping_enabled:
+            return []
         cur.execute("SELECT * FROM core.envio_configuracion_empaque WHERE configuracion_id = 1")
         config = cur.fetchone()
         required = (
@@ -374,7 +441,7 @@ class FulfillmentRepository:
             raise FulfillmentRuleError(
                 422,
                 "PACKAGING_CONFIGURATION_MISSING",
-                "Shipping packaging has not been configured by an administrator.",
+                "La configuración temporal de entrega aún no está disponible.",
             )
 
         measurements: list[ProductShippingMeasurement] = []
@@ -613,16 +680,28 @@ class FulfillmentRepository:
 
     def create_request(self, owner: CommerceOwner, data: CreateFulfillmentRequest, key: str) -> dict[str, Any]:
         if data.method == "shipping" and data.address is None:
-            raise FulfillmentRuleError(422, "ADDRESS_REQUIRED", "A complete Mexican shipping address is required.")
+            raise FulfillmentRuleError(422, "ADDRESS_REQUIRED", "Completa una dirección de entrega en México.")
         if data.method == "pickup" and data.pickupBranchId is None:
-            raise FulfillmentRuleError(422, "PICKUP_BRANCH_REQUIRED", "Select a pickup branch.")
+            raise FulfillmentRuleError(422, "PICKUP_BRANCH_REQUIRED", "Selecciona una sucursal para recoger tu pedido.")
         with self._connection() as conn:
             with conn.cursor() as cur:
                 self._expire(cur)
                 idempotency_id, cached = self._idempotency_begin(cur, owner, "fulfillment_request", key, data.model_dump(mode="json"))
                 if cached is not None:
                     return cached
+                if data.opticalDraftId:
+                    cur.execute("""SELECT d.estado, d.prescription_status, r.estado AS reservation_estado, r.expires_at
+                                     FROM core.online_borradores_opticos d
+                                     JOIN core.online_reservas_opticas_borrador r USING (borrador_id)
+                                    WHERE d.borrador_public_id=%s AND d.propietario_tipo=%s AND d.propietario_ref_hash=%s
+                                    FOR UPDATE OF d, r""", (data.opticalDraftId, owner.db_type, owner.owner_hash))
+                    draft = cur.fetchone()
+                    if not draft or draft["estado"] in {"cancelado", "expirado"} or draft["reservation_estado"] != "activa" or draft["expires_at"] <= datetime.now(timezone.utc):
+                        raise FulfillmentRuleError(409, "OPTICAL_DRAFT_INACTIVE", "La configuración óptica ya no está activa. Vuelve a configurarla para continuar.")
+                    if draft["prescription_status"] not in PURCHASABLE_PRESCRIPTION_STATUSES:
+                        raise FulfillmentRuleError(409, "OPTICAL_PRESCRIPTION_STATUS_INVALID", "El estado de la receta no permite continuar con este pedido.")
                 cart, items = self._cart(cur, owner)
+                optical_draft_id = data.opticalDraftId
                 cart_snapshot, fingerprint = self._cart_snapshot(cart, items)
                 packages = self._packages(cur, items) if data.method == "shipping" else []
                 branches = self._eligible_branches(cur, items)
@@ -631,7 +710,7 @@ class FulfillmentRepository:
                 else:
                     branches = [entry for entry in branches if int(entry["branch"]["sucursal_id"]) == data.pickupBranchId]
                 if not branches:
-                    raise FulfillmentRuleError(409, "NO_SINGLE_BRANCH_FULFILLMENT", "No active branch can fulfill the complete cart.")
+                    raise FulfillmentRuleError(409, "NO_SINGLE_BRANCH_FULFILLMENT", "No encontramos una sucursal disponible para completar tu pedido.")
                 cur.execute("SELECT solicitud_vigencia_horas FROM core.envio_configuracion_empaque WHERE configuracion_id = 1")
                 lifetime = int(cur.fetchone()["solicitud_vigencia_horas"])
                 cur.execute(
@@ -639,9 +718,12 @@ class FulfillmentRepository:
                     INSERT INTO core.online_solicitudes_cotizacion_envio (
                         propietario_tipo, propietario_ref_hash, carrito_id, carrito_fingerprint,
                         metodo_entrega, estado, direccion_snapshot, contacto_snapshot,
-                        carrito_snapshot, paquetes_snapshot, expira_at
+                        carrito_snapshot, paquetes_snapshot, expira_at, optical_draft_id
                     ) VALUES (%s, %s, %s, %s, %s, 'pendiente', %s::jsonb, %s::jsonb, %s::jsonb, %s::jsonb,
-                              NOW() + (%s * INTERVAL '1 hour')) RETURNING *
+                              NOW() + (%s * INTERVAL '1 hour'),
+                              (SELECT borrador_id FROM core.online_borradores_opticos
+                               WHERE borrador_public_id = %s AND propietario_tipo = %s
+                                 AND propietario_ref_hash = %s)) RETURNING *
                     """,
                     (
                         owner.db_type, owner.owner_hash, cart["carrito_id"], fingerprint,
@@ -649,9 +731,17 @@ class FulfillmentRepository:
                         _canonical(data.address.model_dump()) if data.address else None,
                         _canonical(data.contact.model_dump()), _canonical(cart_snapshot),
                         _canonical(packages), lifetime,
+                        optical_draft_id, owner.db_type, owner.owner_hash,
                     ),
                 )
                 request = cur.fetchone()
+                if optical_draft_id:
+                    self._ensure_optical_checkout_link(
+                        cur,
+                        draft_id=int(request["optical_draft_id"]),
+                        request_id=int(request["solicitud_id"]),
+                        configuration=cart_snapshot.get("opticalConfigurationSnapshot", {}),
+                    )
                 for entry in branches:
                     cur.execute(
                         """
@@ -681,6 +771,41 @@ class FulfillmentRepository:
                     cur.execute("UPDATE core.online_solicitudes_cotizacion_envio SET estado = 'cotizada', updated_at = NOW() WHERE solicitud_id = %s RETURNING *", (request["solicitud_id"],))
                     request = cur.fetchone()
                     self._event(cur, request_id=request["solicitud_id"], option_id=option_id, event_type="pickup_option_created", actor_type="sistema", before="pendiente", after="cotizada")
+                elif self.config.default_shipping_enabled and not packages:
+                    # Local development fallback: one simple standard option while
+                    # carrier/package configuration is intentionally unavailable.
+                    branch = branches[0]["branch"]
+                    cur.execute("SELECT usuario_id FROM core.usuarios WHERE rol = 'admin' AND activo = TRUE ORDER BY usuario_id LIMIT 1")
+                    admin = cur.fetchone()
+                    subtotal = sum(Decimal(item["precio_reconocido"]) * int(item["cantidad"]) for item in items)
+                    amount = Decimal("0.00") if subtotal >= Decimal("1100.00") else self.config.default_shipping_price
+                    if amount == Decimal("0.00") and not admin:
+                        raise FulfillmentRuleError(503, "DEFAULT_SHIPPING_UNAVAILABLE", "No pudimos confirmar el envío gratis para este pedido.")
+                    cur.execute(
+                        """
+                        INSERT INTO core.online_opciones_cotizacion_envio (
+                            solicitud_id, sucursal_id, transportista_codigo_snapshot,
+                            transportista_nombre_snapshot, nivel_servicio_snapshot, monto,
+                            entrega_min_dias, entrega_max_dias, quote_identifier, expira_at,
+                            ingresada_por_rol, autorizacion_cero_razon,
+                            autorizada_cero_por_usuario_id, autorizada_cero_at
+                        ) VALUES (%s, %s, 'dev-default', 'Entrega estándar',
+                                  'Envío estándar', %s, 3, 7, %s, %s, 'sistema',
+                                  %s, %s, CASE WHEN %s = 0 THEN NOW() ELSE NULL END)
+                        RETURNING opcion_id
+                        """,
+                        (
+                            request["solicitud_id"], branch["sucursal_id"], amount,
+                            f"dev-default-{request['solicitud_public_id']}", request["expira_at"],
+                            "default_shipping_development" if amount == 0 else None,
+                            int(admin["usuario_id"]) if admin else None,
+                            amount,
+                        ),
+                    )
+                    option_id = int(cur.fetchone()["opcion_id"])
+                    cur.execute("UPDATE core.online_solicitudes_cotizacion_envio SET estado = 'cotizada', updated_at = NOW() WHERE solicitud_id = %s RETURNING *", (request["solicitud_id"],))
+                    request = cur.fetchone()
+                    self._event(cur, request_id=request["solicitud_id"], option_id=option_id, event_type="development_shipping_option_created", actor_type="sistema", before="pendiente", after="cotizada")
                 result = self._request_payload(cur, request)
                 self._idempotency_finish(cur, idempotency_id, result, int(request["solicitud_id"]))
             conn.commit()
@@ -765,7 +890,7 @@ class FulfillmentRepository:
                 )
                 row = cur.fetchone()
                 if not row:
-                    raise FulfillmentRuleError(404, "REQUEST_NOT_FOUND", "Shipping request was not found.")
+                    raise FulfillmentRuleError(404, "REQUEST_NOT_FOUND", "No encontramos esta solicitud de entrega.")
                 result = self._request_payload(cur, row)
             conn.commit()
         return result
@@ -1189,6 +1314,7 @@ class FulfillmentRepository:
                     (request["solicitud_id"], option["seleccion_id"], request["propietario_tipo"], request["propietario_ref_hash"], fingerprint, option["sucursal_id"], expires),
                 )
                 reservation_id = int(cur.fetchone()["reserva_id"])
+                optical_conversion = None
                 for item, _inventory in inventory_rows:
                     cur.execute(
                         """
@@ -1199,22 +1325,32 @@ class FulfillmentRepository:
                         """,
                         (reservation_id, item["producto_id"], option["sucursal_id"], item["carrito_item_id"], item["configuracion_hash"], item["sku"], item["nombre"], item["cantidad"]),
                     )
+                    if not (item.get("configuracion") or {}).get("opticalDraftId"):
+                        cur.execute(
+                            """UPDATE core.catalogo_inventario_sucursal
+                               SET stock_reservado = stock_reservado + %s, version = version + 1, updated_at = NOW()
+                             WHERE producto_id = %s AND sucursal_id = %s""",
+                            (item["cantidad"], item["producto_id"], option["sucursal_id"]),
+                        )
+                if request.get("optical_draft_id"):
                     cur.execute(
                         """
-                        UPDATE core.catalogo_inventario_sucursal
-                        SET stock_reservado = stock_reservado + %s,
-                            version = version + 1,
-                            updated_at = NOW()
-                        WHERE producto_id = %s AND sucursal_id = %s
+                        UPDATE core.online_optical_checkout_links
+                        SET configuration_snapshot = %s::jsonb, updated_at = NOW()
+                        WHERE borrador_id = %s AND solicitud_id = %s
                         """,
-                        (item["cantidad"], item["producto_id"], option["sucursal_id"]),
+                        (_canonical(request["carrito_snapshot"].get("opticalConfigurationSnapshot", {})), request["optical_draft_id"], request["solicitud_id"]),
+                    )
+                    optical_conversion = convert_optical_reservation(
+                        cur, draft_public_id=str(request["optical_draft_id"]), owner=owner,
+                        normal_reservation_id=reservation_id,
                     )
                 cur.execute(
                     """
                     INSERT INTO core.online_reserva_eventos (reserva_id, evento_tipo, actor_tipo, actor_ref_hash, metadata)
                     VALUES (%s, 'reservation_created', %s, %s, %s::jsonb)
                     """,
-                    (reservation_id, owner.db_type, owner.owner_hash, _canonical({"requestId": public_id, "lineCount": len(inventory_rows)})),
+                    (reservation_id, owner.db_type, owner.owner_hash, _canonical({"requestId": public_id, "lineCount": len(inventory_rows), "opticalConversion": optical_conversion})),
                 )
                 cur.execute(self._reservation_query(), (reservation_id,))
                 result = self._reservation_payload(cur, cur.fetchone())
@@ -1502,9 +1638,9 @@ class FulfillmentRepository:
                         reserva_id, solicitud_id, preview_id, propietario_tipo, propietario_ref_hash,
                         metodo_entrega, sucursal_id, sucursal_snapshot, contacto_snapshot,
                         direccion_snapshot, cotizacion_snapshot, carrito_fingerprint,
-                        subtotal, envio, total
+                        subtotal, envio, total, optical_draft_id, optical_configuration_snapshot
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s::jsonb, %s::jsonb, %s, %s, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s::jsonb, %s::jsonb, %s, %s, %s, %s, %s, %s::jsonb)
                     RETURNING orden_id
                     """,
                     (
@@ -1515,9 +1651,19 @@ class FulfillmentRepository:
                         _canonical(request["direccion_snapshot"]) if request["direccion_snapshot"] is not None else None,
                         _canonical(quote_snapshot) if quote_snapshot is not None else None,
                         reservation["carrito_fingerprint"], subtotal, shipping, total,
+                        request.get("optical_draft_id"),
+                        _canonical(request.get("carrito_snapshot", {}).get("opticalConfigurationSnapshot", {})) if request.get("optical_draft_id") else None,
                     ),
                 )
                 order_id = int(cur.fetchone()["orden_id"])
+                if request.get("optical_draft_id"):
+                    self._ensure_optical_checkout_link(
+                        cur,
+                        draft_id=int(request["optical_draft_id"]),
+                        request_id=int(request["solicitud_id"]),
+                        configuration=cart_snapshot.get("opticalConfigurationSnapshot", {}),
+                        order_id=order_id,
+                    )
                 contact_snapshot = dict(request["contacto_snapshot"])
                 authenticated_email_verified = verify_authenticated_identity_assertion(
                     owner, str(contact_snapshot.get("email") or ""), identity_assertion, self.config.bearer_token

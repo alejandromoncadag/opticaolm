@@ -456,6 +456,9 @@ class CommerceRepository:
             current_price = Decimal(row["current_price"] or 0).quantize(Decimal("0.01"))
             observed_price = Decimal(row["precio_observado"]).quantize(Decimal("0.01"))
             recognized_price = Decimal(row["precio_reconocido"]).quantize(Decimal("0.01"))
+            optical_configuration = row["configuracion"] or {}
+            is_optical = bool(optical_configuration.get("opticalDraftId"))
+            effective_price = recognized_price if is_optical else current_price
             total_available = availability.get(product_id, 0)
             maximum = (
                 int(row["cantidad_maxima_por_linea"])
@@ -487,7 +490,7 @@ class CommerceRepository:
                 issues.append("quantity_exceeds_total_availability")
             if maximum is not None and quantity > maximum:
                 issues.append("requires_review")
-            price_changed = recognized_price != current_price
+            price_changed = (recognized_price != current_price) and not is_optical
             if price_changed:
                 issues.append("price_changed")
             if row["requiere_revision"] and "requires_review" not in issues:
@@ -503,7 +506,7 @@ class CommerceRepository:
                 "requires_review",
             )
             status = next((candidate for candidate in priority if candidate in issues), "valid")
-            line_total = current_price * quantity
+            line_total = effective_price * quantity
             subtotal += line_total
             item_count += quantity
             if status != "valid":
@@ -523,7 +526,7 @@ class CommerceRepository:
                     "issues": issues,
                     "requiresReview": bool(issues),
                     "previouslyObservedPrice": f"{observed_price:.2f}",
-                    "currentPrice": f"{current_price:.2f}",
+                    "currentPrice": f"{effective_price:.2f}",
                     "priceChanged": price_changed,
                     "priceAcknowledged": not price_changed,
                     "lineTotal": f"{line_total:.2f}",

@@ -16,6 +16,7 @@ sys.path.insert(0, str(BACKEND_DIR))
 import main as backend_main
 from online_commerce import CommerceOwner
 from online_optical_drafts import (
+    AttachOpticalDraftToCartRequest,
     CreateOpticalDraftRequest,
     OpticalDraftConfig,
     OpticalDraftRepository,
@@ -122,12 +123,12 @@ class Phase1GCOpticalDraftTests(unittest.TestCase):
             self.connection.rollback()
             self.connection.close()
 
-    def _preview(self, *, design="DEMO-LENS-MONO", treatment=None, variant=None):
+    def _preview(self, *, design="DEMO-LENS-MONO", treatment=None, variant=None, frame=None):
         with self.connection.cursor() as cur:
             return self.repository.preview_repository.preview_in_transaction(
                 cur,
                 OpticalPreviewRequest(
-                    frameProductId=self.products["DEMO-RX-001"],
+                    frameProductId=frame or self.products["DEMO-RX-001"],
                     lensDesignProductId=self.products[design],
                     treatmentProductId=self.products[treatment] if treatment else None,
                     treatmentVariantId=variant,
@@ -184,6 +185,47 @@ class Phase1GCOpticalDraftTests(unittest.TestCase):
             self.assertEqual(1, int(authority["optical_lines"]))
             cur.execute("SELECT COUNT(*) AS count FROM core.online_borradores_opticos WHERE borrador_public_id = %s", (result["draftPublicId"],))
             self.assertEqual(1, int(cur.fetchone()["count"]))
+
+    def test_optical_draft_attaches_one_authoritative_cart_line(self) -> None:
+        draft = self.repository.create(self.owner, self._request(), "cart-draft")
+        with self.connection.cursor() as cur:
+            cur.execute(
+                "UPDATE core.online_borradores_opticos SET prescription_status='provided' WHERE borrador_public_id=%s",
+                (draft["draftPublicId"],),
+            )
+        data = AttachOpticalDraftToCartRequest(
+            previewFingerprint=draft["previewFingerprint"],
+            configuredTotal=draft["configuredTotal"],
+        )
+        first = self.repository.attach_to_cart(self.owner, draft["draftPublicId"], data, "cart-attach")
+        replay = self.repository.attach_to_cart(self.owner, draft["draftPublicId"], data, "cart-attach-replay")
+        self.assertEqual(first["cartItemId"], replay["cartItemId"])
+        self.assertEqual(draft["configuredTotal"], first["configuredTotal"])
+        with self.connection.cursor() as cur:
+            cur.execute(
+                "SELECT COUNT(*) AS count, configuracion->>'opticalDraftId' AS draft_id, precio_reconocido FROM core.online_carrito_items WHERE carrito_item_id=%s GROUP BY configuracion->>'opticalDraftId', precio_reconocido",
+                (first["cartItemId"],),
+            )
+            row = cur.fetchone()
+            self.assertEqual(1, int(row["count"]))
+            self.assertEqual(draft["draftPublicId"], row["draft_id"])
+            self.assertEqual(draft["configuredTotal"], f"{row['precio_reconocido']:.2f}")
+
+    def test_modelo_moderno_preserves_configured_total(self) -> None:
+        with self.connection.cursor() as cur:
+            cur.execute("SELECT producto_id FROM core.catalogo_productos WHERE sku='OLM-MOD-MODERNO-001'")
+            modern = cur.fetchone()
+            if not modern:
+                self.skipTest("Modelo Moderno fixture is not present")
+            cur.execute("SELECT 1 FROM core.catalogo_inventario_sucursal WHERE producto_id=%s AND sucursal_id=%s AND stock-stock_reservado>0", (modern["producto_id"], self.branch_id))
+            if not cur.fetchone():
+                self.skipTest("Modelo Moderno has no available branch inventory")
+        preview = self._preview(frame=int(modern["producto_id"]))
+        draft = self.repository.create(self.owner, self._request(preview=preview, frameProductId=int(modern["producto_id"])), "modern-cart-draft")
+        with self.connection.cursor() as cur:
+            cur.execute("UPDATE core.online_borradores_opticos SET prescription_status='provided' WHERE borrador_public_id=%s", (draft["draftPublicId"],))
+        result = self.repository.attach_to_cart(self.owner, draft["draftPublicId"], AttachOpticalDraftToCartRequest(previewFingerprint=draft["previewFingerprint"], configuredTotal=draft["configuredTotal"]), "modern-cart-attach")
+        self.assertEqual(draft["configuredTotal"], result["configuredTotal"])
 
     def test_progressive_photochromic_and_blue_variant_snapshots(self) -> None:
         photo_preview = self._preview(design="DEMO-LENS-PROG", treatment="DEMO-TRT-PHOTO")

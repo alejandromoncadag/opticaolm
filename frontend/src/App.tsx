@@ -10130,7 +10130,9 @@ export default function App() {
                   <col style={{ width: 140 }} />
                   <col style={{ width: 130 }} />
                   <col style={{ width: 120 }} />
-                  <col style={{ width: 95 }} />
+                  <col style={{ width: 105 }} />
+                  <col style={{ width: 105 }} />
+                  <col style={{ width: 105 }} />
                   <col style={{ width: 105 }} />
                   <col style={{ width: 240 }} />
                 </colgroup>
@@ -10141,7 +10143,9 @@ export default function App() {
                     <th align="left" style={{ padding: "9px 8px", background: "#315f89", color: "#fff", fontWeight: 900 }}>MODELO</th>
                     <th align="left" style={{ padding: "9px 8px", background: "#6d4b9c", color: "#fff", fontWeight: 900 }}>COLOR</th>
                     <th align="right" style={{ padding: "9px 8px", background: "#2563a6", color: "#fff", fontWeight: 900 }}>PRECIO</th>
-                    <th align="center" style={{ padding: "9px 8px", background: "#b46516", color: "#fff", fontWeight: 900 }}>STOCK</th>
+                    <th align="center" style={{ padding: "9px 8px", background: "#b46516", color: "#fff", fontWeight: 900 }}>STOCK FÍSICO</th>
+                    <th align="center" style={{ padding: "9px 8px", background: "#8b5e34", color: "#fff", fontWeight: 900 }}>RESERVADO</th>
+                    <th align="center" style={{ padding: "9px 8px", background: "#357d55", color: "#fff", fontWeight: 900 }}>DISPONIBLE</th>
                     <th align="left" style={{ padding: "9px 8px", background: "#357d55", color: "#fff", fontWeight: 900 }}>{isAdmin ? "AJUSTAR STOCK" : "ACCESO"}</th>
                   </tr>
                 </thead>
@@ -10153,6 +10157,8 @@ export default function App() {
                       Math.trunc(Number(stockDraftRaw || 0)),
                     );
                     const stockBajo = producto.controla_stock && producto.stock <= producto.stock_minimo;
+                    const reservado = Math.max(0, Number(producto.stock_reservado || 0));
+                    const disponible = Math.max(0, Number(producto.stock || 0) - reservado);
                     const guardando = savingInventarioId === producto.producto_id;
                     return (
                       <tr key={producto.producto_id} style={{ borderTop: "1px solid #dce6ef", background: stockBajo ? "#fffaf4" : "#fff" }}>
@@ -10206,22 +10212,9 @@ export default function App() {
                         <td align="right" style={{ padding: 8, color: "#174ea6", background: "#eff6ff", fontWeight: 900, whiteSpace: "nowrap" }}>
                           ${Number(producto.precio || 0).toFixed(2)}
                         </td>
-                        <td align="center" style={{ padding: 8, background: "#fff8ed" }}>
-                          <span
-                            style={{
-                              display: "inline-block",
-                              minWidth: 92,
-                              padding: "6px 9px",
-                              borderRadius: 999,
-                              background: !producto.controla_stock ? "#eaf2ff" : producto.stock <= 0 ? "#fee2e2" : stockBajo ? "#ffedd5" : "#dcfce7",
-                              color: !producto.controla_stock ? "#174ea6" : producto.stock <= 0 ? "#991b1b" : stockBajo ? "#9a3412" : "#166534",
-                              fontSize: 11,
-                              fontWeight: 900,
-                            }}
-                          >
-                            {!producto.controla_stock ? "SERVICIO" : producto.stock <= 0 ? "AGOTADO" : `${producto.stock} UNIDADES`}
-                          </span>
-                        </td>
+                        <td align="center" style={{ padding: 8, background: "#fff8ed", fontWeight: 900 }}>{producto.controla_stock ? producto.stock : "—"}</td>
+                        <td align="center" style={{ padding: 8, background: "#fff7f0", fontWeight: 900 }}>{producto.controla_stock ? reservado : "—"}</td>
+                        <td align="center" style={{ padding: 8, background: disponible <= 0 && producto.controla_stock ? "#fee2e2" : "#effaf3", color: disponible <= 0 && producto.controla_stock ? "#991b1b" : "#166534", fontWeight: 900 }}>{producto.controla_stock ? disponible : "—"}</td>
                         <td style={{ padding: 8 }}>
                           {isAdmin && producto.controla_stock ? (
                             <div style={{ display: "grid", gridTemplateColumns: "32px 62px 32px auto", gap: 5, minWidth: 225 }}>

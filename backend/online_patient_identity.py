@@ -16,7 +16,7 @@ import re
 import unicodedata
 from typing import Any, Callable
 
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, ConfigDict, Field
 import psycopg
@@ -90,6 +90,28 @@ class ConfirmRequest(BaseModel):
 class PrescriptionSelectionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     prescriptionRef: str = Field(min_length=30, max_length=50)
+
+
+UPLOAD_MAX_BYTES = 10 * 1024 * 1024
+UPLOAD_TYPES = {"application/pdf", "image/jpeg", "image/png", "image/webp"}
+
+
+def _validate_prescription_upload(content_type: str, filename: str, content: bytes) -> tuple[str, str]:
+    mime = content_type.strip().lower().split(";", 1)[0]
+    if mime not in UPLOAD_TYPES:
+        raise IdentityRuleError(415, "PRESCRIPTION_FILE_TYPE_INVALID", "Solo se aceptan archivos PDF, JPG, PNG o WEBP.")
+    if not content or len(content) > UPLOAD_MAX_BYTES:
+        raise IdentityRuleError(413, "PRESCRIPTION_FILE_TOO_LARGE", "La receta debe pesar 10 MB o menos.")
+    filename = (filename or "receta").replace("\\", "/").rsplit("/", 1)[-1].strip()[:255] or "receta"
+    signatures = {
+        "application/pdf": content.startswith(b"%PDF-"),
+        "image/jpeg": content.startswith(bytes((0xFF, 0xD8, 0xFF))),
+        "image/png": content.startswith(bytes((0x89,)) + b"PNG\r\n\x1a\n"),
+        "image/webp": len(content) >= 12 and content[:4] == b"RIFF" and content[8:12] == b"WEBP",
+    }
+    if not signatures[mime]:
+        raise IdentityRuleError(415, "PRESCRIPTION_FILE_SIGNATURE_INVALID", "El contenido del archivo no coincide con su formato.")
+    return mime, filename
 
 
 class PrescriptionApprovalRequest(BaseModel):
@@ -394,6 +416,62 @@ class IdentityRepository:
             conn.commit()
         return result
 
+    def upload_prescription(self, account_hash: str, draft_public_id: str, content_type: str,
+                            filename: str, content: bytes, key: str) -> dict[str, Any]:
+        mime, safe_filename = _validate_prescription_upload(content_type, filename, content)
+        payload = {"draftPublicId": draft_public_id, "mimeType": mime,
+                   "filename": safe_filename, "contentSha256": _sha(content.hex())}
+        with self._connection() as conn:
+            with conn.cursor() as cur:
+                idem_id, cached = self._idempotency(cur, account_hash, "optical_prescription_upload", key, payload)
+                if cached is not None:
+                    conn.commit(); return cached
+                cur.execute(
+                    """SELECT draft.borrador_id,draft.estado,draft.prescription_status,
+                              config.uso_visual
+                       FROM core.online_borradores_opticos draft
+                       JOIN core.online_configuraciones_opticas_borrador config USING (borrador_id)
+                       WHERE draft.borrador_public_id=%s AND draft.propietario_tipo='cliente'
+                         AND draft.propietario_ref_hash=%s FOR UPDATE OF draft""",
+                    (draft_public_id, account_hash),
+                )
+                draft = cur.fetchone()
+                if not draft:
+                    raise IdentityRuleError(404, "OPTICAL_DRAFT_NOT_FOUND", "Optical draft was not found.")
+                if draft["estado"] in {"cancelado", "expirado"}:
+                    raise IdentityRuleError(409, "OPTICAL_DRAFT_INACTIVE", "Este pedido óptico ya no está disponible.")
+                if draft["uso_visual"] == "sin_graduacion":
+                    raise IdentityRuleError(409, "PRESCRIPTION_NOT_REQUIRED", "Esta configuración no requiere receta.")
+                cur.execute(
+                    """INSERT INTO core.online_borrador_optico_receta_archivos
+                       (borrador_id,cuenta_ref_hash,nombre_original,mime_type,tamano_bytes,contenido)
+                       VALUES (%s,%s,%s,%s,%s,%s)
+                       ON CONFLICT (borrador_id) DO UPDATE SET
+                         cuenta_ref_hash=EXCLUDED.cuenta_ref_hash,
+                         nombre_original=EXCLUDED.nombre_original,
+                         mime_type=EXCLUDED.mime_type,
+                         tamano_bytes=EXCLUDED.tamano_bytes,
+                         contenido=EXCLUDED.contenido,
+                         estado='recibida_pendiente_validacion', updated_at=NOW()
+                       RETURNING archivo_id""",
+                    (draft["borrador_id"], account_hash, safe_filename, mime, len(content), content),
+                )
+                upload_id = int(cur.fetchone()["archivo_id"])
+                cur.execute(
+                    """UPDATE core.online_borradores_opticos
+                       SET prescription_method='upload', prescription_status='received_pending_validation',
+                           estado='pendiente_receta', updated_at=NOW()
+                       WHERE borrador_id=%s""", (draft["borrador_id"],),
+                )
+                self._event(cur, "prescription_uploaded", account_hash, draft_id=draft["borrador_id"],
+                            metadata={"mimeType": mime, "size": len(content)})
+                result = {"schemaVersion": "1.0", "draftPublicId": draft_public_id,
+                          "prescriptionStatus": "received_pending_validation",
+                          "statusLabel": "Receta recibida, pendiente de validación"}
+                self._finish(cur, idem_id, result, upload_id)
+            conn.commit()
+        return result
+
     def claim_drafts(self, account_hash: str, guest_hash: str, key: str, draft_public_id: str | None = None) -> dict[str, Any]:
         if not _valid_owner_hash(guest_hash) or hmac.compare_digest(account_hash, guest_hash):
             raise IdentityRuleError(400, "GUEST_OWNER_INVALID", "Guest ownership is invalid.")
@@ -471,6 +549,25 @@ def create_online_identity_router(db_conninfo: str, *, config: IdentityConfig | 
 
     @router.post("/optical-drafts/{draft_public_id}/prescription", dependencies=deps)
     def select(draft_public_id: str, data: PrescriptionSelectionRequest, account_hash: str = Depends(account), key: str = Header(alias="Idempotency-Key")): return run(lambda: repo.select_prescription(account_hash, draft_public_id, data, key))
+
+    @router.post("/optical-drafts/{draft_public_id}/prescription-upload", dependencies=deps)
+    async def upload(draft_public_id: str, request: Request, account_hash: str = Depends(account),
+                     key: str = Header(alias="Idempotency-Key")):
+        content_length = request.headers.get("content-length")
+        if content_length and (not content_length.isdigit() or int(content_length) > UPLOAD_MAX_BYTES):
+            raise HTTPException(413, "La receta debe pesar 10 MB o menos.")
+        chunks: list[bytes] = []
+        total = 0
+        async for chunk in request.stream():
+            total += len(chunk)
+            if total > UPLOAD_MAX_BYTES:
+                raise HTTPException(413, "La receta debe pesar 10 MB o menos.")
+            chunks.append(chunk)
+        content = b"".join(chunks)
+        return run(lambda: repo.upload_prescription(
+            account_hash, draft_public_id, request.headers.get("content-type", ""),
+            request.headers.get("x-filename", "receta"), content, key,
+        ))
 
     return router
 
